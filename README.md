@@ -13,8 +13,23 @@ No UI — configuration is a single TOML file, no more.
 
 ## Status
 
-Design sketch / architecture skeleton. No working code yet — this README is
-the reference for what gets implemented.
+Verified against a real SIP trunk: with `[nostr].enabled = false`, sip2nostr
+registers, answers an inbound call, plays a local test audio file, and
+tears the call down cleanly on `BYE` (see `docs/receiving-calls.md` for the
+full debugging trace and root cause). Propagating the call to a Nostr
+client (NosCall) is not wired up end-to-end yet — the exact call-signaling
+event format NosCall expects is still unconfirmed (see Open questions), so
+`Signaling/CallSignalKinds.cs` uses placeholder event kinds that only let
+sip2nostr talk to itself until that's verified against NosCall's source.
+That propagation path is the subject of a followup PR.
+
+Copy `config.example.toml` to `config.toml`, fill in your SIP and Nostr
+credentials, and run:
+
+```
+cd src/Sip2Nostr
+dotnet run -- ../../config.toml
+```
 
 ## Architecture: single binary, C#/.NET
 
@@ -76,6 +91,11 @@ relying on `System.Net.Dns`/the OS resolver.
 provider_host = "sip.your-provider.de"
 username = "YOUR_SIP_USER"
 password = "YOUR_SIP_PASS"
+# Optional: set this to the public host/IP your SIP provider should use
+# for inbound calls if REGISTER succeeds but no INVITE reaches this process.
+# contact_host = "203.0.113.10"
+# Local RTP port for SIP audio.
+rtp_port = 8000
 
 [dns]
 # Address of the resolver to use for SIP hostname lookups.
@@ -84,15 +104,26 @@ resolver = "1.1.1.1:53"
 resolver_fallback = "9.9.9.9:53"
 timeout_ms = 2000
 
+[logging]
+# Optional: write each process run to its own log file.
+# Relative paths are resolved next to this config file. If the path does
+# not include {timestamp} or {run}, a timestamp is added before the extension.
+run_file = "logs/sip2nostr-{timestamp}.log"
+
 [[lines]]
 uri = "sip:+4989123456@sip.your-provider.de"
 label = "main"
+# Optional: when [nostr].enabled is false, answer calls on this line and
+# play this file on loop to test SIP audio. Raw 8 kHz 16-bit PCM works
+# directly; other formats require ffmpeg to be installed for conversion.
+# sound = "sounds/test.opus"
 
 [[lines]]
 uri = "sip:+4989123457@sip.your-provider.de"
 label = "fax"
 
 [nostr]
+enabled = true
 relays = ["wss://relay.example.com", "wss://relay2.example.com"]
 bridge_nsec = "nsec1..."      # this daemon's own identity, added as a contact in the receiving client
 target_npub = "npub1..."      # your identity — every call latches here in the MVP (see below)
@@ -152,15 +183,19 @@ keys/relays, WebRTC STUN/TURN) at startup. No runtime UI or admin surface.
 ## Open questions / TODO
 
 - [ ] Confirm exact call-signaling event format expected by the target
-      Nostr client (NosCall or other) — pull from its source.
-- [ ] Confirm Opus codec support path in sipsorcery (built-in vs.
-      supplementary package).
-- [ ] Per-line routing (map individual `[[lines]]` entries to distinct
-      `target_npub`s) — deferred past MVP.
-- [ ] TURN server requirement — likely needed since the receiving client is
-      usually behind NAT.
-- [ ] Fallback behavior if the Nostr side doesn't answer within N seconds
-      (e.g. voicemail, or ring a backup SIP extension).
+      Nostr client (NosCall or other) — pull from its source. The current
+      code uses placeholder event kinds in `Signaling/CallSignalKinds.cs`
+      until this is verified.
+- [x] Codec: implemented using G.711 (PCMU/PCMA) on both the SIP and WebRTC
+      legs, no transcoding — sipsorcery supports this out of the box via
+      `MediaStreamTrack(SDPWellKnownMediaFormatsEnum[])`, no supplementary
+      Opus package needed. Revisit if NosCall doesn't offer PCMU/PCMA.
+- [x] Per-line routing: not needed for MVP, confirmed — every line still
+      latches to the single configured `target_npub`.
+- [ ] TURN server requirement — inherited from whatever NosCall needs (see
+      design-refinement notes); not yet confirmed either way.
+- [x] Fallback behavior: none for MVP, confirmed — if the Nostr side
+      doesn't answer, the call is left ringing until the caller hangs up.
 - [ ] DoT/DoH support for the configurable resolver (currently plain DNS
       only in the initial design).
 - [ ] Monitor Nostr.Sdk releases for breaking changes given its alpha status.
