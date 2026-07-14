@@ -1,10 +1,15 @@
 # Propagating a Call to Nostr (NIP-AC)
 
 This documents how sip2nostr turns an inbound SIP call into a ring on
-NosCall, when `[nostr].enabled = true`. **Scope note:** this covers making
-NosCall ring by delivering a correctly-shaped call offer. The
-answer/ICE/audio round-trip is implemented but not yet verified
-end-to-end — see Blind Spots.
+NosCall, when `[nostr].enabled = true`, and carries the call through to
+audio. Verified end-to-end against a real NosCall install (0.5.2) over a
+local relay: NosCall rings, answers, and audio flows both ways.
+
+**Requirement:** NosCall only accepts NIP-AC call events from a pubkey it
+already follows (a NIP-02 contact-list check). Add the bridge's public key
+(derived from `[nostr].bridge_nsec`) as a followed contact in NosCall
+before testing, or every signaling event will be silently dropped as
+`not-followed`.
 
 ## Where the protocol came from
 
@@ -68,21 +73,18 @@ additional handshake step before the incoming-call UI appears.
 - `Sip/CallBridge.cs` — mints one `Guid.NewGuid()` call-id per inbound
   call and passes it into `NostrSignalingClient`.
 
-The wrap/unwrap logic was verified locally with a round-trip test (two
-throwaway keypairs, no network): build and sign an offer as the bridge,
-wrap it, decrypt and unwrap it as the target, confirm the SDP content and
-tags survive intact, the inner signature verifies, and a third key cannot
-decrypt the payload. This sandbox's egress proxy does not support
-WebSocket upgrades, so an actual relay publish could not be exercised here
-— that remains for the user to confirm against a real relay and NosCall
-install.
+The wrap/unwrap logic was first verified locally with a round-trip test
+(two throwaway keypairs, no network): build and sign an offer as the
+bridge, wrap it, decrypt and unwrap it as the target, confirm the SDP
+content and tags survive intact, the inner signature verifies, and a
+third key cannot decrypt the payload. It has since been confirmed against
+a real relay and a real NosCall install, ringing and carrying audio both
+ways.
 
 ## Blind spots
 
-- **Answer/ICE/audio round-trip is unverified end-to-end.** The code path
-  exists (`CallBridge` still waits for an answer and bridges RTP), but
-  this PR's verification stops at "NosCall rings." TURN/NAT behavior for
-  the WebRTC leg is untested.
+- **TURN/NAT behavior for the WebRTC leg is untested** beyond the local
+  network the verification above ran on.
 - **No staleness check.** NIP-AC recommends discarding signaling events
   older than 20 seconds (by `created_at`) to avoid phantom calls from
   stale relay-cached events on reconnect. Not implemented.
@@ -98,6 +100,3 @@ install.
   single bridge identity, not a multi-device NosCall user.
 - **Group calls (multiple `p` tags) are out of scope.** sip2nostr only
   ever targets the single configured `target_npub`.
-- **Relay publish success isn't checked.** `SendEvent`'s output includes
-  per-relay success/failure; `NostrSignalingClient` currently only reads
-  the event ID, not whether any relay actually accepted it.
