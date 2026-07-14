@@ -37,22 +37,22 @@ public sealed class NostrSignalingClient : IAsyncDisposable
 
     public async Task ConnectAsync()
     {
-        var signer = NostrSigner.Keys(_bridgeKeys);
-        _client = new ClientBuilder().Signer(signer).Build();
-        foreach (var relay in _relays)
+        _client = new ClientBuilder().Signer(NostrSigner.Keys(_bridgeKeys)).Build();
+        var connectedCount = await ConnectAndCheckRelaysAsync(_client, _relays, _logger);
+        if (connectedCount > 0)
         {
-            await _client.AddRelay(relay);
+            _logger.Information(
+                "Nostr signaling connected: {ConnectedCount}/{TotalCount} relay(s) reachable.",
+                connectedCount,
+                _relays.Count);
         }
-
-        await _client.Connect();
-
-        // Connect() returns as soon as the connection attempt is kicked off,
-        // not once the relay handshake actually completes. Publishing before
-        // that finishes doesn't throw - Client.SendEvent just reports every
-        // relay as failed ("relay not connected"). Wait for the real
-        // connection here so PublishAsync's failure checks below mean
-        // something.
-        await _client.WaitForConnection(ConnectTimeout);
+        else
+        {
+            _logger.Warning(
+                "Nostr signaling: none of the {TotalCount} configured relay(s) are reachable yet; " +
+                "publishing may still fail. See docs/propagating-to-nostr.md.",
+                _relays.Count);
+        }
 
         _ = Task.Run(() => _client.HandleNotifications(new WrapDispatcher(this)));
 
@@ -61,6 +61,71 @@ public sealed class NostrSignalingClient : IAsyncDisposable
             .Pubkey(_bridgeKeys.PublicKey())
             .Since(Timestamp.Now());
         await _client.Subscribe(filter, null);
+    }
+
+    // Startup-time diagnostic: confirms the configured relays are actually
+    // reachable before any call arrives, instead of only finding out deep
+    // into a live call. Uses a throwaway connection - the real per-call
+    // NostrSignalingClient always connects fresh in ConnectAsync above.
+    public static async Task CheckConnectivityAsync(NostrConfig config, ILogger logger)
+    {
+        var bridgeKeys = Keys.Parse(config.BridgeNsec);
+        var relays = config.Relays.Select(RelayUrl.Parse).ToList();
+        var client = new ClientBuilder().Signer(NostrSigner.Keys(bridgeKeys)).Build();
+
+        var connectedCount = await ConnectAndCheckRelaysAsync(client, relays, logger);
+        if (connectedCount > 0)
+        {
+            logger.Information("Nostr connected: {ConnectedCount}/{TotalCount} relay(s) reachable.", connectedCount, relays.Count);
+        }
+        else
+        {
+            logger.Warning(
+                "Nostr not connected: none of the {TotalCount} configured relay(s) are reachable. " +
+                "Calls will not propagate to Nostr until this is fixed - check the relay URLs and network access.",
+                relays.Count);
+        }
+
+        await client.Shutdown();
+        client.Dispose();
+    }
+
+    // Connect()/WaitForConnection() alone aren't reliable signals - they can
+    // return successfully even when no relay ever actually connected (see
+    // PublishAsync's comment). Relay.IsConnected() after waiting is the
+    // accurate check.
+    private static async Task<int> ConnectAndCheckRelaysAsync(Client client, List<RelayUrl> relays, ILogger logger)
+    {
+        foreach (var relay in relays)
+        {
+            await client.AddRelay(relay);
+        }
+
+        await client.Connect();
+        try
+        {
+            await client.WaitForConnection(ConnectTimeout);
+        }
+        catch
+        {
+            // Per-relay status is checked explicitly below regardless.
+        }
+
+        var connectedCount = 0;
+        foreach (var relayUrl in relays)
+        {
+            var relay = await client.Relay(relayUrl);
+            if (relay.IsConnected())
+            {
+                connectedCount++;
+            }
+            else
+            {
+                logger.Warning("Nostr relay {RelayUrl} is not connected (status: {Status}).", relayUrl, relay.Status());
+            }
+        }
+
+        return connectedCount;
     }
 
     // Content is the raw SDP offer string; call-type is required by
