@@ -90,10 +90,13 @@ public sealed class NostrSignalingClient : IAsyncDisposable
         client.Dispose();
     }
 
-    // Connect()/WaitForConnection() alone aren't reliable signals - they can
-    // return successfully even when no relay ever actually connected (see
-    // PublishAsync's comment). Relay.IsConnected() after waiting is the
-    // accurate check.
+    // Connect() is fire-and-forget - it kicks off each relay's connection
+    // loop and returns immediately, with no guarantee any attempt even
+    // started (confirmed against rust-nostr's source: sdk/src/pool/mod.rs).
+    // TryConnect() actually awaits a real per-relay connection attempt
+    // within the timeout and returns which relays succeeded/failed, with
+    // the real underlying error (DNS/TLS/refused/etc.) per failure - not
+    // just an opaque status enum.
     private static async Task<int> ConnectAndCheckRelaysAsync(Client client, List<RelayUrl> relays, ILogger logger)
     {
         foreach (var relay in relays)
@@ -101,31 +104,13 @@ public sealed class NostrSignalingClient : IAsyncDisposable
             await client.AddRelay(relay);
         }
 
-        await client.Connect();
-        try
+        var output = await client.TryConnect(ConnectTimeout);
+        foreach (var failure in output.failed)
         {
-            await client.WaitForConnection(ConnectTimeout);
-        }
-        catch
-        {
-            // Per-relay status is checked explicitly below regardless.
+            logger.Warning("Nostr relay {RelayUrl} failed to connect: {Reason}.", failure.Key, failure.Value);
         }
 
-        var connectedCount = 0;
-        foreach (var relayUrl in relays)
-        {
-            var relay = await client.Relay(relayUrl);
-            if (relay.IsConnected())
-            {
-                connectedCount++;
-            }
-            else
-            {
-                logger.Warning("Nostr relay {RelayUrl} is not connected (status: {Status}).", relayUrl, relay.Status());
-            }
-        }
-
-        return connectedCount;
+        return output.success.Count;
     }
 
     // Content is the raw SDP offer string; call-type is required by
