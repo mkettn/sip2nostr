@@ -4,9 +4,30 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch: {}
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_tag: ${{ steps.version.outputs.is_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "is_tag=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=v0.0.0-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+            echo "is_tag=false" >> "$GITHUB_OUTPUT"
+          fi
+
   publish:
+    needs: version
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -43,17 +64,17 @@ jobs:
       - name: Package tarball
         run: |
           cp config.example.toml README.md out/${{ matrix.rid }}-${{ matrix.mode }}/
-          tar -czf sip2nostr-${{ github.ref_name }}-${{ matrix.rid }}-${{ matrix.mode }}.tar.gz \
+          tar -czf sip2nostr-${{ needs.version.outputs.version }}-${{ matrix.rid }}-${{ matrix.mode }}.tar.gz \
             -C out/${{ matrix.rid }}-${{ matrix.mode }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: sip2nostr-${{ matrix.rid }}-${{ matrix.mode }}
-          path: sip2nostr-${{ github.ref_name }}-${{ matrix.rid }}-${{ matrix.mode }}.tar.gz
+          path: sip2nostr-${{ needs.version.outputs.version }}-${{ matrix.rid }}-${{ matrix.mode }}.tar.gz
 
   release:
-    needs: publish
+    needs: [version, publish]
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
@@ -65,6 +86,8 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.version.outputs.version }}
           files: artifacts/*.tar.gz
           draft: false
+          prerelease: ${{ needs.version.outputs.is_tag != 'true' }}
           generate_release_notes: true
