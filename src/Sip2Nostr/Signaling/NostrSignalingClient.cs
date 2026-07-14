@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Nostr.Sdk;
+using Serilog;
 using Sip2Nostr.Config;
 
 namespace Sip2Nostr.Signaling;
@@ -14,21 +15,24 @@ public sealed class NostrSignalingClient : IAsyncDisposable
 {
     private const string AltText = "NIP-AC signaling";
     private const string CallTypeVoice = "voice";
+    private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
 
     private readonly Keys _bridgeKeys;
     private readonly PublicKey _targetPubkey;
     private readonly List<RelayUrl> _relays;
     private readonly string _callId;
+    private readonly ILogger _logger;
     private Client? _client;
     private TaskCompletionSource<string>? _pendingAnswer;
     private Action<IceCandidatePayload>? _onIceCandidate;
 
-    public NostrSignalingClient(NostrConfig config, string callId)
+    public NostrSignalingClient(NostrConfig config, string callId, ILogger logger)
     {
         _bridgeKeys = Keys.Parse(config.BridgeNsec);
         _targetPubkey = PublicKey.Parse(config.TargetNpub);
         _relays = config.Relays.Select(RelayUrl.Parse).ToList();
         _callId = callId;
+        _logger = logger;
     }
 
     public async Task ConnectAsync()
@@ -41,6 +45,14 @@ public sealed class NostrSignalingClient : IAsyncDisposable
         }
 
         await _client.Connect();
+
+        // Connect() returns as soon as the connection attempt is kicked off,
+        // not once the relay handshake actually completes. Publishing before
+        // that finishes doesn't throw - Client.SendEvent just reports every
+        // relay as failed ("relay not connected"). Wait for the real
+        // connection here so PublishAsync's failure checks below mean
+        // something.
+        await _client.WaitForConnection(ConnectTimeout);
 
         _ = Task.Run(() => _client.HandleNotifications(new WrapDispatcher(this)));
 
@@ -98,6 +110,28 @@ public sealed class NostrSignalingClient : IAsyncDisposable
             .SignWithKeys(ephemeralKeys);
 
         var output = await _client!.SendEvent(outerEvent);
+        if (output.success.Count == 0)
+        {
+            var reasons = string.Join("; ", output.failed.Select(f => $"{f.Key}: {f.Value}"));
+            _logger.Error(
+                "Failed to publish NIP-AC event (inner kind {InnerKind}, call-id {CallId}) to any relay: {Reasons}",
+                kind,
+                _callId,
+                reasons);
+            throw new InvalidOperationException($"No relay accepted the event (inner kind {kind}): {reasons}");
+        }
+
+        if (output.failed.Count > 0)
+        {
+            var reasons = string.Join("; ", output.failed.Select(f => $"{f.Key}: {f.Value}"));
+            _logger.Warning(
+                "NIP-AC event (inner kind {InnerKind}, call-id {CallId}) reached {SuccessCount} relay(s) but was rejected by others: {Reasons}",
+                kind,
+                _callId,
+                output.success.Count,
+                reasons);
+        }
+
         return output.id;
     }
 
