@@ -1,0 +1,31 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "src/**"
+      - "*.csproj"
+      - ".github/workflows/build.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "*.csproj"
+      - ".github/workflows/build.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore src/Sip2Nostr/Sip2Nostr.csproj
+
+      - name: Build
+        run: dotnet build src/Sip2Nostr/Sip2Nostr.csproj -c Release --no-restore

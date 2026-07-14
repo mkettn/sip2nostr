@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rid: [linux-x64, linux-arm64]
+        mode: [selfcontained, framework]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Publish (self-contained)
+        if: matrix.mode == 'selfcontained'
+        run: |
+          dotnet publish src/Sip2Nostr/Sip2Nostr.csproj \
+            -c Release \
+            -r ${{ matrix.rid }} \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -o out/${{ matrix.rid }}-${{ matrix.mode }}
+
+      - name: Publish (framework-dependent)
+        if: matrix.mode == 'framework'
+        run: |
+          dotnet publish src/Sip2Nostr/Sip2Nostr.csproj \
+            -c Release \
+            -r ${{ matrix.rid }} \
+            --self-contained false \
+            -o out/${{ matrix.rid }}-${{ matrix.mode }}
+
+      - name: Package tarball
+        run: |
+          cp config.example.toml README.md out/${{ matrix.rid }}-${{ matrix.mode }}/
+          tar -czf sip2nostr-${{ github.ref_name }}-${{ matrix.rid }}-${{ matrix.mode }}.tar.gz \
+            -C out/${{ matrix.rid }}-${{ matrix.mode }} .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sip2nostr-${{ matrix.rid }}-${{ matrix.mode }}
+          path: sip2nostr-${{ github.ref_name }}-${{ matrix.rid }}-${{ matrix.mode }}.tar.gz
+
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.tar.gz
+          draft: false
+          generate_release_notes: true

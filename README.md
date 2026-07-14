@@ -31,6 +31,24 @@ cd src/Sip2Nostr
 dotnet run -- ../../config.toml
 ```
 
+## Downloading a release
+
+Tagged releases (`vX.Y.Z`) are built automatically for Linux x86_64 and
+arm64 (Raspberry Pi 4/5 on the 64-bit OS) via GitHub Actions — see the
+[Releases](../../releases) page. Each release has four assets:
+
+| Asset suffix | Use when... |
+|---|---|
+| `linux-x64-selfcontained.tar.gz` | Deploying to an amd64 server/VM with no .NET runtime installed. |
+| `linux-x64-framework.tar.gz` | The amd64 target already has the [.NET 8 runtime](https://dotnet.microsoft.com/download/dotnet/8.0) installed; smaller download. |
+| `linux-arm64-selfcontained.tar.gz` | Deploying to a Raspberry Pi (arm64) with no .NET runtime installed — the simplest option for a fresh Pi. |
+| `linux-arm64-framework.tar.gz` | The Pi already has the .NET 8 runtime installed; smaller download. |
+
+Each tarball also includes `config.example.toml` and `README.md`. Extract
+it, copy `config.example.toml` to `config.toml`, fill in your credentials,
+and run the `Sip2Nostr` binary directly (self-contained) or via
+`dotnet Sip2Nostr.dll` (framework-dependent).
+
 ## Architecture: single binary, C#/.NET
 
 ```
