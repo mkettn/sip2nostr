@@ -4,23 +4,31 @@ using Sip2Nostr.Config;
 
 namespace Sip2Nostr.Signaling;
 
-// Call signaling over Nostr (README component 2): gift-wraps an SDP offer
-// to target_npub, waits for a gift-wrapped answer + ICE candidates back.
-// One instance is used per active call.
+// Call signaling over Nostr using NIP-AC ("WebRTC Calls"), confirmed
+// against NosCall's real implementation - see docs/propagating-to-nostr.md.
+// Not standard NIP-59 gift wrap: the inner signaling event is signed with
+// the bridge's real identity, then wrapped in a kind-21059 event that is
+// NIP-44-encrypted and signed by a fresh ephemeral keypair generated per
+// message (no seal layer). One instance is scoped to a single call-id.
 public sealed class NostrSignalingClient : IAsyncDisposable
 {
+    private const string AltText = "NIP-AC signaling";
+    private const string CallTypeVoice = "voice";
+
     private readonly Keys _bridgeKeys;
     private readonly PublicKey _targetPubkey;
     private readonly List<RelayUrl> _relays;
+    private readonly string _callId;
     private Client? _client;
     private TaskCompletionSource<string>? _pendingAnswer;
     private Action<IceCandidatePayload>? _onIceCandidate;
 
-    public NostrSignalingClient(NostrConfig config)
+    public NostrSignalingClient(NostrConfig config, string callId)
     {
         _bridgeKeys = Keys.Parse(config.BridgeNsec);
         _targetPubkey = PublicKey.Parse(config.TargetNpub);
         _relays = config.Relays.Select(RelayUrl.Parse).ToList();
+        _callId = callId;
     }
 
     public async Task ConnectAsync()
@@ -34,29 +42,22 @@ public sealed class NostrSignalingClient : IAsyncDisposable
 
         await _client.Connect();
 
-        _ = Task.Run(() => _client.HandleNotifications(new GiftWrapDispatcher(this)));
+        _ = Task.Run(() => _client.HandleNotifications(new WrapDispatcher(this)));
 
         var filter = new Filter()
-            .Kind(Kind.FromStd(KindStandard.GiftWrap))
+            .Kind(new Kind(CallSignalKinds.WrapKind))
             .Pubkey(_bridgeKeys.PublicKey())
             .Since(Timestamp.Now());
         await _client.Subscribe(filter, null);
     }
 
-    public async Task<EventId> SendOfferAsync(string sdp)
-    {
-        var payload = JsonSerializer.Serialize(new CallOfferPayload(sdp));
-        var rumor = new EventBuilder(new Kind(CallSignalKinds.CallOffer), payload).Build(_bridgeKeys.PublicKey());
-        var output = await _client!.GiftWrap(_targetPubkey, rumor, []);
-        return output.id;
-    }
+    // Content is the raw SDP offer string; call-type is required by
+    // NIP-AC on offers only. sip2nostr only ever bridges audio.
+    public Task<EventId> SendOfferAsync(string sdp) =>
+        PublishAsync(CallSignalKinds.CallOffer, sdp, [Tag.Parse(["call-type", CallTypeVoice])]);
 
-    public async Task SendIceCandidateAsync(IceCandidatePayload candidate)
-    {
-        var payload = JsonSerializer.Serialize(candidate);
-        var rumor = new EventBuilder(new Kind(CallSignalKinds.IceCandidate), payload).Build(_bridgeKeys.PublicKey());
-        await _client!.GiftWrap(_targetPubkey, rumor, []);
-    }
+    public Task<EventId> SendIceCandidateAsync(IceCandidatePayload candidate) =>
+        PublishAsync(CallSignalKinds.IceCandidate, JsonSerializer.Serialize(candidate));
 
     public Task<string> WaitForAnswerAsync(CancellationToken ct)
     {
@@ -68,40 +69,68 @@ public sealed class NostrSignalingClient : IAsyncDisposable
 
     public void OnIceCandidateReceived(Action<IceCandidatePayload> handler) => _onIceCandidate = handler;
 
-    internal async Task HandleGiftWrapAsync(Event giftWrap)
+    private async Task<EventId> PublishAsync(ushort kind, string content, IEnumerable<Tag>? extraTags = null)
+    {
+        var tags = new List<Tag>
+        {
+            Tag.PublicKey(_targetPubkey),
+            Tag.Parse(["call-id", _callId]),
+            Tag.Parse(["alt", AltText]),
+        };
+        if (extraTags is not null)
+        {
+            tags.AddRange(extraTags);
+        }
+
+        var innerEvent = new EventBuilder(new Kind(kind), content).Tags(tags).SignWithKeys(_bridgeKeys);
+
+        var ephemeralKeys = Keys.Generate();
+        var ciphertext = await NostrSigner.Keys(ephemeralKeys).Nip44Encrypt(_targetPubkey, innerEvent.AsJson());
+
+        var outerTags = new List<Tag> { Tag.PublicKey(_targetPubkey) };
+        if (kind == CallSignalKinds.CallOffer)
+        {
+            outerTags.Add(Tag.Parse(["k", CallSignalKinds.CallOffer.ToString()]));
+        }
+
+        var outerEvent = new EventBuilder(new Kind(CallSignalKinds.WrapKind), ciphertext)
+            .Tags(outerTags)
+            .SignWithKeys(ephemeralKeys);
+
+        var output = await _client!.SendEvent(outerEvent);
+        return output.id;
+    }
+
+    internal async Task HandleWrappedEventAsync(Event wrapped)
     {
         if (_client is null)
         {
             return;
         }
 
-        UnwrappedGift unwrapped;
+        Event innerEvent;
         try
         {
-            unwrapped = await _client.UnwrapGiftWrap(giftWrap);
+            var plaintext = await NostrSigner.Keys(_bridgeKeys).Nip44Decrypt(wrapped.Author(), wrapped.Content());
+            innerEvent = Event.FromJson(plaintext);
         }
         catch
         {
-            // Not decryptable by us / not addressed to us - ignore.
+            // Not decryptable by us / malformed - ignore.
             return;
         }
 
-        if (!unwrapped.Sender().Equals(_targetPubkey))
+        if (!innerEvent.VerifySignature() || !innerEvent.Author().Equals(_targetPubkey))
         {
             return;
         }
 
-        var rumor = unwrapped.Rumor();
-        var kind = rumor.Kind().AsU16();
-        var content = rumor.Content();
+        var kind = innerEvent.Kind().AsU16();
+        var content = innerEvent.Content();
 
         if (kind == CallSignalKinds.CallAnswer)
         {
-            var answer = JsonSerializer.Deserialize<CallAnswerPayload>(content);
-            if (answer is not null)
-            {
-                _pendingAnswer?.TrySetResult(answer.Sdp);
-            }
+            _pendingAnswer?.TrySetResult(content);
         }
         else if (kind == CallSignalKinds.IceCandidate)
         {
@@ -122,10 +151,10 @@ public sealed class NostrSignalingClient : IAsyncDisposable
         }
     }
 
-    private sealed class GiftWrapDispatcher(NostrSignalingClient owner) : HandleNotification
+    private sealed class WrapDispatcher(NostrSignalingClient owner) : HandleNotification
     {
         public Task HandleMsg(RelayUrl relayUrl, RelayMessage msg) => Task.CompletedTask;
 
-        public Task Handle(RelayUrl relayUrl, string subscriptionId, Event evt) => owner.HandleGiftWrapAsync(evt);
+        public Task Handle(RelayUrl relayUrl, string subscriptionId, Event evt) => owner.HandleWrappedEventAsync(evt);
     }
 }

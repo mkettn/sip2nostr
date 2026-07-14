@@ -83,8 +83,9 @@ public sealed class CallBridge(
             return;
         }
 
-        logger.Information("SIP call answered; connecting Nostr signaling.");
-        await using var signaling = new NostrSignalingClient(nostrConfig);
+        var callId = Guid.NewGuid().ToString();
+        logger.Information("SIP call answered; connecting Nostr signaling with call-id {CallId}.", callId);
+        await using var signaling = new NostrSignalingClient(nostrConfig, callId);
         await signaling.ConnectAsync();
         logger.Information("Nostr signaling connected.");
 
