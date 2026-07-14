@@ -16,12 +16,12 @@ No UI — configuration is a single TOML file, no more.
 Verified against a real SIP trunk: with `[nostr].enabled = false`, sip2nostr
 registers, answers an inbound call, plays a local test audio file, and
 tears the call down cleanly on `BYE` (see `docs/receiving-calls.md` for the
-full debugging trace and root cause). Propagating the call to a Nostr
-client (NosCall) is not wired up end-to-end yet — the exact call-signaling
-event format NosCall expects is still unconfirmed (see Open questions), so
-`Signaling/CallSignalKinds.cs` uses placeholder event kinds that only let
-sip2nostr talk to itself until that's verified against NosCall's source.
-That propagation path is the subject of a followup PR.
+full debugging trace and root cause). With `[nostr].enabled = true`,
+propagation to a real NosCall install is verified end-to-end over NIP-AC:
+NosCall rings, answers, and audio flows both ways — see
+`docs/propagating-to-nostr.md` for the protocol and its blind spots. Note
+NosCall only accepts calls from a followed contact, so the bridge's pubkey
+(from `bridge_nsec`) needs to be added as a contact there first.
 
 Copy `config.example.toml` to `config.toml`, fill in your SIP and Nostr
 credentials, and run:
@@ -153,15 +153,12 @@ rather than across a socket or FFI boundary.
 
 ### 2. Nostr signaling (Nostr.Sdk)
 On an inbound call, opens a WebRTC peer connection via sipsorcery,
-generates an SDP offer, gift-wraps it (NIP-17/44/59) via Nostr.Sdk, and
-publishes it to `target_npub` on the configured relays. Waits for the
-answer + ICE candidates back over Nostr, feeds them into sipsorcery's
-WebRTC session.
-
-Exact event `kind`/tag layout must match whatever the receiving client
-(e.g. NosCall) expects — there is no ratified NIP for call signaling yet,
-so this is read directly out of the target client's source before
-implementing.
+generates an SDP offer, wraps it per NIP-AC (NIP-44, ephemeral per-message
+keypair, no seal layer) via Nostr.Sdk, and publishes it to `target_npub` on
+the configured relays. Waits for the answer + ICE candidates back over
+Nostr, feeds them into sipsorcery's WebRTC session. See
+`docs/propagating-to-nostr.md` for the protocol, sourced directly from
+NosCall's own implementation.
 
 ### 3. DNS resolution (DnsClient.NET)
 Wraps a configurable `LookupClient` from `[dns]` in `config.toml`, used for
@@ -182,18 +179,18 @@ keys/relays, WebRTC STUN/TURN) at startup. No runtime UI or admin surface.
 
 ## Open questions / TODO
 
-- [ ] Confirm exact call-signaling event format expected by the target
-      Nostr client (NosCall or other) — pull from its source. The current
-      code uses placeholder event kinds in `Signaling/CallSignalKinds.cs`
-      until this is verified.
+- [x] Confirm exact call-signaling event format expected by the target
+      Nostr client (NosCall) — pulled from its source (NIP-AC), verified
+      end-to-end against a real install. See `docs/propagating-to-nostr.md`.
 - [x] Codec: implemented using G.711 (PCMU/PCMA) on both the SIP and WebRTC
       legs, no transcoding — sipsorcery supports this out of the box via
       `MediaStreamTrack(SDPWellKnownMediaFormatsEnum[])`, no supplementary
       Opus package needed. Revisit if NosCall doesn't offer PCMU/PCMA.
 - [x] Per-line routing: not needed for MVP, confirmed — every line still
       latches to the single configured `target_npub`.
-- [ ] TURN server requirement — inherited from whatever NosCall needs (see
-      design-refinement notes); not yet confirmed either way.
+- [ ] TURN server requirement — verified working over a local network with
+      STUN only; TURN/NAT behavior across the open internet is still
+      untested (see `docs/propagating-to-nostr.md` blind spots).
 - [x] Fallback behavior: none for MVP, confirmed — if the Nostr side
       doesn't answer, the call is left ringing until the caller hangs up.
 - [ ] DoT/DoH support for the configurable resolver (currently plain DNS

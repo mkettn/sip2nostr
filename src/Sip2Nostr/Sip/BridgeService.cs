@@ -6,6 +6,7 @@ using SIPSorcery.SIP;
 using SIPSorcery.SIP.App;
 using Sip2Nostr.Config;
 using Sip2Nostr.Dns;
+using Sip2Nostr.Signaling;
 
 namespace Sip2Nostr.Sip;
 
@@ -27,6 +28,7 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
     private SIPUserAgent? _userAgent;
     private bool _registerRequestSent;
     private bool _registerResponseReceived;
+    private bool _hasLoggedOperational;
     private string? _contactHost;
     private readonly ConcurrentDictionary<string, byte> _loggedInviteCallIds = new();
 
@@ -35,7 +37,21 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
         logger.Information("Starting SIP transport on UDP {ListenEndpoint}.", "0.0.0.0:5060");
         InstallSipTraceLogging();
 
-        _sipTransport.AddSIPChannel(new SIPUDPChannel(IPAddress.Any, 5060));
+        SIPUDPChannel sipChannel;
+        try
+        {
+            sipChannel = new SIPUDPChannel(IPAddress.Any, 5060);
+        }
+        catch (ApplicationException exception) when (exception.Message.Contains("Unable to bind socket"))
+        {
+            throw new InvalidOperationException(
+                "Could not bind UDP port 5060 - it's likely already in use by another process " +
+                "(a previous sip2nostr run that didn't exit cleanly, or another SIP application " +
+                "such as a softphone still registered to the provider). Free the port and try again.",
+                exception);
+        }
+
+        _sipTransport.AddSIPChannel(sipChannel);
 
         logger.Information("Resolving SIP provider host {ProviderHost}.", config.Sip.ProviderHost);
         var providerIp = await _dns.ResolveAsync(config.Sip.ProviderHost, ct);
@@ -60,6 +76,11 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
             localMediaAddress,
             config.Sip.RtpPort,
             logger.ForContext<CallBridge>());
+
+        if (config.Nostr.Enabled)
+        {
+            _ = CheckNostrConnectivitySafeAsync();
+        }
 
         _userAgent = new SIPUserAgent(_sipTransport, null, true, null);
         _userAgent.OnIncomingCall += (ua, req) => HandleIncomingCall(ua, req, ct);
@@ -111,6 +132,13 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
                 uri,
                 GetStatusCode(response),
                 GetReasonPhrase(response));
+
+            if (!_hasLoggedOperational)
+            {
+                _hasLoggedOperational = true;
+                logger.Information("SIP connected.");
+                logger.Information("sip2nostr operational.");
+            }
         };
         _registration.RegistrationTemporaryFailure += (uri, response, error) =>
         {
@@ -183,6 +211,22 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
         catch (Exception exception)
         {
             logger.Error(exception, "Incoming call handling failed for {RequestUri}.", inviteRequest.URI);
+        }
+    }
+
+    // Runs at startup, in parallel with SIP registration, so relay
+    // reachability is known up front instead of only surfacing when the
+    // first call tries to publish. Failures here are diagnostic only -
+    // NostrSignalingClient.ConnectAsync connects fresh per call regardless.
+    private async Task CheckNostrConnectivitySafeAsync()
+    {
+        try
+        {
+            await NostrSignalingClient.CheckConnectivityAsync(config.Nostr, logger.ForContext<NostrSignalingClient>());
+        }
+        catch (Exception exception)
+        {
+            logger.Warning(exception, "Nostr startup connectivity check failed unexpectedly.");
         }
     }
 

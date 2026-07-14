@@ -134,11 +134,10 @@ registrar.
   keys on their phone during a call answered by sip2nostr won't have those
   keypresses relayed anywhere. This wasn't a deliberate product decision,
   just not built yet.
-- **The Nostr/WebRTC propagation path is implemented but not verified
-  end-to-end.** It has never been exercised against a real Nostr call
-  client. `Signaling/CallSignalKinds.cs` uses placeholder event kinds
-  since NosCall's real call-signaling event format is still unconfirmed —
-  see the README's Open Questions. This is the subject of a followup PR.
+- **The Nostr/WebRTC propagation path is implemented and verified
+  end-to-end** against a real NosCall install over NIP-AC — see
+  `docs/propagating-to-nostr.md` for the protocol and its own blind spots
+  (TURN/NAT coverage, staleness/dedup, etc.).
 - **No per-line routing.** Every configured `[[lines]]` DID rings the same
   `target_npub` once Nostr signaling is enabled; the matched line is
   currently used for logging only.

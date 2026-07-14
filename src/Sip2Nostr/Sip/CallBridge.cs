@@ -83,15 +83,22 @@ public sealed class CallBridge(
             return;
         }
 
-        logger.Information("SIP call answered; connecting Nostr signaling.");
-        await using var signaling = new NostrSignalingClient(nostrConfig);
+        var callId = Guid.NewGuid().ToString();
+        logger.Information("SIP call answered; connecting Nostr signaling with call-id {CallId}.", callId);
+        await using var signaling = new NostrSignalingClient(nostrConfig, callId, logger.ForContext<NostrSignalingClient>());
         await signaling.ConnectAsync();
         logger.Information("Nostr signaling connected.");
 
+        // Wired up before waiting on the Nostr answer (not after) so a
+        // caller hangup while we're still waiting for NosCall to answer
+        // tears the call down promptly instead of leaking until shutdown.
+        var hangupTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ua.OnCallHungup += _ => hangupTcs.TrySetResult();
+        using var ctReg = ct.Register(() => hangupTcs.TrySetResult());
+
         pc.onicecandidate += candidate =>
         {
-            logger.Information("Sending WebRTC ICE candidate over Nostr.");
-            _ = signaling.SendIceCandidateAsync(new IceCandidatePayload(candidate.candidate, candidate.sdpMid, candidate.sdpMLineIndex));
+            _ = SendIceCandidateSafeAsync(signaling, candidate);
         };
         signaling.OnIceCandidateReceived(candidate =>
         {
@@ -109,18 +116,27 @@ public sealed class CallBridge(
         logger.Information("Sending WebRTC SDP offer over Nostr.");
         await signaling.SendOfferAsync(offer.sdp);
 
+        logger.Information("Waiting for WebRTC SDP answer over Nostr.");
+        var answerTask = signaling.WaitForAnswerAsync(ct);
+        if (await Task.WhenAny(answerTask, hangupTcs.Task) == hangupTcs.Task)
+        {
+            logger.Information("Call ended before a WebRTC SDP answer arrived; closing media sessions.");
+            pc.close();
+            sipMediaSession.Close("call ended before nostr answer");
+            return;
+        }
+
         string answerSdp;
         try
         {
-            logger.Information("Waiting for WebRTC SDP answer over Nostr.");
-            answerSdp = await signaling.WaitForAnswerAsync(ct);
+            answerSdp = await answerTask;
         }
         catch (OperationCanceledException)
         {
-            // No answer over Nostr before shutdown/hangup. MVP: no fallback,
-            // the call is left ringing until the caller hangs up or the SIP
+            // No answer over Nostr before shutdown. MVP: no fallback, the
+            // call is left ringing until the caller hangs up or the SIP
             // transaction times out on its own (see README open questions).
-            logger.Warning("Stopped waiting for WebRTC SDP answer because shutdown or hangup was requested.");
+            logger.Warning("Stopped waiting for WebRTC SDP answer because shutdown was requested.");
             pc.close();
             sipMediaSession.Close("no nostr answer");
             return;
@@ -129,14 +145,24 @@ public sealed class CallBridge(
         logger.Information("Received WebRTC SDP answer over Nostr.");
         pc.setRemoteDescription(new RTCSessionDescriptionInit { type = RTCSdpType.answer, sdp = answerSdp });
 
-        var hangupTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        ua.OnCallHungup += _ => hangupTcs.TrySetResult();
-        using var ctReg = ct.Register(() => hangupTcs.TrySetResult());
         await hangupTcs.Task;
 
         logger.Information("Call ended; closing media sessions.");
         pc.close();
         sipMediaSession.Close("call ended");
+    }
+
+    private async Task SendIceCandidateSafeAsync(NostrSignalingClient signaling, RTCIceCandidate candidate)
+    {
+        try
+        {
+            logger.Information("Sending WebRTC ICE candidate over Nostr.");
+            await signaling.SendIceCandidateAsync(new IceCandidatePayload(candidate.candidate, candidate.sdpMid, candidate.sdpMLineIndex));
+        }
+        catch (Exception exception)
+        {
+            logger.Warning(exception, "Failed to send WebRTC ICE candidate over Nostr.");
+        }
     }
 
     private static void BridgeAudio(RTPSession sipSide, RTPSession webRtcSide)
