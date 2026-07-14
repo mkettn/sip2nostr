@@ -38,9 +38,12 @@ use it, and it's out of scope here regardless — it's a mid-call concern.)
 2. Generate a fresh ephemeral keypair for this one message.
 3. NIP-44-encrypt the JSON as the ephemeral key, to the recipient.
 4. Publish an outer event: `kind = 21059`, `pubkey = <ephemeral pubkey>`,
-   `content = <ciphertext>`, `tags = [['p', recipient]]` plus
-   `['k', '25050']` — **only when the inner event is an offer**, confirmed
-   asymmetric in NosCall's real source. No seal layer (no kind-13 event).
+   `content = <ciphertext>`, `tags = [['p', recipient]]` — just the single
+   `p` tag, for every inner kind including offers. (An earlier draft of
+   this doc claimed offers also carry a `['k', '25050']` tag, based on a
+   stale copy of NosCall's source; the real, shipping
+   `NipAcProtocol.wrap()` in NosCall 0.5.2-release never adds a `k` tag.)
+   No seal layer (no kind-13 event).
 
 **Unwrapping** a received kind-21059 event tagged `p = <our pubkey>`:
 NIP-44-decrypt `content` using our real key and the wrap's `pubkey` (the

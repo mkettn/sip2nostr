@@ -149,14 +149,8 @@ public sealed class NostrSignalingClient : IAsyncDisposable
         var ephemeralKeys = Keys.Generate();
         var ciphertext = await NostrSigner.Keys(ephemeralKeys).Nip44Encrypt(_targetPubkey, innerEvent.AsJson());
 
-        var outerTags = new List<Tag> { Tag.PublicKey(_targetPubkey) };
-        if (kind == CallSignalKinds.CallOffer)
-        {
-            outerTags.Add(Tag.Parse(["k", CallSignalKinds.CallOffer.ToString()]));
-        }
-
         var outerEvent = new EventBuilder(new Kind(CallSignalKinds.WrapKind), ciphertext)
-            .Tags(outerTags)
+            .Tags([Tag.PublicKey(_targetPubkey)])
             .SignWithKeys(ephemeralKeys);
 
         var output = await _client!.SendEvent(outerEvent);
