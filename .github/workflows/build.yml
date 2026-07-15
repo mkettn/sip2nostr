@@ -5,11 +5,13 @@ on:
     branches: [master]
     paths:
       - "src/**"
+      - "tests/**"
       - "*.csproj"
       - ".github/workflows/build.yml"
   pull_request:
     paths:
       - "src/**"
+      - "tests/**"
       - "*.csproj"
       - ".github/workflows/build.yml"
 
@@ -29,3 +31,6 @@ jobs:
 
       - name: Build
         run: dotnet build src/Sip2Nostr/Sip2Nostr.csproj -c Release --no-restore
+
+      - name: Test
+        run: dotnet test tests/Sip2Nostr.Tests/Sip2Nostr.Tests.csproj -c Release

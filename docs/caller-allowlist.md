@@ -22,17 +22,21 @@ this as "stop accidental noise," not "stop a determined attacker."
 
 ## Normalization
 
-`PhoneNumberNormalizer.Normalize` keeps only digits and a single leading
-`+`, and additionally folds a leading `00` international prefix to `+`
-(a common European SIP trunk convention) so a caller isn't treated as a
-different identity depending on which prefix form the provider happens to
-send. It also strips a `tel:` URI's `;phone-context=...` suffix if
-present. Examples:
+`PhoneNumberNormalizer.Normalize` keeps only digits, dropping any leading
+`+` or `00` international-prefix marker entirely (folding `00` the same
+way a leading `+` would be), so a caller isn't treated as a different
+identity depending on which prefix form — or none at all — the provider
+happens to send. The result never carries a leading `+`: an earlier
+version of this normalizer kept it when present, which meant `"+49...".`
+and `"49..."` normalized to two different strings even though they're the
+same number, silently breaking blacklist/whitelist matching whenever a
+trunk sent bare digits with no `+`. It also strips a `tel:` URI's
+`;phone-context=...` suffix if present. Examples:
 
 | Raw `From` user part | Normalized |
 |---|---|
-| `+49 30 12345` | `+493012345` |
-| `0049-30-12345` | `+493012345` |
+| `+49 30 12345` | `493012345` |
+| `0049-30-12345` | `493012345` |
 | `493012345;phone-context=+49` | `493012345` |
 
 ## Extensibility: `ICallerListProvider`
