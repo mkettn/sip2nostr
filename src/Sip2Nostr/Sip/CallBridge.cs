@@ -7,6 +7,7 @@ using SIPSorcery.Net;
 using SIPSorcery.SIP;
 using SIPSorcery.SIP.App;
 using SIPSorceryMedia.Abstractions;
+using Sip2Nostr.CallerList;
 using Sip2Nostr.Config;
 using Sip2Nostr.Signaling;
 
@@ -23,6 +24,7 @@ public sealed class CallBridge(
     string configDirectory,
     IPAddress localMediaAddress,
     int rtpPort,
+    CallerListGate callerListGate,
     ILogger logger)
 {
     private static readonly SDPWellKnownMediaFormatsEnum[] PreferredAudioFormats =
@@ -53,6 +55,20 @@ public sealed class CallBridge(
             return Task.FromResult(System.Net.Sockets.SocketError.Success);
         };
         logger.Information("Accepted SIP INVITE with local transaction tag {LocalTag}.", uas.ClientTransaction.LocalTag);
+
+        var rawCallerNumber = inviteRequest.Header.From?.FromURI?.User ?? string.Empty;
+        var callerNumber = PhoneNumberNormalizer.Normalize(rawCallerNumber);
+        logger.Information(
+            "Caller number normalized to {CallerNumber} (raw: {RawCallerNumber}).",
+            callerNumber,
+            rawCallerNumber);
+
+        if (!await callerListGate.IsAllowedAsync(callerNumber, ct))
+        {
+            logger.Information("Caller {CallerNumber} is not allowed to reach this line; rejecting.", callerNumber);
+            uas.Reject(SIPResponseStatusCodesEnum.Forbidden, null);
+            return;
+        }
 
         if (!nostrConfig.Enabled)
         {
