@@ -20,6 +20,12 @@ this as "stop accidental noise," not "stop a determined attacker."
    no RTP/WebRTC session is ever created for a blocked caller, and no
    Nostr signaling event is ever sent.
 
+Every step of this logs at `Information` level, so a blocking decision can
+be confirmed directly from the logs: `ConfigCallerListProvider` logs which
+list (if any) a number matched, `CallerListGate` logs each provider's
+verdict, and `CallBridge` logs the normalized number and the final
+reject/proceed decision.
+
 ## Normalization
 
 `PhoneNumberNormalizer.Normalize` keeps only digits, dropping any leading

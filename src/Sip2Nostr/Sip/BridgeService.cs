@@ -70,7 +70,9 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
             localMediaAddress,
             registrar);
         InstallSipUriResolver(providerEndpoint);
-        var callerListGate = new CallerListGate([new ConfigCallerListProvider(config.CallerList)]);
+        var callerListGate = new CallerListGate(
+            [new ConfigCallerListProvider(config.CallerList, logger.ForContext<ConfigCallerListProvider>())],
+            logger.ForContext<CallerListGate>());
         _callBridge = new CallBridge(
             config.WebRtc,
             config.Nostr,
