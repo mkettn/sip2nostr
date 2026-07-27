@@ -24,6 +24,9 @@ public sealed class AppConfig
 
     [property: TomlPropertyName("logging")]
     public LoggingConfig Logging { get; init; } = new();
+
+    [property: TomlPropertyName("callerlist")]
+    public CallerListConfig CallerList { get; init; } = new();
 }
 
 public sealed class SipConfig
@@ -99,4 +102,16 @@ public sealed class LoggingConfig
 {
     [property: TomlPropertyName("run_file")]
     public string? RunFile { get; init; }
+}
+
+// Blacklist always wins on match. An empty whitelist means blacklist-only
+// mode (everyone not blacklisted is allowed); a non-empty whitelist
+// switches to deny-by-default (only whitelisted numbers get through).
+public sealed class CallerListConfig
+{
+    [property: TomlPropertyName("blacklist")]
+    public List<string> Blacklist { get; init; } = [];
+
+    [property: TomlPropertyName("whitelist")]
+    public List<string> Whitelist { get; init; } = [];
 }

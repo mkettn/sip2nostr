@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using Serilog;
 using SIPSorcery.SIP;
 using SIPSorcery.SIP.App;
+using Sip2Nostr.CallerList;
 using Sip2Nostr.Config;
 using Sip2Nostr.Dns;
 using Sip2Nostr.Signaling;
@@ -69,12 +70,16 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
             localMediaAddress,
             registrar);
         InstallSipUriResolver(providerEndpoint);
+        var callerListGate = new CallerListGate(
+            [new ConfigCallerListProvider(config.CallerList, logger.ForContext<ConfigCallerListProvider>())],
+            logger.ForContext<CallerListGate>());
         _callBridge = new CallBridge(
             config.WebRtc,
             config.Nostr,
             config.ConfigDirectory,
             localMediaAddress,
             config.Sip.RtpPort,
+            callerListGate,
             logger.ForContext<CallBridge>());
 
         if (config.Nostr.Enabled)

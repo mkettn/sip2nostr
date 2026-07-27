@@ -42,3 +42,14 @@ target_npub = "npub1..."      # your identity - every call latches here in the M
 [webrtc]
 stun_servers = ["stun:stun.l.google.com:19302"]
 turn_server = ""               # optional, recommended for NAT traversal
+
+[callerlist]
+# A blacklist match always rejects the call, regardless of whitelist.
+# An empty whitelist means blacklist-only mode: everyone not blacklisted
+# is allowed through. A non-empty whitelist switches to deny-by-default:
+# only whitelisted numbers get through (still overridable by a blacklist
+# match). Numbers are normalized before comparison (spaces/dashes
+# stripped, "00" international prefix folded to "+"), so either format
+# works here.
+blacklist = []
+whitelist = []
