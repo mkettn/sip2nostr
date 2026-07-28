@@ -68,7 +68,7 @@ jobs:
             -C out/${{ matrix.rid }}-${{ matrix.mode }} .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sip2nostr-${{ matrix.rid }}-${{ matrix.mode }}
           path: sip2nostr-${{ needs.version.outputs.version }}-${{ matrix.rid }}-${{ matrix.mode }}.tar.gz
