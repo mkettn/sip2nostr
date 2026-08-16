@@ -10,6 +10,7 @@ using SIPSorceryMedia.Abstractions;
 using Sip2Nostr.CallerList;
 using Sip2Nostr.Config;
 using Sip2Nostr.Signaling;
+using Sip2Nostr.Voicemail;
 
 namespace Sip2Nostr.Sip;
 
@@ -22,6 +23,7 @@ public sealed class CallBridge(
     WebRtcConfig webRtcConfig,
     NostrConfig nostrConfig,
     VoicemailConfig voicemailConfig,
+    VoicemailSender voicemailSender,
     string configDirectory,
     IPAddress localMediaAddress,
     int rtpPort,
@@ -226,7 +228,7 @@ public sealed class CallBridge(
 
         try
         {
-            await RunVoicemailAsync(sipMediaSession, selectedAudioFormat, callerNumber, callId, signaling, hangupTcs, ct);
+            await RunVoicemailAsync(sipMediaSession, selectedAudioFormat, callerNumber, callId, hangupTcs, ct);
         }
         finally
         {
@@ -268,7 +270,6 @@ public sealed class CallBridge(
         SDPWellKnownMediaFormatsEnum selectedAudioFormat,
         string callerNumber,
         string callId,
-        NostrSignalingClient signaling,
         TaskCompletionSource hangupTcs,
         CancellationToken ct)
     {
@@ -369,10 +370,16 @@ public sealed class CallBridge(
         }
 
         logger.Information("Voicemail recording finished: {RecordedSeconds:F1}s captured.", recordedSeconds);
-        await SaveAndSendVoicemailAsync(samples, sampleRate, callerNumber, callId, signaling);
+        var durationSeconds = (int)Math.Round(recordedSeconds);
+        var wavPath = await SaveRecordingAsync(samples, sampleRate, callId);
+        voicemailSender.Enqueue(new VoicemailJob(wavPath, sampleRate, durationSeconds, callerNumber, callId));
     }
 
-    private async Task SaveAndSendVoicemailAsync(short[] samples, int sampleRate, string callerNumber, string callId, NostrSignalingClient signaling)
+    // Just the durable local write - encoding and sending happen later,
+    // off this call's critical path, in VoicemailSender. Always saved
+    // regardless of what happens after, so a delivery failure never loses
+    // the recording.
+    private async Task<string> SaveRecordingAsync(short[] samples, int sampleRate, string callId)
     {
         var wavBytes = WavEncoder.Encode(samples, sampleRate);
         var recordingsDir = Path.IsPathRooted(voicemailConfig.RecordingsDir)
@@ -380,108 +387,10 @@ public sealed class CallBridge(
             : Path.GetFullPath(Path.Combine(configDirectory, voicemailConfig.RecordingsDir));
         Directory.CreateDirectory(recordingsDir);
 
-        var fileNameStem = $"{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}-{callId}";
-        var wavPath = Path.Combine(recordingsDir, $"{fileNameStem}.wav");
+        var wavPath = Path.Combine(recordingsDir, $"{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}-{callId}.wav");
         await File.WriteAllBytesAsync(wavPath, wavBytes);
         logger.Information("Saved voicemail recording to {WavPath}.", wavPath);
-
-        // The .ogg is a transport artifact for the Nostr send, not part of
-        // the archive - recordings_dir is documented as holding the WAV,
-        // and every recording would otherwise leave two files behind.
-        var oggPath = TryConvertToOpusOgg(wavPath, Path.Combine(recordingsDir, $"{fileNameStem}.ogg"));
-        byte[] audioBytes;
-        string mimeType;
-        if (oggPath is not null)
-        {
-            audioBytes = await File.ReadAllBytesAsync(oggPath);
-            mimeType = "audio/ogg";
-            TryDeleteTransientFile(oggPath);
-        }
-        else
-        {
-            audioBytes = wavBytes;
-            mimeType = "audio/wav";
-        }
-
-        var durationSeconds = (int)Math.Round(samples.Length / (double)sampleRate);
-        try
-        {
-            await signaling.SendVoicemailAsync(audioBytes, mimeType, durationSeconds, callerNumber, voicemailConfig.DmRelays);
-            logger.Information(
-                "Sent voicemail ({DurationSeconds}s, {AudioBytes} bytes, {MimeType}) to target_npub over Nostr.",
-                durationSeconds,
-                audioBytes.Length,
-                mimeType);
-        }
-        catch (Exception exception)
-        {
-            logger.Error(exception, "Failed to send voicemail over Nostr; the recording is still saved at {WavPath}.", wavPath);
-        }
-    }
-
-    private void TryDeleteTransientFile(string path)
-    {
-        try
-        {
-            File.Delete(path);
-        }
-        catch (Exception exception)
-        {
-            logger.Warning(exception, "Could not delete transient file {Path}.", path);
-        }
-    }
-
-    private string? TryConvertToOpusOgg(string wavPath, string oggPath)
-    {
-        try
-        {
-            using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "ffmpeg",
-                ArgumentList =
-                {
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-y",
-                    "-i",
-                    wavPath,
-                    "-c:a",
-                    "libopus",
-                    "-b:a",
-                    "16k",
-                    oggPath,
-                },
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            });
-
-            if (process is null)
-            {
-                logger.Warning("Could not start ffmpeg to encode the voicemail as Opus/OGG; sending WAV instead.");
-                return null;
-            }
-
-            var error = process.StandardError.ReadToEnd();
-            process.WaitForExit();
-            if (process.ExitCode != 0)
-            {
-                logger.Warning("ffmpeg failed to encode the voicemail as Opus/OGG; sending WAV instead: {FfmpegError}", error.Trim());
-                return null;
-            }
-
-            logger.Information("Encoded voicemail as Opus/OGG at {OggPath}.", oggPath);
-            return oggPath;
-        }
-        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
-        {
-            // IOException covers ffmpeg dying mid-run (e.g. killed) while
-            // its stderr pipe is still being read - not just ffmpeg being
-            // missing. Every failure here has the same "just send the WAV"
-            // recovery, so this is deliberately broad.
-            logger.Warning(exception, "Could not run ffmpeg to encode the voicemail as Opus/OGG; sending WAV instead. Install ffmpeg to send smaller recordings.");
-            return null;
-        }
+        return wavPath;
     }
 
     private async Task SendIceCandidateSafeAsync(NostrSignalingClient signaling, RTCIceCandidate candidate)

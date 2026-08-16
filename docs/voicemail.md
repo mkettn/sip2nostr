@@ -40,20 +40,42 @@ itself hasn't been exercised end-to-end yet.
            4. Record caller audio for up to `max_recording_seconds`, or
               until they hang up.
            5. Save the recording as a WAV file under `recordings_dir`
-              (always, regardless of what happens next).
-           6. Try to re-encode it as Opus/OGG via `ffmpeg` (falls back to
-              sending the WAV directly if `ffmpeg` is missing or fails);
-              the `.ogg` is deleted afterwards, it's a transport artifact,
-              not part of the archive.
-           7. Send it to `target_npub` as a NIP-17 private direct message,
-              published to `dm_relays` if configured, otherwise to
-              `[nostr].relays` via the SDK's default NIP-17 relay
-              resolution. A relay rejecting the event (e.g. too large) is
-              detected and logged as a failure, not reported as sent.
-           8. Hang up the SIP call (`ua.Hangup()`) - always, even if a step
-              above threw, so a bad `greeting_sound` path or a disk error
-              can't leave the caller on a silent, still-connected call
-              until their carrier times it out, or leak the RTP session.
+              (always - this is the durability point, independent of
+              whatever happens to the send afterward).
+           6. Hang up the SIP call (`ua.Hangup()`) - immediately, without
+              waiting on delivery. Always runs even if step 5 threw (e.g.
+              a bad `greeting_sound` path, a disk error), so a failure
+              there can't leave the caller on a silent, still-connected
+              call or leak the RTP session.
+           7. Hand the WAV off to VoicemailSender (Voicemail/VoicemailSender.cs)
+              and move on - encoding and delivery happen off this call's
+              critical path, in a separate background worker. See below.
+```
+
+VoicemailSender then, independently of any particular call:
+
+```
+ VoicemailSender (one instance, shared for the process lifetime)
+      │
+      ▼
+ Idle, waiting on the queue - no relay connection held open
+      │
+      │  a WAV path arrives (queue was empty until now)
+      ▼
+ Connect once to dm_relays (or [nostr].relays as a fallback)
+      │
+      ├─ drain everything queued at this point (a backlog of several
+      │  voicemails costs one connect, not one per voicemail)
+      │
+      └─ for each: re-encode as Opus/OGG via ffmpeg (falls back to
+         sending the WAV directly if ffmpeg is missing or fails; the
+         .ogg is deleted afterwards - it's a transport artifact, not
+         part of the archive), then send as a NIP-17 private direct
+         message. A relay rejecting the event (e.g. too large) is
+         detected and logged as a failure, not reported as sent.
+      │
+      ▼
+ Disconnect, go back to idle
 ```
 
 ## Implementation
@@ -85,30 +107,52 @@ itself hasn't been exercised end-to-end yet.
     `RunVoicemailAsync` recorded on - so `ua.Hangup()` both sends the BYE
     and closes the RTP session in one call; it's also safe to call
     unconditionally (it checks `IsCallActive` internally, so it's a no-op
-    if the caller already hung up).
-- `Signaling/NostrSignalingClient.cs`:
-  - `SendHangupAsync` - reuses the existing NIP-AC `PublishAsync` helper
-    with `CallSignalKinds.Hangup` (not `Reject`, which is the callee's
-    decline signal - the bridge is always the NIP-AC caller here).
-  - `SendVoicemailAsync` - calls `Client.SendPrivateMsg` (NIP-17: rumor,
-    seal, gift wrap, and relay publish all handled by Nostr.Sdk), *not*
-    the NIP-AC wrap used for call signaling. A voicemail should be
-    readable by any NIP-17-capable client, not just NosCall. If
-    `[voicemail].dm_relays` is non-empty, it adds and connects those
-    relays to the same `Client` and calls `Client.SendPrivateMsgTo`
-    instead, targeting exactly that relay set - useful since a
-    recipient's declared NIP-17 DM inbox (kind:10050) is often not the
-    same relay set used for call signaling. Either way, the returned
-    `SendEventOutput` is checked (`PublishAsync` already did this for
-    NIP-AC signaling; a shared `ThrowIfPublishFailed` helper now covers
-    both) - a relay can reject an event with `OK: false` without the
-    publish call itself throwing, so this is the only way to actually
-    detect it.
+    if the caller already hung up). `RunVoicemailAsync` only ever writes
+    the WAV and calls `VoicemailSender.Enqueue` - it has no Nostr.Sdk
+    dependency at all, so nothing in the call-handling path blocks on
+    relay connectivity or a publish.
   - `[voicemail].ring_timeout_seconds` / `max_recording_seconds` are
     validated (`> 0`) in `Config/ConfigLoader.cs` at startup, alongside
     the rest of config loading - an unchecked bad value would otherwise
     surface deep inside `Task.Delay` as every call being silently routed
     to voicemail with a misleading "signaling failed" log line.
+- `Voicemail/VoicemailSender.cs` (new): one instance, constructed once in
+  `BridgeService.StartAsync` and shared across every call for the life of
+  the process - unlike `NostrSignalingClient`, which is scoped to a
+  single call.
+  - `Enqueue` writes to an unbounded `System.Threading.Channels.Channel`
+    and returns immediately; it's a plain in-memory queue (multiple calls
+    can enqueue concurrently - `Channel` is built for that), not a
+    persistent one, so anything still queued at process shutdown is
+    logged as undelivered but its WAV is safely already on disk.
+  - The worker loop (`RunAsync`, started from the constructor) blocks on
+    `Channel.Reader.WaitToReadAsync` while the queue is empty - no relay
+    connection, no timer. On the first item it drains everything
+    currently queued into one batch, connects one `Client` (a fresh
+    instance per batch, deliberately not shared with any call's
+    `NostrSignalingClient` - so its own relay pool, and `TryConnect`'s
+    reachability result, is never polluted by relays something else
+    already had connected), sends the whole batch, then shuts that
+    `Client` down and goes back to waiting.
+  - Per voicemail: re-encodes to Opus/OGG via `ffmpeg` (falls back to the
+    WAV if `ffmpeg` is missing or fails; the `.ogg` is deleted after
+    being read - it's a transport artifact, not part of the archive),
+    then calls `Client.SendPrivateMsgTo(relayUrls, ...)` - NIP-17: rumor,
+    seal, gift wrap, and publish all handled by `Nostr.Sdk` - targeting
+    exactly the relay set (`[voicemail].dm_relays`, or `[nostr].relays`
+    as a fallback) this batch just connected to. `SendPrivateMsgTo` is
+    used explicitly rather than plain `SendPrivateMsg` so the relays
+    published to are always the same ones just verified reachable,
+    rather than Nostr.Sdk's own separate NIP-17 relay-discovery landing
+    on a different set. Unlike the NIP-AC signaling wrap `NostrSignalingClient`
+    uses for call offer/answer/ICE, a voicemail should be readable by any
+    NIP-17-capable client, not just NosCall. The returned
+    `SendEventOutput` is checked (shared `PublishOutcome.ThrowIfFailed`
+    helper, also used by `NostrSignalingClient.PublishAsync`) - a relay
+    can reject an event with `OK: false` without the publish call itself
+    throwing, so this is the only way to actually detect it. A failure
+    for one voicemail in a batch is caught and logged per-voicemail; it
+    doesn't stop the rest of the batch from being attempted.
 
 ## Blind spots
 
@@ -132,4 +176,12 @@ itself hasn't been exercised end-to-end yet.
   blind spot in `receiving-calls.md`.
 - **Concurrent calls are untested**, same caveat as the rest of the
   SIP/RTP path per `receiving-calls.md`.
+- **The send queue is in-memory only, not persisted across restarts.** A
+  voicemail recorded and enqueued but not yet sent when the process is
+  stopped is lost from the queue (though its WAV file on disk is not -
+  it just won't be retried automatically; resending it would need to be
+  done by hand, there's no "scan `recordings_dir` for orphaned WAVs on
+  startup" logic). For a personal single-line deployment where the
+  process runs continuously, this is a minor gap; it would matter more
+  under frequent restarts or heavy call volume.
 - **Not yet verified against a real SIP trunk or a real NIP-17 client.**

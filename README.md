@@ -167,16 +167,19 @@ Opt-in (`[voicemail].enabled = false` by default). When enabled, if
 `target_npub` doesn't answer a call over Nostr within
 `[voicemail].ring_timeout_seconds`, the call is diverted to a local
 greeting (or a short tone if `greeting_sound` isn't configured) followed
-by a recording of up to `max_recording_seconds`, which is then sent to
-`target_npub` as a Nostr direct message (NIP-17), re-encoded as Opus/OGG
-via `ffmpeg` to keep it small (falls back to WAV if `ffmpeg` isn't
-available). The DM is published to `[voicemail].dm_relays` if set — since
-a NIP-17 DM inbox (kind:10050) can legitimately differ from the relays
-used for call signaling — otherwise it falls back to `[nostr].relays` via
-the SDK's default NIP-17 relay resolution. Recordings are also always
-saved locally under `[voicemail].recordings_dir`, regardless of whether
-the Nostr send succeeds. See `docs/voicemail.md` for the flow and known
-limitations — notably, the recording is inlined into the message rather
+by a recording of up to `max_recording_seconds`, saved locally under
+`[voicemail].recordings_dir` and the SIP call hung up immediately —
+encoding and delivery happen off the call's critical path, handed to a
+background worker (`Voicemail/VoicemailSender.cs`, one instance shared
+for the process lifetime) that connects to `[voicemail].dm_relays` (or
+`[nostr].relays` as a fallback — a NIP-17 DM inbox, kind:10050, can
+legitimately differ from the relays used for call signaling) only when
+there's a voicemail queued, sends it as a Nostr direct message (NIP-17)
+re-encoded as Opus/OGG via `ffmpeg` to keep it small (falls back to WAV
+if `ffmpeg` isn't available), then disconnects. Recordings on disk don't
+depend on delivery succeeding. See `docs/voicemail.md` for the full flow
+and known limitations — notably, the recording is inlined into the
+message rather
 than uploaded
 to a file host, which can exceed a relay's maximum event size for longer
 recordings.

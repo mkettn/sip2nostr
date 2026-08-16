@@ -8,6 +8,7 @@ using Sip2Nostr.CallerList;
 using Sip2Nostr.Config;
 using Sip2Nostr.Dns;
 using Sip2Nostr.Signaling;
+using Sip2Nostr.Voicemail;
 
 namespace Sip2Nostr.Sip;
 
@@ -25,6 +26,7 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
     private readonly ConfiguredDnsResolver _dns = new(config.Dns);
     private readonly SIPTransport _sipTransport = new();
     private CallBridge? _callBridge;
+    private VoicemailSender? _voicemailSender;
     private SIPRegistrationUserAgent? _registration;
     private SIPUserAgent? _userAgent;
     private bool _registerRequestSent;
@@ -73,10 +75,16 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
         var callerListGate = new CallerListGate(
             [new ConfigCallerListProvider(config.CallerList, logger.ForContext<ConfigCallerListProvider>())],
             logger.ForContext<CallerListGate>());
+        // One shared, long-lived worker for the whole process - not
+        // per-call like NostrSignalingClient. It connects to the DM
+        // relay(s) only when it wakes up to a queued voicemail, and
+        // disconnects once the queue drains. See Voicemail/VoicemailSender.cs.
+        _voicemailSender = new VoicemailSender(config.Nostr, config.Voicemail, logger.ForContext<VoicemailSender>());
         _callBridge = new CallBridge(
             config.WebRtc,
             config.Nostr,
             config.Voicemail,
+            _voicemailSender,
             config.ConfigDirectory,
             localMediaAddress,
             config.Sip.RtpPort,
@@ -242,7 +250,11 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
         _registration?.Stop(sendZeroExpiryRegister: true);
         _userAgent?.Close();
         _sipTransport.Shutdown();
-        await Task.CompletedTask;
+
+        if (_voicemailSender is not null)
+        {
+            await _voicemailSender.DisposeAsync();
+        }
     }
 
     private void InstallSipTraceLogging()
