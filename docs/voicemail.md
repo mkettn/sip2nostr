@@ -164,17 +164,43 @@ VoicemailSender then, independently of any particular call:
 
 ## Blind spots
 
-- **Audio is inlined as a base64 `data:` URI in the DM content, not
-  uploaded to a file host.** sip2nostr has no NIP-96/Blossom upload
-  dependency today. A 60-second Opus recording at 16 kbps is roughly
-  150 KB before base64 (~200 KB after), and NIP-17's seal/gift-wrap
-  overhead adds a bit more - this can exceed a relay's configured max
-  event size (commonly 64-256 KB) and get rejected outright. If that
-  happens the recording is still on disk under `recordings_dir`; only the
-  Nostr delivery fails, logged as an error. Lowering
-  `max_recording_seconds`, or pointing `dm_relays` (or `[nostr].relays`,
-  if `dm_relays` is unset) at a relay with a generous size limit, are the
-  available workarounds until this project has a real upload path.
+- **Audio is inlined as a base64 `data:` URI directly in the DM content,
+  not uploaded to a file host - and this caps usable recording length
+  well below `max_recording_seconds`' default, not just "sometimes, on a
+  strict relay".** sip2nostr has no NIP-96/Blossom upload dependency
+  today, so the entire recording has to fit inside one Nostr message.
+  Two separate limits stack against it:
+  - **The relay's max event size** (commonly 64-256 KB) - the blind spot
+    this was originally framed around.
+  - **NIP-44's own plaintext cap, before any relay is even involved.**
+    NIP-44 encryption (used for both the seal and the gift wrap layers a
+    NIP-17 DM goes through) pads its plaintext into fixed size buckets
+    and tops out at 65,535 bytes - encryption itself fails past that, not
+    just delivery. At the current 16 kbps Opus encoding (~2,000
+    bytes/second before base64, ~2,667 bytes/second after), that alone
+    caps the audio portion at roughly **65,535 ÷ 2,667 ≈ 24 seconds** -
+    and the rumor/seal JSON overhead (tags, timestamps, the surrounding
+    message text) eats into that further. Against the shipped
+    `max_recording_seconds = 60` default, more than half of any full-length
+    recording is silently undeliverable: the DM either never encrypts, or
+    a relay rejects the oversized event, and either way `VoicemailSender`
+    logs it as a failure and leaves the WAV on disk instead of sending
+    it. Lowering `max_recording_seconds` to something that reliably fits
+    - in the 15-20s range at present - is the practical mitigation until
+    this project has a real upload path (data URI → uploaded file +
+    `imeta`/`url` tag) to remove the cap entirely.
+- **DTX (encoder silence-dropping) is not available, so the size problem
+  above can't currently be helped by compressing the silence out of a
+  recording.** `Concentus.Oggfile`'s `OpusOggWriteStream` - the Ogg
+  container writer `VoicemailSender` uses - unconditionally rejects a
+  DTX-enabled encoder at construction (`ArgumentException("DTX is not
+  currently supported in Ogg streams")`, confirmed by reading its
+  source). Enabling `IOpusEncoder.UseDTX` would make every encode throw
+  and fall back to sending the far larger raw WAV - the opposite of the
+  goal - so it's deliberately left off (see the comment in
+  `VoicemailSender.TryEncodeOpusOgg`). Revisiting this needs either a
+  different (DTX-aware) Ogg writer or hand-rolling the Ogg container
+  framing to tolerate the granule-position gaps DTX produces.
 - **No silence/VAD trimming or beep tone.** Recording starts immediately
   after the greeting/tone finishes and runs for the full
   `max_recording_seconds` (or until hangup) regardless of whether the

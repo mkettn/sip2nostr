@@ -6,6 +6,7 @@ using Nostr.Sdk;
 using Serilog;
 using Sip2Nostr.Config;
 using Sip2Nostr.Signaling;
+using Sip2Nostr.Sip;
 
 namespace Sip2Nostr.Voicemail;
 
@@ -33,7 +34,6 @@ public sealed class VoicemailSender : IAsyncDisposable
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
     private const int OpusBitrateBps = 16000;
     private const int OpusResamplerQuality = 5;
-    private const int WavHeaderLength = 44; // matches WavEncoder's canonical header exactly
 
     private readonly NostrConfig _nostrConfig;
     private readonly VoicemailConfig _voicemailConfig;
@@ -75,7 +75,26 @@ public sealed class VoicemailSender : IAsyncDisposable
 
                 if (batch.Count > 0)
                 {
-                    await SendBatchAsync(batch, ct).ConfigureAwait(false);
+                    // Guards just this batch: SendBatchAsync's own setup
+                    // (parsing keys/relays, connecting, shutting the Client
+                    // down) isn't otherwise wrapped the way SendOneSafeAsync
+                    // guards each individual send, and an unhandled
+                    // exception here would otherwise escape to the catch
+                    // below and permanently stop the worker for the rest of
+                    // the process - silently dropping every voicemail
+                    // enqueued afterwards despite them still being logged
+                    // as "queued".
+                    try
+                    {
+                        await SendBatchAsync(batch, ct).ConfigureAwait(false);
+                    }
+                    catch (Exception exception)
+                    {
+                        _logger.Error(
+                            exception,
+                            "Failed to send a batch of {Count} voicemail(s); their recordings remain on disk, undelivered. Will retry with the next queued voicemail.",
+                            batch.Count);
+                    }
                 }
             }
         }
@@ -124,7 +143,7 @@ public sealed class VoicemailSender : IAsyncDisposable
                     break;
                 }
 
-                await SendOneSafeAsync(client, targetPubkey, relayUrls, job).ConfigureAwait(false);
+                await SendOneSafeAsync(client, targetPubkey, connectedRelays, job).ConfigureAwait(false);
             }
         }
         finally
@@ -134,7 +153,7 @@ public sealed class VoicemailSender : IAsyncDisposable
         }
     }
 
-    private async Task SendOneSafeAsync(Client client, PublicKey targetPubkey, List<RelayUrl> relayUrls, VoicemailJob job)
+    private async Task SendOneSafeAsync(Client client, PublicKey targetPubkey, List<RelayUrl> connectedRelays, VoicemailJob job)
     {
         try
         {
@@ -148,12 +167,13 @@ public sealed class VoicemailSender : IAsyncDisposable
                 Tag.Parse(["duration", job.DurationSeconds.ToString()]),
             };
 
-            // Explicitly targets the exact relays just connected above
-            // (dm_relays, or [nostr].relays as a fallback), rather than
-            // Nostr.Sdk's own separate NIP-17 relay-discovery logic via
-            // plain SendPrivateMsg - which could resolve to a different
-            // relay set than the one this worker just verified reachable.
-            var output = await client.SendPrivateMsgTo(relayUrls, targetPubkey, content, tags);
+            // Targets connectedRelays - the subset of dm_relays (or
+            // [nostr].relays as a fallback) just verified reachable above,
+            // not the full configured list - rather than Nostr.Sdk's own
+            // separate NIP-17 relay-discovery logic via plain
+            // SendPrivateMsg, which could resolve to a different relay set
+            // entirely.
+            var output = await client.SendPrivateMsgTo(connectedRelays, targetPubkey, content, tags);
             PublishOutcome.ThrowIfFailed(_logger, "voicemail DM", output);
 
             _logger.Information(
@@ -190,12 +210,21 @@ public sealed class VoicemailSender : IAsyncDisposable
     {
         try
         {
-            var samples = ExtractPcmSamples(wavBytes);
+            var samples = WavEncoder.Decode(wavBytes);
 
             using var encoder = OpusCodecFactory.CreateEncoder(sampleRate, 1, OpusApplication.OPUS_APPLICATION_VOIP);
             encoder.Bitrate = OpusBitrateBps;
 
+            // DTX deliberately not enabled - see docs/voicemail.md blind
+            // spots for why.
+
             using var outputStream = new MemoryStream();
+
+            // OpusOggWriteStream deliberately isn't IDisposable - Finish()
+            // (below) is what pads the trailing frame, writes the
+            // end-of-stream page, and flushes; leaveOpen keeps
+            // outputStream open afterwards so ToArray() below can still
+            // read it.
             var oggWriter = new OpusOggWriteStream(encoder, outputStream, new OpusTags(), sampleRate, OpusResamplerQuality, leaveOpen: true);
             oggWriter.WriteSamples(samples, 0, samples.Length);
             oggWriter.Finish();
@@ -209,17 +238,6 @@ public sealed class VoicemailSender : IAsyncDisposable
             _logger.Warning(exception, "Could not encode the voicemail as Opus/OGG; sending WAV instead.");
             return null;
         }
-    }
-
-    // Skips WavEncoder's fixed 44-byte header and reinterprets the rest as
-    // little-endian 16-bit PCM - valid because this is always our own
-    // WavEncoder.Encode output, not an arbitrary WAV file.
-    private static short[] ExtractPcmSamples(byte[] wavBytes)
-    {
-        var sampleCount = (wavBytes.Length - WavHeaderLength) / sizeof(short);
-        var samples = new short[sampleCount];
-        Buffer.BlockCopy(wavBytes, WavHeaderLength, samples, 0, sampleCount * sizeof(short));
-        return samples;
     }
 
     public async ValueTask DisposeAsync()

@@ -163,11 +163,11 @@ public sealed class CallBridge(
             // hangupTcs also completes on shutdown (ctReg above). Checking
             // it's completed - rather than trusting which task Task.WhenAny
             // happened to report as the winner - avoids a race: cancellation
-            // callbacks on a token run in registration order, and
-            // ringTimeoutTask's own internal registration on ct is created
-            // after ctReg above, so on shutdown it can observe cancellation
-            // (and so complete) before ctReg's callback runs, which would
-            // otherwise misreport a shutdown as a genuine ring timeout.
+            // callbacks on a token run LIFO, and ringTimeoutTask's own
+            // internal registration on ct is created after ctReg above, so
+            // on shutdown it can observe cancellation (and so complete)
+            // before ctReg's callback runs, which would otherwise misreport
+            // a shutdown as a genuine ring timeout.
             if (hangupTcs.Task.IsCompleted)
             {
                 logger.Information("Call ended before a WebRTC SDP answer arrived; closing media sessions.");
@@ -176,18 +176,26 @@ public sealed class CallBridge(
                 return;
             }
 
-            if (ringTimeoutTask is not null && ringTimeoutTask.IsCompleted)
-            {
-                logger.Information(
-                    "No WebRTC SDP answer arrived within {RingTimeoutSeconds}s; falling back to voicemail.",
-                    voicemailConfig.RingTimeoutSeconds);
-            }
-            else
+            // Checking answerTask itself, rather than ringTimeoutTask, gives
+            // a genuine answer priority if it lands at the same moment the
+            // ring timeout elapses - Task.WhenAny only guarantees *a* task
+            // completed, not which one "should" win a near-simultaneous
+            // race. If answerTask hasn't completed here, hangupTcs hasn't
+            // either (checked above, and it shares ct with answerTask's own
+            // cancellation registration), so ringTimeoutTask is the only
+            // remaining task that could have completed.
+            if (answerTask.IsCompleted)
             {
                 var answerSdp = await answerTask;
                 logger.Information("Received WebRTC SDP answer over Nostr.");
                 pc.setRemoteDescription(new RTCSessionDescriptionInit { type = RTCSdpType.answer, sdp = answerSdp });
                 nostrAnswered = true;
+            }
+            else
+            {
+                logger.Information(
+                    "No WebRTC SDP answer arrived within {RingTimeoutSeconds}s; falling back to voicemail.",
+                    voicemailConfig.RingTimeoutSeconds);
             }
         }
         catch (OperationCanceledException)
