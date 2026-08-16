@@ -28,8 +28,6 @@ public sealed class CallBridge(
     CallerListGate callerListGate,
     ILogger logger)
 {
-    private const int VoicemailSampleRate = 8000;
-
     private static readonly SDPWellKnownMediaFormatsEnum[] PreferredAudioFormats =
     [
         SDPWellKnownMediaFormatsEnum.PCMA,
@@ -94,8 +92,10 @@ public sealed class CallBridge(
         // caller-side RTP packet never gets handed to a closed peer
         // connection. The other direction needs no gate: it naturally stops
         // once pc.close() below stops firing its OnRtpPacketReceived event.
+        // Volatile: the write happens on this async method's thread, the
+        // read happens on SIPSorcery's RTP receive thread.
         var forwardToWebRtc = true;
-        BridgeAudio(sipMediaSession, pc, () => forwardToWebRtc);
+        BridgeAudio(sipMediaSession, pc, () => Volatile.Read(ref forwardToWebRtc));
 
         logger.Information("Answering SIP call.");
         var answered = await ua.Answer(uas, sipMediaSession, null, localMediaAddress);
@@ -148,21 +148,33 @@ public sealed class CallBridge(
             var answerTask = signaling.WaitForAnswerAsync(ct);
             var ringTimeoutTask = voicemailConfig.Enabled
                 ? Task.Delay(TimeSpan.FromSeconds(voicemailConfig.RingTimeoutSeconds), ct)
-                : Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                : null;
             logger.Information(
                 "Waiting for WebRTC SDP answer over Nostr{RingTimeout}.",
                 voicemailConfig.Enabled ? $" (up to {voicemailConfig.RingTimeoutSeconds}s before falling back to voicemail)" : string.Empty);
-            var winner = await Task.WhenAny(answerTask, ringTimeoutTask, hangupTcs.Task);
 
-            if (winner == hangupTcs.Task)
+            var waitTasks = ringTimeoutTask is not null
+                ? new Task[] { answerTask, ringTimeoutTask, hangupTcs.Task }
+                : new Task[] { answerTask, hangupTcs.Task };
+            await Task.WhenAny(waitTasks);
+
+            // hangupTcs also completes on shutdown (ctReg above). Checking
+            // it's completed - rather than trusting which task Task.WhenAny
+            // happened to report as the winner - avoids a race: cancellation
+            // callbacks on a token run in registration order, and
+            // ringTimeoutTask's own internal registration on ct is created
+            // after ctReg above, so on shutdown it can observe cancellation
+            // (and so complete) before ctReg's callback runs, which would
+            // otherwise misreport a shutdown as a genuine ring timeout.
+            if (hangupTcs.Task.IsCompleted)
             {
                 logger.Information("Call ended before a WebRTC SDP answer arrived; closing media sessions.");
                 pc.close();
-                sipMediaSession.Close("call ended before nostr answer");
+                ua.Hangup();
                 return;
             }
 
-            if (winner == ringTimeoutTask)
+            if (ringTimeoutTask is not null && ringTimeoutTask.IsCompleted)
             {
                 logger.Information(
                     "No WebRTC SDP answer arrived within {RingTimeoutSeconds}s; falling back to voicemail.",
@@ -180,7 +192,7 @@ public sealed class CallBridge(
         {
             logger.Warning("Stopped waiting for WebRTC SDP answer because shutdown was requested.");
             pc.close();
-            sipMediaSession.Close("no nostr answer");
+            ua.Hangup();
             return;
         }
         catch (Exception exception)
@@ -200,32 +212,48 @@ public sealed class CallBridge(
         // No WebRTC answer, by timeout or by a signaling failure - stop
         // trying to bridge to the (now closed) peer connection and either
         // record a voicemail or just leave the call connected to silence.
-        forwardToWebRtc = false;
+        Volatile.Write(ref forwardToWebRtc, false);
         pc.close();
-        await SendRejectSafeAsync(signaling);
+        await SendHangupSafeAsync(signaling);
 
         if (!voicemailConfig.Enabled)
         {
             logger.Information("Voicemail is disabled; leaving the call connected with silence until the caller hangs up.");
             await hangupTcs.Task;
-            sipMediaSession.Close("call ended, no voicemail");
+            ua.Hangup();
             return;
         }
 
-        await RunVoicemailAsync(sipMediaSession, selectedAudioFormat, callerNumber, callId, signaling, hangupTcs, ct);
-        sipMediaSession.Close("voicemail complete");
+        try
+        {
+            await RunVoicemailAsync(sipMediaSession, selectedAudioFormat, callerNumber, callId, signaling, hangupTcs, ct);
+        }
+        finally
+        {
+            // Ends the SIP dialog (BYE) and closes the media session -
+            // ua.Hangup() no-ops safely if the caller already hung up
+            // during the greeting/recording (SIPUserAgent.Hangup() checks
+            // IsCallActive). Always runs, even if RunVoicemailAsync threw
+            // (e.g. a bad greeting_sound path, or a disk error saving the
+            // recording), so a failure there can't leak the RTP session -
+            // and the caller, whose max_recording_seconds elapsed, is
+            // actually disconnected instead of left on a silent call.
+            ua.Hangup();
+        }
     }
 
-    private async Task SendRejectSafeAsync(NostrSignalingClient signaling)
+    // The bridge originated this call (it's the NIP-AC caller), so giving
+    // up on it is a Hangup, not a Reject - see NostrSignalingClient.
+    private async Task SendHangupSafeAsync(NostrSignalingClient signaling)
     {
         try
         {
-            logger.Information("Sending WebRTC call reject over Nostr so the ringing device stops.");
-            await signaling.SendRejectAsync("no answer - falling back to voicemail");
+            logger.Information("Sending WebRTC call hangup over Nostr so the ringing device stops.");
+            await signaling.SendHangupAsync("no answer - falling back to voicemail");
         }
         catch (Exception exception)
         {
-            logger.Warning(exception, "Failed to send WebRTC call reject over Nostr.");
+            logger.Warning(exception, "Failed to send WebRTC call hangup over Nostr.");
         }
     }
 
@@ -245,20 +273,30 @@ public sealed class CallBridge(
         CancellationToken ct)
     {
         var audioFormat = new AudioFormat(selectedAudioFormat);
+        var sampleRate = audioFormat.ClockRate;
         var decoder = new AudioEncoder();
         var recordingLock = new object();
         var recordedSamples = new List<short>();
         var recordingActive = false;
 
+        // recordingActive is read and written under recordingLock on both
+        // sides - it's read on SIPSorcery's RTP receive thread and written
+        // on this async method's thread, so without a shared lock there's
+        // no guarantee the receive thread ever observes the write.
         sipMediaSession.OnRtpPacketReceived += (_, media, pkt) =>
         {
-            if (media != SDPMediaTypesEnum.audio || !recordingActive)
+            if (media != SDPMediaTypesEnum.audio)
             {
                 return;
             }
 
             lock (recordingLock)
             {
+                if (!recordingActive)
+                {
+                    return;
+                }
+
                 recordedSamples.AddRange(decoder.DecodeAudio(pkt.Payload, audioFormat));
             }
         };
@@ -300,9 +338,17 @@ public sealed class CallBridge(
             }
 
             logger.Information("Recording voicemail for up to {MaxRecordingSeconds}s.", voicemailConfig.MaxRecordingSeconds);
-            recordingActive = true;
+            lock (recordingLock)
+            {
+                recordingActive = true;
+            }
+
             await Task.WhenAny(Task.Delay(TimeSpan.FromSeconds(voicemailConfig.MaxRecordingSeconds), ct), hangupTcs.Task);
-            recordingActive = false;
+
+            lock (recordingLock)
+            {
+                recordingActive = false;
+            }
         }
         finally
         {
@@ -315,7 +361,7 @@ public sealed class CallBridge(
             samples = recordedSamples.ToArray();
         }
 
-        var recordedSeconds = samples.Length / (double)VoicemailSampleRate;
+        var recordedSeconds = samples.Length / (double)sampleRate;
         if (recordedSeconds < 1.0)
         {
             logger.Information("Voicemail recording was too short ({RecordedSeconds:F1}s); not sending.", recordedSeconds);
@@ -323,12 +369,12 @@ public sealed class CallBridge(
         }
 
         logger.Information("Voicemail recording finished: {RecordedSeconds:F1}s captured.", recordedSeconds);
-        await SaveAndSendVoicemailAsync(samples, callerNumber, callId, signaling);
+        await SaveAndSendVoicemailAsync(samples, sampleRate, callerNumber, callId, signaling);
     }
 
-    private async Task SaveAndSendVoicemailAsync(short[] samples, string callerNumber, string callId, NostrSignalingClient signaling)
+    private async Task SaveAndSendVoicemailAsync(short[] samples, int sampleRate, string callerNumber, string callId, NostrSignalingClient signaling)
     {
-        var wavBytes = WavEncoder.Encode(samples, VoicemailSampleRate);
+        var wavBytes = WavEncoder.Encode(samples, sampleRate);
         var recordingsDir = Path.IsPathRooted(voicemailConfig.RecordingsDir)
             ? voicemailConfig.RecordingsDir
             : Path.GetFullPath(Path.Combine(configDirectory, voicemailConfig.RecordingsDir));
@@ -339,12 +385,25 @@ public sealed class CallBridge(
         await File.WriteAllBytesAsync(wavPath, wavBytes);
         logger.Information("Saved voicemail recording to {WavPath}.", wavPath);
 
+        // The .ogg is a transport artifact for the Nostr send, not part of
+        // the archive - recordings_dir is documented as holding the WAV,
+        // and every recording would otherwise leave two files behind.
         var oggPath = TryConvertToOpusOgg(wavPath, Path.Combine(recordingsDir, $"{fileNameStem}.ogg"));
-        var (audioBytes, mimeType) = oggPath is not null
-            ? (await File.ReadAllBytesAsync(oggPath), "audio/ogg")
-            : (wavBytes, "audio/wav");
+        byte[] audioBytes;
+        string mimeType;
+        if (oggPath is not null)
+        {
+            audioBytes = await File.ReadAllBytesAsync(oggPath);
+            mimeType = "audio/ogg";
+            TryDeleteTransientFile(oggPath);
+        }
+        else
+        {
+            audioBytes = wavBytes;
+            mimeType = "audio/wav";
+        }
 
-        var durationSeconds = (int)Math.Round(samples.Length / (double)VoicemailSampleRate);
+        var durationSeconds = (int)Math.Round(samples.Length / (double)sampleRate);
         try
         {
             await signaling.SendVoicemailAsync(audioBytes, mimeType, durationSeconds, callerNumber, voicemailConfig.DmRelays);
@@ -357,6 +416,18 @@ public sealed class CallBridge(
         catch (Exception exception)
         {
             logger.Error(exception, "Failed to send voicemail over Nostr; the recording is still saved at {WavPath}.", wavPath);
+        }
+    }
+
+    private void TryDeleteTransientFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception exception)
+        {
+            logger.Warning(exception, "Could not delete transient file {Path}.", path);
         }
     }
 
@@ -402,8 +473,12 @@ public sealed class CallBridge(
             logger.Information("Encoded voicemail as Opus/OGG at {OggPath}.", oggPath);
             return oggPath;
         }
-        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
         {
+            // IOException covers ffmpeg dying mid-run (e.g. killed) while
+            // its stderr pipe is still being read - not just ffmpeg being
+            // missing. Every failure here has the same "just send the WAV"
+            // recovery, so this is deliberately broad.
             logger.Warning(exception, "Could not run ffmpeg to encode the voicemail as Opus/OGG; sending WAV instead. Install ffmpeg to send smaller recordings.");
             return null;
         }

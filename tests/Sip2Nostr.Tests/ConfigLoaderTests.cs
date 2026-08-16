@@ -1,0 +1,66 @@
+using Sip2Nostr.Config;
+using Xunit;
+
+namespace Sip2Nostr.Tests;
+
+public class ConfigLoaderTests
+{
+    private const string MinimalValidToml = """
+        [sip]
+        provider_host = "sip.example.com"
+        username = "user"
+        password = "pass"
+
+        [[lines]]
+        uri = "sip:+15551234@sip.example.com"
+        label = "main"
+
+        [nostr]
+        enabled = false
+        relays = ["wss://relay.example.com"]
+        bridge_nsec = "nsec1..."
+        target_npub = "npub1..."
+        """;
+
+    [Fact]
+    public void Load_DefaultVoicemailConfig_Succeeds()
+    {
+        var path = WriteTempConfig(MinimalValidToml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.False(config.Voicemail.Enabled);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("ring_timeout_seconds = 0", "ring_timeout_seconds")]
+    [InlineData("ring_timeout_seconds = -5", "ring_timeout_seconds")]
+    [InlineData("max_recording_seconds = 0", "max_recording_seconds")]
+    [InlineData("max_recording_seconds = -1", "max_recording_seconds")]
+    public void Load_NonPositiveVoicemailTimeout_Throws(string voicemailOverride, string expectedKeyInMessage)
+    {
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\n{voicemailOverride}\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<InvalidDataException>(() => ConfigLoader.Load(path));
+            Assert.Contains(expectedKeyInMessage, exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    private static string WriteTempConfig(string toml)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"sip2nostr-test-{Guid.NewGuid():N}.toml");
+        File.WriteAllText(path, toml);
+        return path;
+    }
+}

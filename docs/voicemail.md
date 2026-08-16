@@ -30,9 +30,10 @@ itself hasn't been exercised end-to-end yet.
       ├─ Caller hangs up first  → tear down, unchanged from today
       │
       └─ Timeout or signaling failure → voicemail fallback:
-           1. Send a NIP-AC `reject` over Nostr so a ringing device (e.g.
+           1. Send a NIP-AC `hangup` over Nostr so a ringing device (e.g.
               NosCall) stops ringing (best-effort; failure is logged, not
-              fatal).
+              fatal) - the bridge originated this call, so giving up on it
+              is a hangup, not a reject (the callee's decline signal).
            2. Close the WebRTC peer connection; the already-answered SIP
               RTP session stays up and is reused directly.
            3. Play `greeting_sound` once (or a short tone if unset).
@@ -41,11 +42,18 @@ itself hasn't been exercised end-to-end yet.
            5. Save the recording as a WAV file under `recordings_dir`
               (always, regardless of what happens next).
            6. Try to re-encode it as Opus/OGG via `ffmpeg` (falls back to
-              sending the WAV directly if `ffmpeg` is missing or fails).
+              sending the WAV directly if `ffmpeg` is missing or fails);
+              the `.ogg` is deleted afterwards, it's a transport artifact,
+              not part of the archive.
            7. Send it to `target_npub` as a NIP-17 private direct message,
               published to `dm_relays` if configured, otherwise to
               `[nostr].relays` via the SDK's default NIP-17 relay
-              resolution.
+              resolution. A relay rejecting the event (e.g. too large) is
+              detected and logged as a failure, not reported as sent.
+           8. Hang up the SIP call (`ua.Hangup()`) - always, even if a step
+              above threw, so a bad `greeting_sound` path or a disk error
+              can't leave the caller on a silent, still-connected call
+              until their carrier times it out, or leak the RTP session.
 ```
 
 ## Implementation
@@ -71,9 +79,17 @@ itself hasn't been exercised end-to-end yet.
     `SIPSorcery.Media.AudioEncoder.DecodeAudio` and buffers it.
   - `WavEncoder` (new, pure logic, unit tested) writes a minimal canonical
     16-bit PCM WAV header around the buffered samples.
+  - The final `ua.Hangup()` in `HandleIncomingCallAsync` runs in a
+    `finally` around the `RunVoicemailAsync` call, and `SIPUserAgent`'s own
+    `MediaSession` field is the same `RTPSession` instance
+    `RunVoicemailAsync` recorded on - so `ua.Hangup()` both sends the BYE
+    and closes the RTP session in one call; it's also safe to call
+    unconditionally (it checks `IsCallActive` internally, so it's a no-op
+    if the caller already hung up).
 - `Signaling/NostrSignalingClient.cs`:
-  - `SendRejectAsync` - reuses the existing NIP-AC `PublishAsync` helper
-    with `CallSignalKinds.Reject`.
+  - `SendHangupAsync` - reuses the existing NIP-AC `PublishAsync` helper
+    with `CallSignalKinds.Hangup` (not `Reject`, which is the callee's
+    decline signal - the bridge is always the NIP-AC caller here).
   - `SendVoicemailAsync` - calls `Client.SendPrivateMsg` (NIP-17: rumor,
     seal, gift wrap, and relay publish all handled by Nostr.Sdk), *not*
     the NIP-AC wrap used for call signaling. A voicemail should be
@@ -82,7 +98,17 @@ itself hasn't been exercised end-to-end yet.
     relays to the same `Client` and calls `Client.SendPrivateMsgTo`
     instead, targeting exactly that relay set - useful since a
     recipient's declared NIP-17 DM inbox (kind:10050) is often not the
-    same relay set used for call signaling.
+    same relay set used for call signaling. Either way, the returned
+    `SendEventOutput` is checked (`PublishAsync` already did this for
+    NIP-AC signaling; a shared `ThrowIfPublishFailed` helper now covers
+    both) - a relay can reject an event with `OK: false` without the
+    publish call itself throwing, so this is the only way to actually
+    detect it.
+  - `[voicemail].ring_timeout_seconds` / `max_recording_seconds` are
+    validated (`> 0`) in `Config/ConfigLoader.cs` at startup, alongside
+    the rest of config loading - an unchecked bad value would otherwise
+    surface deep inside `Task.Delay` as every call being silently routed
+    to voicemail with a misleading "signaling failed" log line.
 
 ## Blind spots
 
