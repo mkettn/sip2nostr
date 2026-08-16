@@ -76,6 +76,7 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
         _callBridge = new CallBridge(
             config.WebRtc,
             config.Nostr,
+            config.Voicemail,
             config.ConfigDirectory,
             localMediaAddress,
             config.Sip.RtpPort,

@@ -121,6 +121,33 @@ public sealed class NostrSignalingClient : IAsyncDisposable
     public Task<EventId> SendIceCandidateAsync(IceCandidatePayload candidate) =>
         PublishAsync(CallSignalKinds.IceCandidate, JsonSerializer.Serialize(candidate));
 
+    public Task<EventId> SendRejectAsync(string reason) =>
+        PublishAsync(CallSignalKinds.Reject, reason);
+
+    // Sends the recorded voicemail to target_npub as a standard NIP-17
+    // private direct message (kind 14 rumor, sealed and gift-wrapped by
+    // Client.SendPrivateMsg) rather than reusing the NIP-AC call-signaling
+    // wrap above - unlike the call offer/answer, a voicemail should be
+    // readable by any NIP-17-capable client, not just NosCall.
+    //
+    // The audio is inlined as a base64 data URI in the message content
+    // rather than uploaded to a file host: sip2nostr has no media-hosting
+    // dependency today. This is a real limitation - see docs/voicemail.md -
+    // large recordings can exceed a relay's max event size.
+    public async Task SendVoicemailAsync(byte[] audioBytes, string mimeType, int durationSeconds, string callerNumber)
+    {
+        var dataUri = $"data:{mimeType};base64,{Convert.ToBase64String(audioBytes)}";
+        var content =
+            $"🎤 Voicemail from {callerNumber} ({durationSeconds}s) - the call wasn't answered.\n\n{dataUri}";
+        var tags = new List<Tag>
+        {
+            Tag.Parse(["alt", "sip2nostr voicemail"]),
+            Tag.Parse(["duration", durationSeconds.ToString()]),
+        };
+
+        await _client!.SendPrivateMsg(_targetPubkey, content, tags);
+    }
+
     public Task<string> WaitForAnswerAsync(CancellationToken ct)
     {
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);

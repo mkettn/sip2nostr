@@ -53,3 +53,19 @@ turn_server = ""               # optional, recommended for NAT traversal
 # works here.
 blacklist = []
 whitelist = []
+
+[voicemail]
+# Answering-machine fallback for when [nostr] is enabled but target_npub
+# never answers the call. See docs/voicemail.md.
+enabled = true
+# How long to wait for a WebRTC answer over Nostr before falling back.
+ring_timeout_seconds = 20
+# Caller is disconnected after this long even if they keep talking.
+max_recording_seconds = 60
+# Optional. Same format rules as [[lines]].sound: raw 8 kHz 16-bit PCM
+# works directly, other formats require ffmpeg. Falls back to a short
+# tone if unset.
+# greeting_sound = "sounds/greeting.opus"
+# Where recordings are saved (as WAV), relative to this config file unless
+# rooted. Always written, regardless of whether the Nostr send succeeds.
+recordings_dir = "voicemail"

@@ -27,6 +27,9 @@ public sealed class AppConfig
 
     [property: TomlPropertyName("callerlist")]
     public CallerListConfig CallerList { get; init; } = new();
+
+    [property: TomlPropertyName("voicemail")]
+    public VoicemailConfig Voicemail { get; init; } = new();
 }
 
 public sealed class SipConfig
@@ -114,4 +117,30 @@ public sealed class CallerListConfig
 
     [property: TomlPropertyName("whitelist")]
     public List<string> Whitelist { get; init; } = [];
+}
+
+// Answering-machine fallback for when [nostr] is enabled but the callee
+// never answers over Nostr within ring_timeout_seconds: the call is
+// diverted to a local greeting + recording instead of ringing forever.
+// See docs/voicemail.md.
+public sealed class VoicemailConfig
+{
+    [property: TomlPropertyName("enabled")]
+    public bool Enabled { get; init; } = true;
+
+    [property: TomlPropertyName("ring_timeout_seconds")]
+    public int RingTimeoutSeconds { get; init; } = 20;
+
+    [property: TomlPropertyName("max_recording_seconds")]
+    public int MaxRecordingSeconds { get; init; } = 60;
+
+    // Optional. Same format rules as [[lines]].sound: raw 8 kHz 16-bit PCM
+    // works directly, other formats require ffmpeg. Falls back to a short
+    // tone if unset.
+    [property: TomlPropertyName("greeting_sound")]
+    public string? GreetingSound { get; init; }
+
+    // Relative to the config file's directory unless rooted.
+    [property: TomlPropertyName("recordings_dir")]
+    public string RecordingsDir { get; init; } = "voicemail";
 }

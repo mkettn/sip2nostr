@@ -21,7 +21,10 @@ propagation to a real NosCall install is verified end-to-end over NIP-AC:
 NosCall rings, answers, and audio flows both ways — see
 `docs/propagating-to-nostr.md` for the protocol and its blind spots. Note
 NosCall only accepts calls from a followed contact, so the bridge's pubkey
-(from `bridge_nsec`) needs to be added as a contact there first.
+(from `bridge_nsec`) needs to be added as a contact there first. The
+`[voicemail]` answer-timeout fallback (greeting + recording, sent to
+`target_npub` as a Nostr DM) is implemented but **not yet verified**
+end-to-end — see `docs/voicemail.md`.
 
 Copy `config.example.toml` to `config.toml`, fill in your SIP and Nostr
 credentials, and run:
@@ -149,7 +152,25 @@ target_npub = "npub1..."      # your identity — every call latches here in the
 [webrtc]
 stun_servers = ["stun:stun.l.google.com:19302"]
 turn_server = ""               # optional, recommended for NAT traversal
+
+[voicemail]
+enabled = true                 # falls back to a greeting + recording if target_npub doesn't answer
+ring_timeout_seconds = 20
+max_recording_seconds = 60
 ```
+
+## Voicemail: answering-machine fallback
+
+If `target_npub` doesn't answer a call over Nostr within
+`[voicemail].ring_timeout_seconds`, the call is diverted to a local
+greeting (or a short tone if none is configured) followed by a recording
+of up to `max_recording_seconds`, which is then sent to `target_npub` as
+a Nostr direct message (NIP-17). Recordings are also always saved locally
+under `[voicemail].recordings_dir`, regardless of whether the Nostr send
+succeeds. See `docs/voicemail.md` for the flow and known limitations —
+notably, the recording is inlined into the message rather than uploaded
+to a file host, which can exceed a relay's maximum event size for longer
+recordings.
 
 ## Multiple lines, single identity (MVP)
 
@@ -209,8 +230,10 @@ keys/relays, WebRTC STUN/TURN) at startup. No runtime UI or admin surface.
 - [ ] TURN server requirement — verified working over a local network with
       STUN only; TURN/NAT behavior across the open internet is still
       untested (see `docs/propagating-to-nostr.md` blind spots).
-- [x] Fallback behavior: none for MVP, confirmed — if the Nostr side
-      doesn't answer, the call is left ringing until the caller hangs up.
+- [x] Fallback behavior: implemented, not yet verified end-to-end — if
+      the Nostr side doesn't answer within `[voicemail].ring_timeout_seconds`,
+      the call falls back to a local greeting + recording, sent to
+      `target_npub` as a Nostr DM. See `docs/voicemail.md`.
 - [ ] DoT/DoH support for the configurable resolver (currently plain DNS
       only in the initial design).
 - [ ] Monitor Nostr.Sdk releases for breaking changes given its alpha status.
