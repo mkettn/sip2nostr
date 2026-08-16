@@ -347,7 +347,7 @@ public sealed class CallBridge(
         var durationSeconds = (int)Math.Round(samples.Length / (double)VoicemailSampleRate);
         try
         {
-            await signaling.SendVoicemailAsync(audioBytes, mimeType, durationSeconds, callerNumber);
+            await signaling.SendVoicemailAsync(audioBytes, mimeType, durationSeconds, callerNumber, voicemailConfig.DmRelays);
             logger.Information(
                 "Sent voicemail ({DurationSeconds}s, {AudioBytes} bytes, {MimeType}) to target_npub over Nostr.",
                 durationSeconds,

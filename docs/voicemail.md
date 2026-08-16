@@ -42,7 +42,10 @@ itself hasn't been exercised end-to-end yet.
               (always, regardless of what happens next).
            6. Try to re-encode it as Opus/OGG via `ffmpeg` (falls back to
               sending the WAV directly if `ffmpeg` is missing or fails).
-           7. Send it to `target_npub` as a NIP-17 private direct message.
+           7. Send it to `target_npub` as a NIP-17 private direct message,
+              published to `dm_relays` if configured, otherwise to
+              `[nostr].relays` via the SDK's default NIP-17 relay
+              resolution.
 ```
 
 ## Implementation
@@ -74,7 +77,12 @@ itself hasn't been exercised end-to-end yet.
   - `SendVoicemailAsync` - calls `Client.SendPrivateMsg` (NIP-17: rumor,
     seal, gift wrap, and relay publish all handled by Nostr.Sdk), *not*
     the NIP-AC wrap used for call signaling. A voicemail should be
-    readable by any NIP-17-capable client, not just NosCall.
+    readable by any NIP-17-capable client, not just NosCall. If
+    `[voicemail].dm_relays` is non-empty, it adds and connects those
+    relays to the same `Client` and calls `Client.SendPrivateMsgTo`
+    instead, targeting exactly that relay set - useful since a
+    recipient's declared NIP-17 DM inbox (kind:10050) is often not the
+    same relay set used for call signaling.
 
 ## Blind spots
 
@@ -86,9 +94,9 @@ itself hasn't been exercised end-to-end yet.
   event size (commonly 64-256 KB) and get rejected outright. If that
   happens the recording is still on disk under `recordings_dir`; only the
   Nostr delivery fails, logged as an error. Lowering
-  `max_recording_seconds` or pointing `[nostr].relays` at a relay with a
-  generous size limit are the two available workarounds until this
-  project has a real upload path.
+  `max_recording_seconds`, or pointing `dm_relays` (or `[nostr].relays`,
+  if `dm_relays` is unset) at a relay with a generous size limit, are the
+  available workarounds until this project has a real upload path.
 - **No silence/VAD trimming or beep tone.** Recording starts immediately
   after the greeting/tone finishes and runs for the full
   `max_recording_seconds` (or until hangup) regardless of whether the

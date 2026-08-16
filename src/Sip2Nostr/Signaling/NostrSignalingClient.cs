@@ -134,7 +134,17 @@ public sealed class NostrSignalingClient : IAsyncDisposable
     // rather than uploaded to a file host: sip2nostr has no media-hosting
     // dependency today. This is a real limitation - see docs/voicemail.md -
     // large recordings can exceed a relay's max event size.
-    public async Task SendVoicemailAsync(byte[] audioBytes, string mimeType, int durationSeconds, string callerNumber)
+    //
+    // dmRelays, if non-empty, overrides where the DM is published - a
+    // recipient's NIP-17 DM inbox (kind:10050) is often not the same
+    // relay set used for call signaling. Left empty, this falls back to
+    // Nostr.Sdk's own default NIP-17 relay resolution (SendPrivateMsg).
+    public async Task SendVoicemailAsync(
+        byte[] audioBytes,
+        string mimeType,
+        int durationSeconds,
+        string callerNumber,
+        IReadOnlyList<string> dmRelays)
     {
         var dataUri = $"data:{mimeType};base64,{Convert.ToBase64String(audioBytes)}";
         var content =
@@ -145,7 +155,22 @@ public sealed class NostrSignalingClient : IAsyncDisposable
             Tag.Parse(["duration", durationSeconds.ToString()]),
         };
 
-        await _client!.SendPrivateMsg(_targetPubkey, content, tags);
+        if (dmRelays.Count == 0)
+        {
+            await _client!.SendPrivateMsg(_targetPubkey, content, tags);
+            return;
+        }
+
+        var dmRelayUrls = dmRelays.Select(RelayUrl.Parse).ToList();
+        var connectedCount = await ConnectAndCheckRelaysAsync(_client!, dmRelayUrls, _logger);
+        if (connectedCount == 0)
+        {
+            _logger.Warning(
+                "None of the {TotalCount} configured [voicemail].dm_relays are reachable; sending the voicemail DM will likely fail.",
+                dmRelayUrls.Count);
+        }
+
+        await _client!.SendPrivateMsgTo(dmRelayUrls, _targetPubkey, content, tags);
     }
 
     public Task<string> WaitForAnswerAsync(CancellationToken ct)

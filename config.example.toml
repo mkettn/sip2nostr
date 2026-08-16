@@ -70,3 +70,8 @@ max_recording_seconds = 60
 # Where recordings are saved (as WAV), relative to this config file unless
 # rooted. Always written, regardless of whether the Nostr send succeeds.
 recordings_dir = "voicemail"
+# Optional. Relays to publish the voicemail DM to, if different from
+# [nostr].relays above - e.g. target_npub advertises a separate NIP-17
+# DM inbox relay list (kind:10050). Falls back to the Nostr SDK's default
+# NIP-17 relay resolution against [nostr].relays if left empty.
+# dm_relays = ["wss://dm-relay.example.com"]

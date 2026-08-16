@@ -158,6 +158,7 @@ enabled = false                # opt-in: falls back to a greeting + recording if
 ring_timeout_seconds = 20
 max_recording_seconds = 60
 # greeting_sound = "sounds/greeting.opus"   # optional; a short tone plays if unset
+# dm_relays = ["wss://dm-relay.example.com"] # optional; defaults to [nostr].relays
 ```
 
 ## Voicemail: answering-machine fallback
@@ -169,10 +170,14 @@ greeting (or a short tone if `greeting_sound` isn't configured) followed
 by a recording of up to `max_recording_seconds`, which is then sent to
 `target_npub` as a Nostr direct message (NIP-17), re-encoded as Opus/OGG
 via `ffmpeg` to keep it small (falls back to WAV if `ffmpeg` isn't
-available). Recordings are also always saved locally under
-`[voicemail].recordings_dir`, regardless of whether the Nostr send
-succeeds. See `docs/voicemail.md` for the flow and known limitations —
-notably, the recording is inlined into the message rather than uploaded
+available). The DM is published to `[voicemail].dm_relays` if set — since
+a NIP-17 DM inbox (kind:10050) can legitimately differ from the relays
+used for call signaling — otherwise it falls back to `[nostr].relays` via
+the SDK's default NIP-17 relay resolution. Recordings are also always
+saved locally under `[voicemail].recordings_dir`, regardless of whether
+the Nostr send succeeds. See `docs/voicemail.md` for the flow and known
+limitations — notably, the recording is inlined into the message rather
+than uploaded
 to a file host, which can exceed a relay's maximum event size for longer
 recordings.
 

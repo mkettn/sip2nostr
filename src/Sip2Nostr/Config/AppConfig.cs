@@ -143,4 +143,11 @@ public sealed class VoicemailConfig
     // Relative to the config file's directory unless rooted.
     [property: TomlPropertyName("recordings_dir")]
     public string RecordingsDir { get; init; } = "voicemail";
+
+    // Optional. Relays to publish the voicemail NIP-17 DM to, if different
+    // from [nostr].relays (e.g. target_npub advertises a separate NIP-17
+    // kind:10050 DM inbox relay list). Falls back to Nostr.Sdk's default
+    // NIP-17 relay resolution against [nostr].relays if unset/empty.
+    [property: TomlPropertyName("dm_relays")]
+    public List<string> DmRelays { get; init; } = [];
 }
