@@ -56,8 +56,9 @@ whitelist = []
 
 [voicemail]
 # Answering-machine fallback for when [nostr] is enabled but target_npub
-# never answers the call. See docs/voicemail.md.
-enabled = true
+# never answers the call. Opt-in - disabled unless set to true. See
+# docs/voicemail.md.
+enabled = false
 # How long to wait for a WebRTC answer over Nostr before falling back.
 ring_timeout_seconds = 20
 # Caller is disconnected after this long even if they keep talking.

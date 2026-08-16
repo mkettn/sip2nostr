@@ -3,8 +3,9 @@
 This documents the answering-machine behavior added to close the
 `receiving-calls.md` blind spot "No answer-timeout fallback": previously,
 if `target_npub` never answered a call over Nostr, the call was simply
-left connected to silence until the caller hung up. With `[voicemail]`
-enabled (the default), a caller who isn't answered within
+left connected to silence until the caller hung up. `[voicemail]` is
+**opt-in** - `enabled = false` by default, so out of the box nothing
+changes. With it turned on, a caller who isn't answered within
 `ring_timeout_seconds` instead hears a greeting, then gets recorded for up
 to `max_recording_seconds`, and the recording is sent to `target_npub` as
 a Nostr direct message.

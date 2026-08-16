@@ -141,14 +141,14 @@ registrar.
 - **No per-line routing.** Every configured `[[lines]]` DID rings the same
   `target_npub` once Nostr signaling is enabled; the matched line is
   currently used for logging only.
-- **Answer-timeout fallback: implemented, not yet verified end-to-end.**
-  If the Nostr side never answers within `[voicemail].ring_timeout_seconds`
-  (default 20s, on by default), the call is diverted to a local greeting +
-  recording instead of being left connected indefinitely, and the
-  recording is sent to `target_npub` as a Nostr DM. See
-  `docs/voicemail.md` for the flow and its own blind spots (notably: no
-  file-hosting upload path, so large recordings can exceed a relay's max
-  event size).
+- **Answer-timeout fallback: implemented, opt-in, not yet verified
+  end-to-end.** `[voicemail].enabled` is `false` by default. If turned on
+  and the Nostr side never answers within `ring_timeout_seconds` (default
+  20s), the call is diverted to a local greeting + recording instead of
+  being left connected indefinitely, and the recording is sent to
+  `target_npub` as a Nostr DM. See `docs/voicemail.md` for the flow and
+  its own blind spots (notably: no file-hosting upload path, so large
+  recordings can exceed a relay's max event size).
 - **Concurrent calls are untested.** Only one inbound call has been
   exercised at a time. `AudioSendOnlyMediaSession` and `RTPSession` bind to
   the configured `rtp_port` for the local-audio path; whether two

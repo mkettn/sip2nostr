@@ -122,11 +122,11 @@ public sealed class CallerListConfig
 // Answering-machine fallback for when [nostr] is enabled but the callee
 // never answers over Nostr within ring_timeout_seconds: the call is
 // diverted to a local greeting + recording instead of ringing forever.
-// See docs/voicemail.md.
+// Opt-in (disabled by default) - see docs/voicemail.md.
 public sealed class VoicemailConfig
 {
     [property: TomlPropertyName("enabled")]
-    public bool Enabled { get; init; } = true;
+    public bool Enabled { get; init; } = false;
 
     [property: TomlPropertyName("ring_timeout_seconds")]
     public int RingTimeoutSeconds { get; init; } = 20;
