@@ -175,8 +175,8 @@ for the process lifetime) that connects to `[voicemail].dm_relays` (or
 `[nostr].relays` as a fallback — a NIP-17 DM inbox, kind:10050, can
 legitimately differ from the relays used for call signaling) only when
 there's a voicemail queued, sends it as a Nostr direct message (NIP-17)
-re-encoded as Opus/OGG via `ffmpeg` to keep it small (falls back to WAV
-if `ffmpeg` isn't available), then disconnects. Recordings on disk don't
+re-encoded as Opus/OGG in-process via `Concentus` (pure C#, no external
+program required) to keep it small, then disconnects. Recordings on disk don't
 depend on delivery succeeding. See `docs/voicemail.md` for the full flow
 and known limitations — notably, the recording is inlined into the
 message rather

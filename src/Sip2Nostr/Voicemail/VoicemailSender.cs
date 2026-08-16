@@ -1,4 +1,7 @@
 using System.Threading.Channels;
+using Concentus;
+using Concentus.Enums;
+using Concentus.Oggfile;
 using Nostr.Sdk;
 using Serilog;
 using Sip2Nostr.Config;
@@ -9,8 +12,8 @@ namespace Sip2Nostr.Voicemail;
 // Background worker that owns delivery of recorded voicemails, decoupled
 // from the call that recorded them. CallBridge only ever enqueues a job
 // and moves on - a call is never held up waiting on a relay connection,
-// ffmpeg, or a slow publish, and the SIP dialog is torn down (BYE) right
-// after the recording finishes rather than after the Nostr send.
+// Opus encoding, or a slow publish, and the SIP dialog is torn down (BYE)
+// right after the recording finishes rather than after the Nostr send.
 //
 // This also means no DM-relay connection is held open between voicemails:
 // the worker wakes on a non-empty queue, connects once, drains everything
@@ -28,6 +31,9 @@ namespace Sip2Nostr.Voicemail;
 public sealed class VoicemailSender : IAsyncDisposable
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
+    private const int OpusBitrateBps = 16000;
+    private const int OpusResamplerQuality = 5;
+    private const int WavHeaderLength = 44; // matches WavEncoder's canonical header exactly
 
     private readonly NostrConfig _nostrConfig;
     private readonly VoicemailConfig _voicemailConfig;
@@ -132,7 +138,7 @@ public sealed class VoicemailSender : IAsyncDisposable
     {
         try
         {
-            var (audioBytes, mimeType) = await LoadAudioAsync(job.WavPath);
+            var (audioBytes, mimeType) = await LoadAudioAsync(job);
             var dataUri = $"data:{mimeType};base64,{Convert.ToBase64String(audioBytes)}";
             var content =
                 $"🎤 Voicemail from {job.CallerNumber} ({job.DurationSeconds}s) - the call wasn't answered.\n\n{dataUri}";
@@ -168,85 +174,52 @@ public sealed class VoicemailSender : IAsyncDisposable
     }
 
     // Re-encodes to Opus/OGG to keep the inlined base64 payload smaller,
-    // falling back to sending the WAV directly if ffmpeg is missing or
-    // fails - see docs/voicemail.md. The .ogg is a transport artifact, not
-    // part of the archive, so it's deleted once read; the WAV stays.
-    private async Task<(byte[] AudioBytes, string MimeType)> LoadAudioAsync(string wavPath)
+    // falling back to sending the WAV directly if encoding fails for any
+    // reason - see docs/voicemail.md. Pure managed code (Concentus is a
+    // portable C# port of libopus, Concentus.Oggfile writes the Ogg
+    // container around it) - no external process, no host dependency on
+    // ffmpeg being installed.
+    private async Task<(byte[] AudioBytes, string MimeType)> LoadAudioAsync(VoicemailJob job)
     {
-        var oggPath = TryConvertToOpusOgg(wavPath, Path.ChangeExtension(wavPath, ".ogg"));
-        if (oggPath is not null)
-        {
-            var audioBytes = await File.ReadAllBytesAsync(oggPath);
-            TryDeleteTransientFile(oggPath);
-            return (audioBytes, "audio/ogg");
-        }
-
-        return (await File.ReadAllBytesAsync(wavPath), "audio/wav");
+        var wavBytes = await File.ReadAllBytesAsync(job.WavPath);
+        var oggBytes = TryEncodeOpusOgg(wavBytes, job.SampleRate);
+        return oggBytes is not null ? (oggBytes, "audio/ogg") : (wavBytes, "audio/wav");
     }
 
-    private string? TryConvertToOpusOgg(string wavPath, string oggPath)
+    private byte[]? TryEncodeOpusOgg(byte[] wavBytes, int sampleRate)
     {
         try
         {
-            using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "ffmpeg",
-                ArgumentList =
-                {
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-y",
-                    "-i",
-                    wavPath,
-                    "-c:a",
-                    "libopus",
-                    "-b:a",
-                    "16k",
-                    oggPath,
-                },
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            });
+            var samples = ExtractPcmSamples(wavBytes);
 
-            if (process is null)
-            {
-                _logger.Warning("Could not start ffmpeg to encode the voicemail as Opus/OGG; sending WAV instead.");
-                return null;
-            }
+            using var encoder = OpusCodecFactory.CreateEncoder(sampleRate, 1, OpusApplication.OPUS_APPLICATION_VOIP);
+            encoder.Bitrate = OpusBitrateBps;
 
-            var error = process.StandardError.ReadToEnd();
-            process.WaitForExit();
-            if (process.ExitCode != 0)
-            {
-                _logger.Warning("ffmpeg failed to encode the voicemail as Opus/OGG; sending WAV instead: {FfmpegError}", error.Trim());
-                return null;
-            }
+            using var outputStream = new MemoryStream();
+            var oggWriter = new OpusOggWriteStream(encoder, outputStream, new OpusTags(), sampleRate, OpusResamplerQuality, leaveOpen: true);
+            oggWriter.WriteSamples(samples, 0, samples.Length);
+            oggWriter.Finish();
 
-            _logger.Information("Encoded voicemail as Opus/OGG at {OggPath}.", oggPath);
-            return oggPath;
+            var oggBytes = outputStream.ToArray();
+            _logger.Information("Encoded voicemail as Opus/OGG ({AudioBytes} bytes).", oggBytes.Length);
+            return oggBytes;
         }
-        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        catch (Exception exception)
         {
-            // IOException covers ffmpeg dying mid-run (e.g. killed) while
-            // its stderr pipe is still being read - not just ffmpeg being
-            // missing. Every failure here has the same "just send the WAV"
-            // recovery, so this is deliberately broad.
-            _logger.Warning(exception, "Could not run ffmpeg to encode the voicemail as Opus/OGG; sending WAV instead. Install ffmpeg to send smaller recordings.");
+            _logger.Warning(exception, "Could not encode the voicemail as Opus/OGG; sending WAV instead.");
             return null;
         }
     }
 
-    private void TryDeleteTransientFile(string path)
+    // Skips WavEncoder's fixed 44-byte header and reinterprets the rest as
+    // little-endian 16-bit PCM - valid because this is always our own
+    // WavEncoder.Encode output, not an arbitrary WAV file.
+    private static short[] ExtractPcmSamples(byte[] wavBytes)
     {
-        try
-        {
-            File.Delete(path);
-        }
-        catch (Exception exception)
-        {
-            _logger.Warning(exception, "Could not delete transient file {Path}.", path);
-        }
+        var sampleCount = (wavBytes.Length - WavHeaderLength) / sizeof(short);
+        var samples = new short[sampleCount];
+        Buffer.BlockCopy(wavBytes, WavHeaderLength, samples, 0, sampleCount * sizeof(short));
+        return samples;
     }
 
     public async ValueTask DisposeAsync()

@@ -67,12 +67,12 @@ VoicemailSender then, independently of any particular call:
       ├─ drain everything queued at this point (a backlog of several
       │  voicemails costs one connect, not one per voicemail)
       │
-      └─ for each: re-encode as Opus/OGG via ffmpeg (falls back to
-         sending the WAV directly if ffmpeg is missing or fails; the
-         .ogg is deleted afterwards - it's a transport artifact, not
-         part of the archive), then send as a NIP-17 private direct
-         message. A relay rejecting the event (e.g. too large) is
-         detected and logged as a failure, not reported as sent.
+      └─ for each: re-encode as Opus/OGG in-process via Concentus (pure
+         C#, no external program - falls back to sending the WAV
+         directly if encoding fails for any reason), then send as a
+         NIP-17 private direct message. A relay rejecting the event
+         (e.g. too large) is detected and logged as a failure, not
+         reported as sent.
       │
       ▼
  Disconnect, go back to idle
@@ -134,10 +134,18 @@ VoicemailSender then, independently of any particular call:
     reachability result, is never polluted by relays something else
     already had connected), sends the whole batch, then shuts that
     `Client` down and goes back to waiting.
-  - Per voicemail: re-encodes to Opus/OGG via `ffmpeg` (falls back to the
-    WAV if `ffmpeg` is missing or fails; the `.ogg` is deleted after
-    being read - it's a transport artifact, not part of the archive),
-    then calls `Client.SendPrivateMsgTo(relayUrls, ...)` - NIP-17: rumor,
+  - Per voicemail: re-encodes to Opus/OGG entirely in-process via
+    `Concentus` (a pure C# port of libopus) and `Concentus.Oggfile`
+    (writes the Ogg container - `OpusOggWriteStream` - around the
+    encoded packets), falling back to sending the WAV directly if
+    encoding fails for any reason. `WavEncoder`'s header is a fixed,
+    known 44 bytes, so the PCM samples are read back with a plain
+    `Buffer.BlockCopy` rather than a general WAV parser. Deliberately
+    not `ffmpeg`/any external process - this keeps the whole feature
+    working in a self-contained single-file binary with nothing to
+    install on the host, and there's no intermediate `.ogg` file on
+    disk at all (`OpusOggWriteStream` writes straight into a
+    `MemoryStream`). Then calls `Client.SendPrivateMsgTo(relayUrls, ...)` - NIP-17: rumor,
     seal, gift wrap, and publish all handled by `Nostr.Sdk` - targeting
     exactly the relay set (`[voicemail].dm_relays`, or `[nostr].relays`
     as a fallback) this batch just connected to. `SendPrivateMsgTo` is
