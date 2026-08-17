@@ -178,11 +178,11 @@ there's a voicemail queued, sends it as a Nostr direct message (NIP-17)
 re-encoded as Opus/OGG in-process via `Concentus` (pure C#, no external
 program required) to keep it small, then disconnects. Recordings on disk don't
 depend on delivery succeeding. See `docs/voicemail.md` for the full flow
-and known limitations — notably, the recording is inlined into the
-message rather
-than uploaded
-to a file host, which can exceed a relay's maximum event size for longer
-recordings.
+and known limitations — notably, the recording is inlined directly into
+the DM rather than uploaded to a file host, which is what caps
+`max_recording_seconds`'s default well below a minute: NIP-17's own
+encryption (not just a relay's size limit) can't carry much more than
+~30 seconds of audio at the current encoding.
 
 ## Multiple lines, single identity (MVP)
 

@@ -215,7 +215,13 @@ public sealed class CallBridge(
             await hangupTcs.Task;
             logger.Information("Call ended; closing media sessions.");
             pc.close();
-            sipMediaSession.Close("call ended");
+            // ua.Hangup() rather than a plain Close(): hangupTcs also
+            // completes on shutdown, and at that point the call may still
+            // be actively bridged (unlike the caller-hung-up case, where
+            // this is already a safe no-op per IsCallActive) - so this is
+            // what actually sends a BYE in that case, matching every other
+            // path in this method.
+            ua.Hangup();
             return;
         }
 

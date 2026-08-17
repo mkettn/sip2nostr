@@ -116,6 +116,11 @@ VoicemailSender then, independently of any particular call:
     the rest of config loading - an unchecked bad value would otherwise
     surface deep inside `Task.Delay` as every call being silently routed
     to voicemail with a misleading "signaling failed" log line.
+    `max_recording_seconds` is also rejected there if it exceeds
+    `Voicemail/VoicemailBudget.cs`'s `MaxRecordingSeconds` - the largest
+    value that can still fit in a NIP-17 DM (see Blind spots below) - so
+    a value that can never be delivered fails at startup rather than only
+    after a caller has already left an undeliverable message.
 - `Voicemail/VoicemailSender.cs` (new): one instance, constructed once in
   `BridgeService.StartAsync` and shared across every call for the life of
   the process - unlike `NostrSignalingClient`, which is scoped to a
@@ -165,30 +170,44 @@ VoicemailSender then, independently of any particular call:
 ## Blind spots
 
 - **Audio is inlined as a base64 `data:` URI directly in the DM content,
-  not uploaded to a file host - and this caps usable recording length
-  well below `max_recording_seconds`' default, not just "sometimes, on a
-  strict relay".** sip2nostr has no NIP-96/Blossom upload dependency
-  today, so the entire recording has to fit inside one Nostr message.
-  Two separate limits stack against it:
+  not uploaded to a file host - and this hard-caps recording length far
+  below what a minute-long voicemail needs.** sip2nostr has no
+  NIP-96/Blossom upload dependency today, so the entire recording has to
+  fit inside one Nostr message. Two separate limits stack against it:
   - **The relay's max event size** (commonly 64-256 KB) - the blind spot
     this was originally framed around.
-  - **NIP-44's own plaintext cap, before any relay is even involved.**
-    NIP-44 encryption (used for both the seal and the gift wrap layers a
-    NIP-17 DM goes through) pads its plaintext into fixed size buckets
-    and tops out at 65,535 bytes - encryption itself fails past that, not
-    just delivery. At the current 16 kbps Opus encoding (~2,000
-    bytes/second before base64, ~2,667 bytes/second after), that alone
-    caps the audio portion at roughly **65,535 ÷ 2,667 ≈ 24 seconds** -
-    and the rumor/seal JSON overhead (tags, timestamps, the surrounding
-    message text) eats into that further. Against the shipped
-    `max_recording_seconds = 60` default, more than half of any full-length
-    recording is silently undeliverable: the DM either never encrypts, or
-    a relay rejects the oversized event, and either way `VoicemailSender`
-    logs it as a failure and leaves the WAV on disk instead of sending
-    it. Lowering `max_recording_seconds` to something that reliably fits
-    - in the 15-20s range at present - is the practical mitigation until
-    this project has a real upload path (data URI → uploaded file +
-    `imeta`/`url` tag) to remove the cap entirely.
+  - **NIP-44's own plaintext cap, before any relay is even involved -
+    and the tighter of the two.** A NIP-17 DM is NIP-44-encrypted twice
+    (sealing the rumor, then wrapping the seal), and NIP-44 v2 caps
+    plaintext at 65,535 bytes and pads it into fixed-size buckets before
+    encrypting (see nips.nostr.com/44's `calc_padded_len`) - encryption
+    itself fails past that, not just delivery. Working back from the
+    outer (gift wrap) layer's cap to how much raw audio that leaves room
+    for:
+    ```
+      65,535   NIP-44 plaintext cap (gift wrap layer)
+    -    490   seal event JSON overhead (id/pubkey/tags/sig/...)
+    ÷    4/3   undo base64 on the seal's own ciphertext
+    ≈ 48,784   budget for the seal's padded ciphertext
+    → 40,960   largest padded length that actually fits (calc_padded_len's
+               next bucket up is 49,152, which doesn't fit in 48,784 - so
+               ~16% of the naive budget is lost to bucket rounding)
+    -    430   rumor JSON overhead (kind/tags/created_at/...) + prose
+    ÷    4/3   undo base64 on the audio data URI
+    ≈ 30,400   bytes of raw (pre-base64) encoded audio - MaxAudioBytes
+    ```
+    `Voicemail/VoicemailBudget.cs` holds this as `MaxAudioBytes` (30,400)
+    and derives `MaxRecordingSeconds` (30, at the current 8 kbps Opus
+    encoding) from it; `ConfigLoader` rejects a configured
+    `max_recording_seconds` above that at startup (see Implementation
+    above) rather than letting a caller leave a message that can never
+    be delivered. The shipped default (`max_recording_seconds = 30`,
+    `config.example.toml`) sits exactly at that ceiling. Raising it
+    requires either a lower bitrate (diminishing returns - 8 kbps is
+    already conservative for 8 kHz telephony audio) or a real upload
+    path (data URI → uploaded file + `imeta`/`url` tag) to remove the
+    cap entirely - the latter is the actual fix; this budget is a
+    ceiling this architecture can't grow past.
 - **DTX (encoder silence-dropping) is not available, so the size problem
   above can't currently be helped by compressing the silence out of a
   recording.** `Concentus.Oggfile`'s `OpusOggWriteStream` - the Ogg

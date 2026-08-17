@@ -131,8 +131,12 @@ public sealed class VoicemailConfig
     [property: TomlPropertyName("ring_timeout_seconds")]
     public int RingTimeoutSeconds { get; init; } = 20;
 
+    // Defaults to Voicemail.VoicemailBudget.MaxRecordingSeconds - the
+    // largest value guaranteed to still fit in a NIP-17 DM at the
+    // current Opus bitrate (see docs/voicemail.md); ConfigLoader rejects
+    // anything larger at startup.
     [property: TomlPropertyName("max_recording_seconds")]
-    public int MaxRecordingSeconds { get; init; } = 60;
+    public int MaxRecordingSeconds { get; init; } = Sip2Nostr.Voicemail.VoicemailBudget.MaxRecordingSeconds;
 
     // Optional. Same format rules as [[lines]].sound: raw 8 kHz 16-bit PCM
     // works directly, other formats require ffmpeg. Falls back to a short

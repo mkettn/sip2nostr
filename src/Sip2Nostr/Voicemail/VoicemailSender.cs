@@ -32,7 +32,6 @@ namespace Sip2Nostr.Voicemail;
 public sealed class VoicemailSender : IAsyncDisposable
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
-    private const int OpusBitrateBps = 16000;
     private const int OpusResamplerQuality = 5;
 
     private readonly NostrConfig _nostrConfig;
@@ -90,9 +89,13 @@ public sealed class VoicemailSender : IAsyncDisposable
                     }
                     catch (Exception exception)
                     {
+                        // The batch is already drained from the channel by
+                        // this point, so these specific voicemails will not
+                        // be retried automatically - only the worker itself
+                        // survives, ready for the next Enqueue.
                         _logger.Error(
                             exception,
-                            "Failed to send a batch of {Count} voicemail(s); their recordings remain on disk, undelivered. Will retry with the next queued voicemail.",
+                            "Failed to send a batch of {Count} voicemail(s); their recordings remain on disk, undelivered, and will not be retried automatically.",
                             batch.Count);
                     }
                 }
@@ -213,7 +216,7 @@ public sealed class VoicemailSender : IAsyncDisposable
             var samples = WavEncoder.Decode(wavBytes);
 
             using var encoder = OpusCodecFactory.CreateEncoder(sampleRate, 1, OpusApplication.OPUS_APPLICATION_VOIP);
-            encoder.Bitrate = OpusBitrateBps;
+            encoder.Bitrate = VoicemailBudget.OpusBitrateBps;
 
             // DTX deliberately not enabled - see docs/voicemail.md blind
             // spots for why.

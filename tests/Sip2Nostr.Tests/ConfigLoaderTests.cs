@@ -1,4 +1,5 @@
 using Sip2Nostr.Config;
+using Sip2Nostr.Voicemail;
 using Xunit;
 
 namespace Sip2Nostr.Tests;
@@ -50,6 +51,38 @@ public class ConfigLoaderTests
         {
             var exception = Assert.Throws<InvalidDataException>(() => ConfigLoader.Load(path));
             Assert.Contains(expectedKeyInMessage, exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_MaxRecordingSecondsExceedsNip17Budget_Throws()
+    {
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nmax_recording_seconds = {VoicemailBudget.MaxRecordingSeconds + 1}\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<InvalidDataException>(() => ConfigLoader.Load(path));
+            Assert.Contains("max_recording_seconds", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_MaxRecordingSecondsAtNip17Budget_Succeeds()
+    {
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nmax_recording_seconds = {VoicemailBudget.MaxRecordingSeconds}\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal(VoicemailBudget.MaxRecordingSeconds, config.Voicemail.MaxRecordingSeconds);
         }
         finally
         {
