@@ -1,5 +1,5 @@
 using Sip2Nostr.Config;
-using Sip2Nostr.Voicemail;
+using Sip2Nostr.Shared;
 using Xunit;
 
 namespace Sip2Nostr.Tests;

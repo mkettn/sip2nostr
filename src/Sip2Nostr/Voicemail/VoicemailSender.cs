@@ -5,6 +5,7 @@ using Concentus.Oggfile;
 using Nostr.Sdk;
 using Serilog;
 using Sip2Nostr.Config;
+using Sip2Nostr.Shared;
 using Sip2Nostr.Signaling;
 using Sip2Nostr.Sip;
 
@@ -206,7 +207,22 @@ public sealed class VoicemailSender : IAsyncDisposable
     {
         var wavBytes = await File.ReadAllBytesAsync(job.WavPath);
         var oggBytes = TryEncodeOpusOgg(wavBytes, job.SampleRate);
-        return oggBytes is not null ? (oggBytes, "audio/ogg") : (wavBytes, "audio/wav");
+        var (audioBytes, mimeType) = oggBytes is not null ? (oggBytes, "audio/ogg") : (wavBytes, "audio/wav");
+
+        // MaxRecordingSeconds is only a heuristic ceiling on the
+        // *configured* recording length (see VoicemailBudget) - this is
+        // the actual enforcement, against the real encoded size, so a
+        // recording that slips past the heuristic (container overhead,
+        // encoder overshoot, a long caller number) fails loudly here
+        // instead of inside SendPrivateMsgTo as an opaque encryption or
+        // relay error.
+        if (audioBytes.Length > VoicemailBudget.MaxAudioBytes)
+        {
+            throw new InvalidOperationException(
+                $"Encoded voicemail is {audioBytes.Length} bytes, over the {VoicemailBudget.MaxAudioBytes}-byte NIP-17 budget; sending it would fail.");
+        }
+
+        return (audioBytes, mimeType);
     }
 
     private byte[]? TryEncodeOpusOgg(byte[] wavBytes, int sampleRate)
@@ -217,6 +233,14 @@ public sealed class VoicemailSender : IAsyncDisposable
 
             using var encoder = OpusCodecFactory.CreateEncoder(sampleRate, 1, OpusApplication.OPUS_APPLICATION_VOIP);
             encoder.Bitrate = VoicemailBudget.OpusBitrateBps;
+
+            // Without this, Concentus (like libopus) defaults to VBR,
+            // where Bitrate is a target the encoder can exceed on
+            // complex input - which would make it a false floor for the
+            // size budget below. CBR bounds the encoded size close to
+            // Bitrate regardless of content (verified empirically: see
+            // VoicemailBudget's derivation of MaxRecordingSeconds).
+            encoder.UseVBR = false;
 
             // DTX deliberately not enabled - see docs/voicemail.md blind
             // spots for why.

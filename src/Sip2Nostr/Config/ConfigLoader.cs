@@ -1,5 +1,5 @@
 using Tomlyn;
-using Sip2Nostr.Voicemail;
+using Sip2Nostr.Shared;
 
 namespace Sip2Nostr.Config;
 
@@ -42,7 +42,7 @@ public static class ConfigLoader
 
         // A voicemail longer than this can never actually be delivered -
         // NIP-17's double NIP-44 encryption caps how much encoded audio
-        // fits in one DM (see Voicemail/VoicemailBudget.cs) - so reject it
+        // fits in one DM (see Shared/VoicemailBudget.cs) - so reject it
         // at startup instead of only finding out after a caller has
         // already left an undeliverable message.
         if (config.Voicemail.MaxRecordingSeconds > VoicemailBudget.MaxRecordingSeconds)

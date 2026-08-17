@@ -182,7 +182,7 @@ and known limitations — notably, the recording is inlined directly into
 the DM rather than uploaded to a file host, which is what caps
 `max_recording_seconds`'s default well below a minute: NIP-17's own
 encryption (not just a relay's size limit) can't carry much more than
-~30 seconds of audio at the current encoding.
+~27 seconds of audio at the current encoding.
 
 ## Multiple lines, single identity (MVP)
 

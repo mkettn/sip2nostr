@@ -117,10 +117,15 @@ VoicemailSender then, independently of any particular call:
     surface deep inside `Task.Delay` as every call being silently routed
     to voicemail with a misleading "signaling failed" log line.
     `max_recording_seconds` is also rejected there if it exceeds
-    `Voicemail/VoicemailBudget.cs`'s `MaxRecordingSeconds` - the largest
-    value that can still fit in a NIP-17 DM (see Blind spots below) - so
-    a value that can never be delivered fails at startup rather than only
-    after a caller has already left an undeliverable message.
+    `Shared/VoicemailBudget.cs`'s `MaxRecordingSeconds` - a value that
+    reliably fits a NIP-17 DM with headroom to spare (see Blind spots
+    below) - so a value that can never be delivered fails at startup
+    rather than only after a caller has already left an undeliverable
+    message. `VoicemailSender.LoadAudioAsync` separately checks the
+    *actual* encoded size against `VoicemailBudget.MaxAudioBytes` before
+    every send, since `MaxRecordingSeconds` is a heuristic ceiling on the
+    configured value, not a guarantee about what any given recording
+    encodes to.
 - `Voicemail/VoicemailSender.cs` (new): one instance, constructed once in
   `BridgeService.StartAsync` and shared across every call for the life of
   the process - unlike `NostrSignalingClient`, which is scoped to a
@@ -143,14 +148,22 @@ VoicemailSender then, independently of any particular call:
     `Concentus` (a pure C# port of libopus) and `Concentus.Oggfile`
     (writes the Ogg container - `OpusOggWriteStream` - around the
     encoded packets), falling back to sending the WAV directly if
-    encoding fails for any reason. `WavEncoder`'s header is a fixed,
-    known 44 bytes, so the PCM samples are read back with a plain
-    `Buffer.BlockCopy` rather than a general WAV parser. Deliberately
-    not `ffmpeg`/any external process - this keeps the whole feature
-    working in a self-contained single-file binary with nothing to
-    install on the host, and there's no intermediate `.ogg` file on
-    disk at all (`OpusOggWriteStream` writes straight into a
-    `MemoryStream`). Then calls `Client.SendPrivateMsgTo(relayUrls, ...)` - NIP-17: rumor,
+    encoding fails for any reason. The encoder runs with `UseVBR =
+    false`: Concentus (like libopus) defaults to VBR, where `Bitrate` is
+    only a target the encoder can exceed on complex input, which would
+    undermine the size budget below. `WavEncoder`'s header is a fixed,
+    known 44 bytes, exposed as `WavEncoder.HeaderLength` and consumed by
+    a matching `WavEncoder.Decode`, so the PCM samples are read back
+    through a tested round-trip rather than a magic-number reinterpret.
+    Deliberately not `ffmpeg`/any external process - this keeps the
+    whole feature working in a self-contained single-file binary with
+    nothing to install on the host, and there's no intermediate `.ogg`
+    file on disk at all (`OpusOggWriteStream` writes straight into a
+    `MemoryStream`). Whichever format is produced, its size is checked
+    against `VoicemailBudget.MaxAudioBytes` before anything is sent -
+    see Blind spots below - throwing rather than attempting a send that
+    can only fail deep inside NIP-44 encryption or at the relay. Then
+    calls `Client.SendPrivateMsgTo(relayUrls, ...)` - NIP-17: rumor,
     seal, gift wrap, and publish all handled by `Nostr.Sdk` - targeting
     exactly the relay set (`[voicemail].dm_relays`, or `[nostr].relays`
     as a fallback) this batch just connected to. `SendPrivateMsgTo` is
@@ -196,17 +209,29 @@ VoicemailSender then, independently of any particular call:
     ÷    4/3   undo base64 on the audio data URI
     ≈ 30,400   bytes of raw (pre-base64) encoded audio - MaxAudioBytes
     ```
-    `Voicemail/VoicemailBudget.cs` holds this as `MaxAudioBytes` (30,400)
-    and derives `MaxRecordingSeconds` (30, at the current 8 kbps Opus
-    encoding) from it; `ConfigLoader` rejects a configured
-    `max_recording_seconds` above that at startup (see Implementation
-    above) rather than letting a caller leave a message that can never
-    be delivered. The shipped default (`max_recording_seconds = 30`,
-    `config.example.toml`) sits exactly at that ceiling. Raising it
-    requires either a lower bitrate (diminishing returns - 8 kbps is
-    already conservative for 8 kHz telephony audio) or a real upload
-    path (data URI → uploaded file + `imeta`/`url` tag) to remove the
-    cap entirely - the latter is the actual fix; this budget is a
+    `Shared/VoicemailBudget.cs` holds this as `MaxAudioBytes` (30,400) -
+    the hard ceiling `VoicemailSender.LoadAudioAsync` checks the actual
+    encoded output against before every send. `MaxRecordingSeconds`,
+    used for the shipped default and startup validation, is deliberately
+    *not* `MaxAudioBytes / (bitrate / 8)`: that naive division assumes
+    the encoder produces exactly the target bitrate and ignores the Ogg
+    container itself. Verified empirically (a throwaway encode of a 30s
+    tone at 8 kbps with VBR off): actual output ran ~1,050-1,060
+    bytes/sec against a naive estimate of 1,000 - a 30s recording came
+    out to ~31.8 KB, over budget despite "fitting" the naive math. 10%
+    of `MaxAudioBytes` is reserved for that overhead plus slack for
+    `CallerNumber` (bounded, but still variable-length) eating into the
+    fixed rumor-overhead assumed above, giving `MaxRecordingSeconds` =
+    27 at the current 8 kbps encoding; `ConfigLoader` rejects a
+    configured `max_recording_seconds` above that at startup (see
+    Implementation above). The shipped default (`max_recording_seconds =
+    27`, `config.example.toml`) sits exactly at that ceiling, with the
+    real per-recording enforcement against `MaxAudioBytes` as a backstop
+    in case any single recording still runs over. Raising the ceiling
+    further requires either a lower bitrate (diminishing returns - 8
+    kbps is already conservative for 8 kHz telephony audio) or a real
+    upload path (data URI → uploaded file + `imeta`/`url` tag) to remove
+    the cap entirely - the latter is the actual fix; this budget is a
     ceiling this architecture can't grow past.
 - **DTX (encoder silence-dropping) is not available, so the size problem
   above can't currently be helped by compressing the silence out of a

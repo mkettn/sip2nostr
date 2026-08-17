@@ -65,7 +65,7 @@ ring_timeout_seconds = 20
 # The default is the largest value that reliably still fits in a single
 # NIP-17 DM at the current Opus encoding - ConfigLoader rejects anything
 # larger at startup. See docs/voicemail.md.
-max_recording_seconds = 30
+max_recording_seconds = 27
 # Optional. Same format rules as [[lines]].sound: raw 8 kHz 16-bit PCM
 # works directly, other formats require ffmpeg. Falls back to a short
 # tone if unset.
