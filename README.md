@@ -21,7 +21,9 @@ propagation to a real NosCall install is verified end-to-end over NIP-AC:
 NosCall rings, answers, and audio flows both ways — see
 `docs/propagating-to-nostr.md` for the protocol and its blind spots. Note
 NosCall only accepts calls from a followed contact, so the bridge's pubkey
-(from `bridge_nsec`) needs to be added as a contact there first. The
+(from `bridge_nsec`) needs to be added as a contact there first - printed
+as `npub1...` on every startup so there's no need to derive it by hand.
+The
 `[voicemail]` answer-timeout fallback (greeting + recording, sent to
 `target_npub` as a Nostr DM) is implemented but **not yet verified**
 end-to-end — see `docs/voicemail.md`.
@@ -165,7 +167,10 @@ max_recording_seconds = 60
 
 Opt-in (`[voicemail].enabled = false` by default). When enabled, if
 `target_npub` doesn't answer a call over Nostr within
-`[voicemail].ring_timeout_seconds`, the call is diverted to a local
+`[voicemail].ring_timeout_seconds`, the call diverts away from Nostr
+signaling and two things happen: a missed-call notice DM is sent
+immediately (before the greeting even plays — this is already a missed
+call regardless of what happens next), and the call proceeds to a local
 greeting (or a short tone if `greeting_sound` isn't configured) followed
 by a recording of up to `max_recording_seconds`, saved locally under
 `[voicemail].recordings_dir` and the SIP call hung up immediately —
@@ -174,12 +179,15 @@ background worker (`Voicemail/VoicemailSender.cs`, one instance shared
 for the process lifetime) that connects to `[voicemail].dm_relays` (or
 `[nostr].relays` as a fallback — a NIP-17 DM inbox, kind:10050, can
 legitimately differ from the relays used for call signaling) only when
-there's a voicemail queued, sends it as a Nostr direct message (NIP-17)
-re-encoded as Opus/OGG in-process via `Concentus` (pure C#, no external
-program required) to keep it small, then disconnects. Recordings on disk don't
-depend on delivery succeeding. See `docs/voicemail.md` for the full flow
-and known limitations — notably, the recording is inlined directly into
-the DM rather than uploaded to a file host, which is what caps
+something's queued, sends each job as a Nostr direct message (NIP-17,
+audio re-encoded as Opus/OGG in-process via `Concentus` — pure C#, no
+external program required — to keep it small), then disconnects. A
+recording that's too short to be worth sending (e.g. the caller hung up
+during the greeting) means only the missed-call notice goes out — still
+two possible DMs, never zero. Recordings on disk don't depend on
+delivery succeeding. See `docs/voicemail.md` for the full flow and known
+limitations — notably, the recording is inlined directly into the DM
+rather than uploaded to a file host, which is what caps
 `max_recording_seconds`'s default well below a minute: NIP-17's own
 encryption (not just a relay's size limit) can't carry much more than
 ~27 seconds of audio at the current encoding.

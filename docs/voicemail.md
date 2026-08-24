@@ -6,9 +6,11 @@ if `target_npub` never answered a call over Nostr, the call was simply
 left connected to silence until the caller hung up. `[voicemail]` is
 **opt-in** - `enabled = false` by default, so out of the box nothing
 changes. With it turned on, a caller who isn't answered within
-`ring_timeout_seconds` instead hears a greeting, then gets recorded for up
-to `max_recording_seconds`, and the recording is sent to `target_npub` as
-a Nostr direct message.
+`ring_timeout_seconds` triggers a missed-call notice DM immediately, then
+hears a greeting and gets recorded for up to `max_recording_seconds`; if
+anything worth sending was recorded, that goes to `target_npub` as a
+second Nostr direct message. Two possible DMs per missed call, never
+zero - the notice doesn't depend on a voicemail actually materializing.
 
 Not yet verified against a real SIP trunk or a real receiving Nostr
 client - implemented from the same sipsorcery/Nostr.Sdk APIs already
@@ -30,25 +32,32 @@ itself hasn't been exercised end-to-end yet.
       ├─ Caller hangs up first  → tear down, unchanged from today
       │
       └─ Timeout or signaling failure → voicemail fallback:
-           1. Send a NIP-AC `hangup` over Nostr so a ringing device (e.g.
+           1. Close the WebRTC peer connection; the already-answered SIP
+              RTP session stays up and is reused directly.
+           2. Send a NIP-AC `hangup` over Nostr so a ringing device (e.g.
               NosCall) stops ringing (best-effort; failure is logged, not
               fatal) - the bridge originated this call, so giving up on it
               is a hangup, not a reject (the callee's decline signal).
-           2. Close the WebRTC peer connection; the already-answered SIP
-              RTP session stays up and is reused directly.
-           3. Play `greeting_sound` once (or a short tone if unset).
-           4. Record caller audio for up to `max_recording_seconds`, or
+           3. If voicemail is enabled, enqueue a MissedCallNoticeJob on
+              VoicemailSender immediately - before the greeting even
+              plays. This is already a missed call regardless of what
+              happens next, so the notice doesn't wait on a recording
+              that might end up too short to send, or on the caller
+              hanging up mid-greeting.
+           4. Play `greeting_sound` once (or a short tone if unset).
+           5. Record caller audio for up to `max_recording_seconds`, or
               until they hang up.
-           5. Save the recording as a WAV file under `recordings_dir`
+           6. Save the recording as a WAV file under `recordings_dir`
               (always - this is the durability point, independent of
               whatever happens to the send afterward).
-           6. Hang up the SIP call (`ua.Hangup()`) - immediately, without
-              waiting on delivery. Always runs even if step 5 threw (e.g.
+           7. Hang up the SIP call (`ua.Hangup()`) - immediately, without
+              waiting on delivery. Always runs even if step 6 threw (e.g.
               a bad `greeting_sound` path, a disk error), so a failure
               there can't leave the caller on a silent, still-connected
               call or leak the RTP session.
-           7. Hand the WAV off to VoicemailSender (Voicemail/VoicemailSender.cs)
-              and move on - encoding and delivery happen off this call's
+           8. If the recording is long enough to be worth sending, enqueue
+              a VoicemailAudioJob (the WAV path) on VoicemailSender and
+              move on - encoding and delivery happen off this call's
               critical path, in a separate background worker. See below.
 ```
 
@@ -60,19 +69,21 @@ VoicemailSender then, independently of any particular call:
       ▼
  Idle, waiting on the queue - no relay connection held open
       │
-      │  a WAV path arrives (queue was empty until now)
+      │  a job arrives (queue was empty until now) - either a
+      │  MissedCallNoticeJob or a VoicemailAudioJob
       ▼
  Connect once to dm_relays (or [nostr].relays as a fallback)
       │
       ├─ drain everything queued at this point (a backlog of several
-      │  voicemails costs one connect, not one per voicemail)
+      │  jobs costs one connect, not one per job)
       │
-      └─ for each: re-encode as Opus/OGG in-process via Concentus (pure
-         C#, no external program - falls back to sending the WAV
-         directly if encoding fails for any reason), then send as a
-         NIP-17 private direct message. A relay rejecting the event
-         (e.g. too large) is detected and logged as a failure, not
-         reported as sent.
+      └─ for each job: MissedCallNoticeJob → plain-text content;
+         VoicemailAudioJob → re-encode as Opus/OGG in-process via
+         Concentus (pure C#, no external program - falls back to
+         sending the WAV directly if encoding fails for any reason).
+         Either way, send as a NIP-17 private direct message. A relay
+         rejecting the event (e.g. too large) is detected and logged
+         as a failure, not reported as sent.
       │
       ▼
  Disconnect, go back to idle
@@ -130,11 +141,15 @@ VoicemailSender then, independently of any particular call:
   `BridgeService.StartAsync` and shared across every call for the life of
   the process - unlike `NostrSignalingClient`, which is scoped to a
   single call.
-  - `Enqueue` writes to an unbounded `System.Threading.Channels.Channel`
-    and returns immediately; it's a plain in-memory queue (multiple calls
-    can enqueue concurrently - `Channel` is built for that), not a
-    persistent one, so anything still queued at process shutdown is
-    logged as undelivered but its WAV is safely already on disk.
+  - `Enqueue` takes a `Voicemail/SendJob.cs` - either a `MissedCallNoticeJob`
+    (`CallerNumber`, `CallId`, no audio) or a `VoicemailAudioJob` (adds
+    `WavPath`, `SampleRate`, `DurationSeconds`) - and writes it to an
+    unbounded `System.Threading.Channels.Channel<SendJob>`, returning
+    immediately. It's a plain in-memory queue (multiple calls can enqueue
+    concurrently - `Channel` is built for that), not a persistent one, so
+    anything still queued at process shutdown is logged as undelivered;
+    a `VoicemailAudioJob`'s WAV is safely already on disk regardless, but
+    a dropped `MissedCallNoticeJob` has nothing else backing it up.
   - The worker loop (`RunAsync`, started from the constructor) blocks on
     `Channel.Reader.WaitToReadAsync` while the queue is empty - no relay
     connection, no timer. On the first item it drains everything
@@ -144,7 +159,10 @@ VoicemailSender then, independently of any particular call:
     reachability result, is never polluted by relays something else
     already had connected), sends the whole batch, then shuts that
     `Client` down and goes back to waiting.
-  - Per voicemail: re-encodes to Opus/OGG entirely in-process via
+  - `BuildMissedCallNoticeContent` builds a short plain-text DM naming
+    `CallerNumber`; no encoding, no size check needed - it's well under
+    any NIP-17 budget.
+  - Per `VoicemailAudioJob`: re-encodes to Opus/OGG entirely in-process via
     `Concentus` (a pure C# port of libopus) and `Concentus.Oggfile`
     (writes the Ogg container - `OpusOggWriteStream` - around the
     encoded packets), falling back to sending the WAV directly if
@@ -177,8 +195,9 @@ VoicemailSender then, independently of any particular call:
     helper, also used by `NostrSignalingClient.PublishAsync`) - a relay
     can reject an event with `OK: false` without the publish call itself
     throwing, so this is the only way to actually detect it. A failure
-    for one voicemail in a batch is caught and logged per-voicemail; it
-    doesn't stop the rest of the batch from being attempted.
+    for one job in a batch is caught and logged per-job (the WAV path is
+    included for a `VoicemailAudioJob`); it doesn't stop the rest of the
+    batch from being attempted.
 
 ## Blind spots
 

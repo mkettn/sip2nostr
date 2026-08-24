@@ -240,6 +240,12 @@ public sealed class CallBridge(
             return;
         }
 
+        // Enqueued immediately, before the greeting even plays: this is
+        // already a missed call regardless of whether a voicemail ends up
+        // following it (the caller may hang up during the greeting, or
+        // the recording may end up too short to send).
+        voicemailSender.Enqueue(new MissedCallNoticeJob(callerNumber, callId));
+
         try
         {
             await RunVoicemailAsync(sipMediaSession, selectedAudioFormat, callerNumber, callId, hangupTcs, ct);
@@ -386,7 +392,7 @@ public sealed class CallBridge(
         logger.Information("Voicemail recording finished: {RecordedSeconds:F1}s captured.", recordedSeconds);
         var durationSeconds = (int)Math.Round(recordedSeconds);
         var wavPath = await SaveRecordingAsync(samples, sampleRate, callId);
-        voicemailSender.Enqueue(new VoicemailJob(wavPath, sampleRate, durationSeconds, callerNumber, callId));
+        voicemailSender.Enqueue(new VoicemailAudioJob(wavPath, sampleRate, durationSeconds, callerNumber, callId));
     }
 
     // Just the durable local write - encoding and sending happen later,
