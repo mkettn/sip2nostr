@@ -7,9 +7,9 @@ namespace Sip2Nostr.Voicemail;
 public abstract record SendJob(string CallId, string CallerNumber);
 
 // A call that diverted into the voicemail flow (ring timeout, signaling
-// failure) without ever bridging over Nostr - enqueued immediately once
-// that's known, before the greeting even plays, so the notice can arrive
-// well ahead of (or even without) a following VoicemailAudioJob: the
-// caller may hang up during the greeting, or the recording may end up
-// too short to send, and this is still a missed call either way.
+// failure) but never produced a recording worth sending - the caller
+// hung up during the greeting/tone, or the recording was too short.
+// CallBridge.RunVoicemailAsync enqueues exactly one of this or a
+// VoicemailAudioJob per call, never both, so target_npub gets a single
+// DM either way.
 public sealed record MissedCallNoticeJob(string CallerNumber, string CallId) : SendJob(CallId, CallerNumber);

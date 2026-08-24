@@ -6,11 +6,11 @@ if `target_npub` never answered a call over Nostr, the call was simply
 left connected to silence until the caller hung up. `[voicemail]` is
 **opt-in** - `enabled = false` by default, so out of the box nothing
 changes. With it turned on, a caller who isn't answered within
-`ring_timeout_seconds` triggers a missed-call notice DM immediately, then
-hears a greeting and gets recorded for up to `max_recording_seconds`; if
-anything worth sending was recorded, that goes to `target_npub` as a
-second Nostr direct message. Two possible DMs per missed call, never
-zero - the notice doesn't depend on a voicemail actually materializing.
+`ring_timeout_seconds` hears a greeting and gets recorded for up to
+`max_recording_seconds`. Exactly one Nostr direct message goes to
+`target_npub` per missed call: the recording, if anything worth sending
+was captured, otherwise a plain-text missed-call notice - never both,
+never neither.
 
 Not yet verified against a real SIP trunk or a real receiving Nostr
 client - implemented from the same sipsorcery/Nostr.Sdk APIs already
@@ -38,28 +38,33 @@ itself hasn't been exercised end-to-end yet.
               NosCall) stops ringing (best-effort; failure is logged, not
               fatal) - the bridge originated this call, so giving up on it
               is a hangup, not a reject (the callee's decline signal).
-           3. If voicemail is enabled, enqueue a MissedCallNoticeJob on
-              VoicemailSender immediately - before the greeting even
-              plays. This is already a missed call regardless of what
-              happens next, so the notice doesn't wait on a recording
-              that might end up too short to send, or on the caller
-              hanging up mid-greeting.
-           4. Play `greeting_sound` once (or a short tone if unset).
-           5. Record caller audio for up to `max_recording_seconds`, or
+           3. Play `greeting_sound` once (or a short tone if unset). If the
+              caller hangs up here, log it (caller number included) and
+              enqueue a MissedCallNoticeJob on VoicemailSender - nothing
+              was recorded, but it's still a missed call.
+           4. Record caller audio for up to `max_recording_seconds`, or
               until they hang up.
-           6. Save the recording as a WAV file under `recordings_dir`
+           5. Save the recording as a WAV file under `recordings_dir`
               (always - this is the durability point, independent of
               whatever happens to the send afterward).
-           7. Hang up the SIP call (`ua.Hangup()`) - immediately, without
-              waiting on delivery. Always runs even if step 6 threw (e.g.
+           6. Hang up the SIP call (`ua.Hangup()`) - immediately, without
+              waiting on delivery. Always runs even if step 5 threw (e.g.
               a bad `greeting_sound` path, a disk error), so a failure
               there can't leave the caller on a silent, still-connected
               call or leak the RTP session.
-           8. If the recording is long enough to be worth sending, enqueue
+           7. If the recording is long enough to be worth sending, enqueue
               a VoicemailAudioJob (the WAV path) on VoicemailSender and
               move on - encoding and delivery happen off this call's
-              critical path, in a separate background worker. See below.
+              critical path, in a separate background worker. Otherwise
+              (too short), log it and enqueue a MissedCallNoticeJob
+              instead - the same "exactly one job" rule as step 3.
 ```
+
+`RunVoicemailAsync` enqueues at most one job per call - a
+`MissedCallNoticeJob` at whichever point recording didn't produce
+anything worth sending, or a `VoicemailAudioJob` if it did. The two are
+mutually exclusive, so `target_npub` never gets both a notice and a
+voicemail for the same call.
 
 VoicemailSender then, independently of any particular call:
 

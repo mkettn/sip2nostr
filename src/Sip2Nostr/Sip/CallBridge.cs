@@ -240,12 +240,6 @@ public sealed class CallBridge(
             return;
         }
 
-        // Enqueued immediately, before the greeting even plays: this is
-        // already a missed call regardless of whether a voicemail ends up
-        // following it (the caller may hang up during the greeting, or
-        // the recording may end up too short to send).
-        voicemailSender.Enqueue(new MissedCallNoticeJob(callerNumber, callId));
-
         try
         {
             await RunVoicemailAsync(sipMediaSession, selectedAudioFormat, callerNumber, callId, hangupTcs, ct);
@@ -285,6 +279,12 @@ public sealed class CallBridge(
     // relays it when a WebRTC leg is present - for up to
     // [voicemail].max_recording_seconds or until the caller hangs up,
     // whichever comes first. See docs/voicemail.md.
+    //
+    // Exactly one job is ever enqueued on voicemailSender per call: a
+    // MissedCallNoticeJob if nothing worth sending was recorded (caller
+    // hung up during the greeting/tone, or the recording was too short),
+    // otherwise a VoicemailAudioJob - never both, so target_npub gets a
+    // single DM per missed call either way.
     private async Task RunVoicemailAsync(
         RTPSession sipMediaSession,
         SDPWellKnownMediaFormatsEnum selectedAudioFormat,
@@ -342,7 +342,10 @@ public sealed class CallBridge(
                 if (await Task.WhenAny(playTask, hangupTcs.Task) == hangupTcs.Task)
                 {
                     greetingSource.CancelSendAudioFromStream();
-                    logger.Information("Caller hung up during the voicemail greeting; nothing recorded.");
+                    logger.Information(
+                        "Caller {CallerNumber} hung up during the voicemail greeting; nothing recorded.",
+                        callerNumber);
+                    voicemailSender.Enqueue(new MissedCallNoticeJob(callerNumber, callId));
                     return;
                 }
             }
@@ -352,6 +355,10 @@ public sealed class CallBridge(
                 greetingSource.SetSource(AudioSourcesEnum.SineWave);
                 if (await Task.WhenAny(Task.Delay(TimeSpan.FromSeconds(1.5), ct), hangupTcs.Task) == hangupTcs.Task)
                 {
+                    logger.Information(
+                        "Caller {CallerNumber} hung up before the voicemail tone finished; nothing recorded.",
+                        callerNumber);
+                    voicemailSender.Enqueue(new MissedCallNoticeJob(callerNumber, callId));
                     return;
                 }
 
@@ -385,11 +392,18 @@ public sealed class CallBridge(
         var recordedSeconds = samples.Length / (double)sampleRate;
         if (recordedSeconds < 1.0)
         {
-            logger.Information("Voicemail recording was too short ({RecordedSeconds:F1}s); not sending.", recordedSeconds);
+            logger.Information(
+                "Voicemail recording from {CallerNumber} was too short ({RecordedSeconds:F1}s); not sending.",
+                callerNumber,
+                recordedSeconds);
+            voicemailSender.Enqueue(new MissedCallNoticeJob(callerNumber, callId));
             return;
         }
 
-        logger.Information("Voicemail recording finished: {RecordedSeconds:F1}s captured.", recordedSeconds);
+        logger.Information(
+            "Voicemail recording from {CallerNumber} finished: {RecordedSeconds:F1}s captured.",
+            callerNumber,
+            recordedSeconds);
         var durationSeconds = (int)Math.Round(recordedSeconds);
         var wavPath = await SaveRecordingAsync(samples, sampleRate, callId);
         voicemailSender.Enqueue(new VoicemailAudioJob(wavPath, sampleRate, durationSeconds, callerNumber, callId));
