@@ -164,7 +164,18 @@ try
     if (modemSource is not null)
     {
         hub.Attach(modemSource, cts.Token);
-        await modemSource.StartAsync(cts.Token);
+        try
+        {
+            await modemSource.StartAsync(cts.Token);
+        }
+        catch (Exception exception)
+        {
+            // [modem] is an opt-in secondary source; an unreachable system
+            // bus or absent ModemManager shouldn't take down an otherwise
+            // healthy SIP source, so this is logged rather than left to
+            // propagate to the top-level catch (which exits the process).
+            Log.Error(exception, "Modem call source failed to start; continuing SIP-only.");
+        }
     }
 
     Log.Information("sip2nostr running. Press Ctrl+C to exit.");

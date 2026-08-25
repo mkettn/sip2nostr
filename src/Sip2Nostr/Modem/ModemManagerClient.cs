@@ -35,15 +35,15 @@ public sealed class ModemManagerClient(ModemConfig config, ILogger logger) : IAs
         if (!string.IsNullOrWhiteSpace(config.ModemObjectPath))
         {
             logger.Information("Using configured ModemManager modem object path {ModemPath}.", config.ModemObjectPath);
-            await AttachToModemAsync(new ObjectPath(config.ModemObjectPath));
+            await AttachToModemAsync(new ObjectPath(config.ModemObjectPath), ct);
             return;
         }
 
-        var managedObjects = await manager.GetManagedObjectsAsync();
+        var managedObjects = await manager.GetManagedObjectsAsync().WaitAsync(ct);
         var modemPath = FindVoiceModemPath(managedObjects);
         if (modemPath is not null)
         {
-            await AttachToModemAsync(modemPath.Value);
+            await AttachToModemAsync(modemPath.Value, ct);
             return;
         }
 
@@ -52,7 +52,7 @@ public sealed class ModemManagerClient(ModemConfig config, ILogger logger) : IAs
             config.Label);
         _interfacesAddedWatch = await manager.WatchInterfacesAddedAsync(
             args => _ = OnInterfacesAddedSafeAsync(args.ObjectPath, args.Interfaces),
-            exception => logger.Warning(exception, "ModemManager InterfacesAdded watch failed."));
+            exception => logger.Warning(exception, "ModemManager InterfacesAdded watch failed.")).WaitAsync(ct);
     }
 
     // Pure so it can be exercised without a live D-Bus connection: picks the
@@ -84,7 +84,10 @@ public sealed class ModemManagerClient(ModemConfig config, ILogger logger) : IAs
             }
 
             logger.Information("ModemManager modem with voice-call support attached at {ModemPath}.", objectPath);
-            await AttachToModemAsync(objectPath);
+            // Not the StartAsync ct: this fires from a live D-Bus watch,
+            // potentially long after startup finished (and that token
+            // disposed), so it isn't the right thing to cancel against.
+            await AttachToModemAsync(objectPath, CancellationToken.None);
         }
         catch (Exception exception)
         {
@@ -92,15 +95,15 @@ public sealed class ModemManagerClient(ModemConfig config, ILogger logger) : IAs
         }
     }
 
-    private async Task AttachToModemAsync(ObjectPath modemPath)
+    private async Task AttachToModemAsync(ObjectPath modemPath, CancellationToken ct)
     {
         _voice = _connection!.CreateProxy<IModemVoice>(ServiceName, modemPath);
         _callAddedWatch = await _voice.WatchCallAddedAsync(
             callPath => _ = OnCallAddedSafeAsync(callPath),
-            exception => logger.Warning(exception, "ModemManager CallAdded watch failed."));
+            exception => logger.Warning(exception, "ModemManager CallAdded watch failed.")).WaitAsync(ct);
         logger.Information("Listening for inbound calls on ModemManager modem {ModemPath} (line {Label}).", modemPath, config.Label);
 
-        var existingCalls = await _voice.ListCallsAsync();
+        var existingCalls = await _voice.ListCallsAsync().WaitAsync(ct);
         foreach (var callPath in existingCalls)
         {
             await OnCallAddedSafeAsync(callPath);
