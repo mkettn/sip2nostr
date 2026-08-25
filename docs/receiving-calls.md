@@ -13,32 +13,37 @@ response looks like on this provider.
 
 ## Overview
 
-`BridgeService` registers once for the whole SIP trunk (`[sip]` in
-`config.toml`) and keeps a single `SIPUserAgent` listening for inbound
-`INVITE` requests on UDP port 5060. Every call — regardless of which
-configured `[[lines]]` DID it targets — is dispatched to
-`CallBridge.HandleIncomingCallAsync`, which does the actual answering.
+Since the hub-architecture refactor (see `docs/hub-architecture.md`),
+answering the SIP leg and deciding what to do with an answered call are two
+separate concerns. `SipCallSource` (an `ICallSource`) registers once for
+the whole SIP trunk (`[sip]` in `config.toml`), keeps a single
+`SIPUserAgent` listening for inbound `INVITE` requests on UDP port 5060,
+and answers every call itself — regardless of which configured `[[lines]]`
+DID it targets. Once answered, it raises `OnIncomingCall` with a
+transport-agnostic `Call`, which `CallHub` routes through the configured
+`ICallSink` chain (`NosCallSink`, `VoicemailSink`, `LocalTestAudioSink`).
 
 ```
  VoIP provider
       │  REGISTER (once, at startup)
       │  INVITE (per call)
       ▼
- BridgeService              — registration, SIP transport, DNS/URI resolution
-      │  OnIncomingCall
+ SipCallSource               — registration, SIP transport, DNS/URI resolution,
+      │                         accepting/answering the SIP leg
+      │  OnIncomingCall(Call)
       ▼
- CallBridge.HandleIncomingCallAsync
+ CallHub                     — routes the Call through the sink chain
       │
-      ├─ [nostr].enabled = false → AnswerWithLocalAudioAsync
-      │    (verified: this doc)
+      ├─ [nostr].enabled = true  → NosCallSink, then VoicemailSink if
+      │    configured and the ring times out
       │
-      └─ [nostr].enabled = true  → WebRTC + Nostr signaling path
-           (implemented, not yet verified end-to-end - see Blind Spots)
+      └─ [nostr].enabled = false → LocalTestAudioSink
+           (verified: this doc)
 ```
 
 ## Step by step: answering a call
 
-1. **Registration.** At startup, `BridgeService.StartAsync` resolves the
+1. **Registration.** At startup, `SipCallSource.StartAsync` resolves the
    provider host through the configurable DNS resolver (see below),
    builds one `SIPRegistrationUserAgent` for the whole account, and starts
    it. A single successful `REGISTER` covers every configured line; the
@@ -46,11 +51,12 @@ configured `[[lines]]` DID it targets — is dispatched to
    separate accounts.
 
 2. **Inbound `INVITE` dispatch.** `SIPUserAgent.OnIncomingCall` fires for
-   every inbound `INVITE`. `BridgeService.HandleIncomingCall` matches the
+   every inbound `INVITE`. `SipCallSource.HandleIncomingCall` matches the
    `INVITE`'s Request-URI user part against the configured `[[lines]]`
-   entries purely for logging (`line: main`, etc.) — there is no per-line
-   routing decision yet (see Blind Spots). The call is then handed to
-   `CallBridge.HandleIncomingCallAsync`.
+   entries — this becomes `Call.LineLabel`, which `LocalTestAudioSink` uses
+   to pick a per-line sound; there is still no per-line routing decision for
+   the Nostr path (see Blind Spots). The call is then answered by
+   `SipCallSource.AcceptAndRouteCallAsync`.
 
 3. **Codec selection.** `SelectOfferedG711Format` scans the offered SDP's
    `m=audio` payload list for RTP payload type `8` (PCMA) or `0` (PCMU) and
@@ -61,33 +67,38 @@ configured `[[lines]]` DID it targets — is dispatched to
    `SDPWellKnownMediaFormatsEnum`, no supplementary codec package required.
 
 4. **Accepting and answering.** `ua.AcceptCall(inviteRequest)` creates the
-   `SIPServerUserAgent` for the transaction. From here the flow forks on
-   `[nostr].enabled`:
+   `SIPServerUserAgent` for the transaction, and every call is answered the
+   same way regardless of what happens next: a plain `RTPSession` carrying
+   just the selected G.711 format, answered via
+   `SIPUserAgent.Answer(uas, mediaSession, customHeaders: null,
+   publicIpAddress: localMediaAddress)` — sipsorcery's own supported answer
+   path, not a hand-built response. The session is wrapped in
+   `RtpSessionCallAudio` (an `ICallAudio` adapter that relays inbound/
+   outbound RTP audio payloads unchanged — no decode/encode) and handed to
+   `CallHub` as part of a `Call`, which also carries the negotiated
+   `AudioFormat` so a sink can decode/negotiate against it if it needs to.
+   What happens to the audio from here is a sink's job, not the source's:
 
-   - **Local test audio (`AnswerWithLocalAudioAsync`, verified):** builds a
-     `SIPSorcery.Media.AudioSendOnlyMediaSession` bound to the local media
-     address and the configured `rtp_port`, restricts its local audio track
-     to just the selected G.711 format, and plays either a configured
-     sound file (`[[lines]].sound`, converted to raw 8 kHz PCM via `ffmpeg`
-     if it isn't already `.pcm`/`.raw`/`.s16le`) or a sine wave test tone
-     if none is configured. The call is answered with
-     `SIPUserAgent.Answer(uas, mediaSession, customHeaders: null,
-     publicIpAddress: localMediaAddress)` — sipsorcery's own supported
-     answer path, not a hand-built response.
-   - **Nostr/WebRTC bridging (implemented, unverified):** creates a plain
-     `RTPSession` for the SIP leg and an `RTCPeerConnection` for the WebRTC
-     leg, both restricted to the same G.711 format, and wires
-     `OnRtpPacketReceived` on each to call `SendRtpRaw` on the other —
-     since both legs use identical G.711 payloads, this is a raw RTP
-     packet relay with no decode/encode step. The SIP leg is answered the
-     same way as the local-audio path. Once answered, a
-     `NostrSignalingClient` connects, an SDP offer is generated from the
-     `RTCPeerConnection` and gift-wrapped to `target_npub`, and the call
-     waits for a gift-wrapped SDP answer and ICE candidates back before
-     completing the WebRTC side. See `docs/` (this is the subject of the
-     followup PR) and Blind Spots below.
+   - **Local test audio (`LocalTestAudioSink`, verified):** plays either a
+     configured sound file (`[[lines]].sound`, converted to raw 8 kHz PCM
+     via `ffmpeg` if it isn't already `.pcm`/`.raw`/`.s16le`) or a sine
+     wave test tone on loop over `Call.Audio` until the caller hangs up,
+     via SIPSorcery's own `AudioExtrasSource` wired into
+     `Call.Audio.SendEncodedSample`. Only wired in when `[nostr].enabled =
+     false`.
+   - **Nostr/WebRTC bridging (`NosCallSink`, implemented and verified end-
+     to-end):** creates an `RTCPeerConnection` for the WebRTC leg,
+     restricted to the same negotiated `Call.AudioFormat` as the SIP leg,
+     wrapped in its own `RtpSessionCallAudio`, and bridges the two
+     `ICallAudio` legs by forwarding RTP frames unchanged each way — a raw
+     relay, same as the pre-hub implementation, since both legs are forced
+     onto the same codec. A `NostrSignalingClient` connects, an SDP offer
+     is generated from the `RTCPeerConnection` and gift-wrapped to
+     `target_npub`, and the call waits for a gift-wrapped SDP answer and
+     ICE candidates back before completing the WebRTC side. See
+     `docs/propagating-to-nostr.md` for the protocol.
 
-5. **Response header shaping.** `BridgeService.InstallSipTraceLogging`
+5. **Response header shaping.** `SipCallSource.InstallSipTraceLogging`
    installs `SIPTransport.CustomiseRequestHeader` /
    `CustomiseResponseHeader` hooks that run for every outbound SIP message.
    For `INVITE` responses at `180` and above, these hooks force the
@@ -96,11 +107,12 @@ configured `[[lines]]` DID it targets — is dispatched to
    unset), and for the final `200 OK` also set `Allow`, `Supported`, and
    `Content-Length` explicitly rather than trusting sipsorcery's defaults.
 
-6. **Call teardown.** Both answer paths await `ua.OnCallHungup` (or the
-   passed-in shutdown `CancellationToken`) and then close the media
-   session. A `BYE` from the provider ends the call the normal way; a
-   local shutdown just closes the session without sending `BYE` itself
-   (see Blind Spots).
+6. **Call teardown.** Every sink races its own work against
+   `Call.WhenRemoteHungUp` (completed by `ua.OnCallHungup` or the
+   passed-in shutdown `CancellationToken`), and `CallHub` calls
+   `Call.HangupAsync` unconditionally once a sink is done. A `BYE` from the
+   provider ends the call the normal way; a local shutdown just closes the
+   session without sending `BYE` itself (see Blind Spots).
 
 ## Why response routing needs the configurable DNS resolver to actually work
 
@@ -119,7 +131,7 @@ hears anything, with no error logged anywhere, because sipsorcery's
 retransmit-timer logging fires on schedule regardless of whether the
 underlying send actually succeeded.
 
-`BridgeService.InstallSipUriResolver` handles this by resolving literal IP
+`SipCallSource.InstallSipUriResolver` handles this by resolving literal IP
 addresses immediately in both the synchronous cache callback
 (`ResolveSIPUriFromCacheCallback`) and the async fallback
 (`ResolveSIPUriCallbackAsync`), before falling back to the configured DNS
@@ -128,12 +140,12 @@ registrar.
 
 ## Blind spots and loose ends
 
-- **DTMF is explicitly disabled**, not just unimplemented:
-  `RestrictAudioTrack` sets `track.NoDtmfSupport = true` when restricting
-  the local audio track to the selected G.711 format. A caller pressing
-  keys on their phone during a call answered by sip2nostr won't have those
-  keypresses relayed anywhere. This wasn't a deliberate product decision,
-  just not built yet.
+- **DTMF is not relayed**, not just unimplemented: `SipCallSource` always
+  builds the SIP audio track from a single negotiated G.711 format
+  (`CreateAudioTrack`), which carries no DTMF payload type. A caller
+  pressing keys on their phone during a call answered by sip2nostr won't
+  have those keypresses relayed anywhere. This wasn't a deliberate product
+  decision, just not built yet.
 - **The Nostr/WebRTC propagation path is implemented and verified
   end-to-end** against a real NosCall install over NIP-AC — see
   `docs/propagating-to-nostr.md` for the protocol and its own blind spots
@@ -150,11 +162,10 @@ registrar.
   its own blind spots (notably: no file-hosting upload path, so large
   recordings can exceed a relay's max event size).
 - **Concurrent calls are untested.** Only one inbound call has been
-  exercised at a time. `AudioSendOnlyMediaSession` and `RTPSession` bind to
-  the configured `rtp_port` for the local-audio path; whether two
-  simultaneous calls collide on that port, and whether the WebRTC path's
-  per-call `RTCPeerConnection`/`RTPSession` pair is safely reentrant, has
-  not been checked.
+  exercised at a time. Whether two simultaneous calls' `RTPSession`s
+  collide, and whether the WebRTC path's per-call
+  `RTCPeerConnection`/`RTPSession` pair is safely reentrant, has not been
+  checked.
 - **Registration renewal over a long run is unobserved.** Testing so far
   covers a single registration cycle within its `expiry` window; renewal
   behavior as the registration approaches expiry (and any retry behavior
@@ -177,6 +188,7 @@ registrar.
   honest identifier.
 - **IPv6 is untested.** The SIP transport binds to `IPAddress.Any` (IPv4
   wildcard) and all verified testing has been over IPv4.
-- **TURN/NAT behavior for the WebRTC leg is untested**, since that path has
-  never completed an offer/answer exchange with a real client. The README
-  notes TURN as "likely needed" but this hasn't been confirmed either way.
+- **TURN/NAT behavior for the WebRTC leg is untested beyond the local
+  network the `docs/propagating-to-nostr.md` verification ran on.** The
+  README notes TURN as "likely needed" but this hasn't been confirmed
+  either way.

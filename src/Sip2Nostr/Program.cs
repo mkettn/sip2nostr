@@ -1,7 +1,11 @@
 using Nostr.Sdk;
 using Serilog;
 using Sip2Nostr.Config;
+using Sip2Nostr.Hub;
+using Sip2Nostr.Signaling;
+using Sip2Nostr.Sinks;
 using Sip2Nostr.Sip;
+using Sip2Nostr.Voicemail;
 
 const string LogOutputTemplate = "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}";
 
@@ -25,6 +29,22 @@ static Serilog.Core.Logger CreateLogger(
     }
 
     return logger.CreateLogger();
+}
+
+// Runs at startup, in parallel with SIP registration, so relay
+// reachability is known up front instead of only surfacing when the
+// first call tries to publish. Failures here are diagnostic only -
+// NostrSignalingClient.ConnectAsync connects fresh per call regardless.
+static async Task CheckNostrConnectivitySafeAsync(NostrConfig nostrConfig, ILogger logger)
+{
+    try
+    {
+        await NostrSignalingClient.CheckConnectivityAsync(nostrConfig, logger.ForContext<NostrSignalingClient>());
+    }
+    catch (Exception exception)
+    {
+        logger.Warning(exception, "Nostr startup connectivity check failed unexpectedly.");
+    }
 }
 
 static string? ResolveRunLogPath(string? runFile, string configDirectory)
@@ -75,8 +95,34 @@ try
         cts.Cancel();
     };
 
-    await using var bridge = new BridgeService(config, Log.Logger.ForContext<BridgeService>());
-    await bridge.StartAsync(cts.Token);
+    await using var voicemailSender = new VoicemailSender(config.Nostr, config.Voicemail, Log.Logger.ForContext<VoicemailSender>());
+
+    var sinks = new List<ICallSink>();
+    if (config.Nostr.Enabled)
+    {
+        sinks.Add(new NosCallSink(
+            config.Nostr,
+            config.WebRtc,
+            config.Voicemail.Enabled ? config.Voicemail.RingTimeoutSeconds : null,
+            Log.Logger.ForContext<NosCallSink>()));
+
+        if (config.Voicemail.Enabled)
+        {
+            sinks.Add(new VoicemailSink(config.Voicemail, voicemailSender, config.ConfigDirectory, Log.Logger.ForContext<VoicemailSink>()));
+        }
+
+        _ = CheckNostrConnectivitySafeAsync(config.Nostr, Log.Logger);
+    }
+    else
+    {
+        sinks.Add(new LocalTestAudioSink(config.Lines, config.ConfigDirectory, Log.Logger.ForContext<LocalTestAudioSink>()));
+    }
+
+    var hub = new CallHub(sinks, Log.Logger.ForContext<CallHub>());
+
+    await using var source = new SipCallSource(config, Log.Logger.ForContext<SipCallSource>());
+    hub.Attach(source, cts.Token);
+    await source.StartAsync(cts.Token);
 
     Log.Information("sip2nostr running. Press Ctrl+C to exit.");
 

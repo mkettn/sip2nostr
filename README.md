@@ -97,6 +97,13 @@ and Nostr.Sdk's alpha status carries some API-churn risk. For a single-line
 personal MVP, both are a reasonable bet; revisit if either becomes a
 blocker once building.
 
+Internally, call handling follows a hub/source/sink pattern: a `CallHub`
+routes every call from an `ICallSource` (today, `SipCallSource`) through a
+configured chain of `ICallSink`s (`NosCallSink`, `VoicemailSink`,
+`LocalTestAudioSink`) — see `docs/hub-architecture.md` for why, and for how
+this keeps the door open to future sources (e.g. a modem/D-Bus line) and
+sinks without reshaping the core interfaces.
+
 ## Required feature: configurable DNS resolver
 
 The hostname resolution used to reach the VoIP provider's SIP registrar/proxy

@@ -8,9 +8,8 @@ this as "stop accidental noise," not "stop a determined attacker."
 
 ## Flow
 
-1. `Sip/CallBridge.cs`, right after `ua.AcceptCall(inviteRequest)` and
-   before any media session is created (for either the Nostr-enabled or
-   local-audio-only path): extract the caller's number from
+1. `Sip/SipCallSource.cs`, right after `ua.AcceptCall(inviteRequest)` and
+   before any media session is created: extract the caller's number from
    `inviteRequest.Header.From.FromURI.User`.
 2. Normalize it (`CallerList/PhoneNumberNormalizer.cs`).
 3. Ask the configured `CallerList/CallerListGate.cs` whether the
@@ -23,7 +22,7 @@ this as "stop accidental noise," not "stop a determined attacker."
 Every step of this logs at `Information` level, so a blocking decision can
 be confirmed directly from the logs: `ConfigCallerListProvider` logs which
 list (if any) a number matched, `CallerListGate` logs each provider's
-verdict, and `CallBridge` logs the normalized number and the final
+verdict, and `SipCallSource` logs the normalized number and the final
 reject/proceed decision.
 
 ## Normalization
@@ -47,16 +46,16 @@ trunk sent bare digits with no `+`. It also strips a `tel:` URI's
 
 ## Extensibility: `ICallerListProvider`
 
-`CallBridge` depends only on `CallerList/CallerListGate.cs`, never on a
+`SipCallSource` depends only on `CallerList/CallerListGate.cs`, never on a
 concrete list source. The gate takes any number of
-`ICallerListProvider` implementations; today `BridgeService` wires up
+`ICallerListProvider` implementations; today `SipCallSource` wires up
 exactly one — `ConfigCallerListProvider`, reading `[callerlist]` from
 `config.toml`. Any provider returning `Deny` blocks the call.
 
 This is deliberate: adding a future source (a CardDAV address book, a
-Google Contacts sync) is a `BridgeService`-only change — implement
+Google Contacts sync) is a `SipCallSource`-only change — implement
 `ICallerListProvider`, construct it alongside `ConfigCallerListProvider`,
-pass both into `CallerListGate`. `CallBridge` and the gate's contract
+pass both into `CallerListGate`. `SipCallSource` and the gate's contract
 don't change.
 
 ## Config (`[callerlist]` in `config.toml`)
