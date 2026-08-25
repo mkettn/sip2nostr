@@ -188,6 +188,7 @@ registrar.
   honest identifier.
 - **IPv6 is untested.** The SIP transport binds to `IPAddress.Any` (IPv4
   wildcard) and all verified testing has been over IPv4.
-- **TURN/NAT behavior for the WebRTC leg is untested**, since that path has
-  never completed an offer/answer exchange with a real client. The README
-  notes TURN as "likely needed" but this hasn't been confirmed either way.
+- **TURN/NAT behavior for the WebRTC leg is untested beyond the local
+  network the `docs/propagating-to-nostr.md` verification ran on.** The
+  README notes TURN as "likely needed" but this hasn't been confirmed
+  either way.

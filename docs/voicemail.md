@@ -129,23 +129,17 @@ VoicemailSender then, independently of any particular call:
     A signaling exception (e.g. no relay reachable) triggers the same
     decline as a timeout, not just an explicit timeout - the point is
     "this call is not going to be answered over Nostr", not literally
-    just the clock. After `Task.WhenAny` returns, the code checks
-    `call.WhenRemoteHungUp.IsCompleted` before anything else: cancellation
-    callbacks on a `CancellationToken` run LIFO, and the ring-timeout
-    delay's own internal registration is created after `SipCallSource`'s
-    shutdown hookup on the same TCS, so on shutdown it can observe
-    cancellation - and so complete - before that callback does, which
-    would otherwise misreport a shutdown as a genuine ring timeout.
-    Checking `answerTask` itself next (rather than trusting which task
-    `WhenAny` reported as the winner) then gives a genuine answer priority
-    if it lands at the same moment the ring timeout elapses. Even so,
-    `ct.IsCancellationRequested` is checked first, ahead of
-    `call.WhenRemoteHungUp.IsCompleted`: `ringTimeoutTask` is cancelled by
-    the same `ct`, so telling a shutdown apart from a genuine ring timeout
-    by which `Task` `WhenAny` happened to observe as complete first is
-    exactly the kind of ordering-dependent check the paragraph above is
-    already being this careful about - a plain, synchronous
-    `ct.IsCancellationRequested` read has no such ambiguity.
+    just the clock. After `Task.WhenAny` returns, three checks run in a
+    deliberate order - `ct.IsCancellationRequested`, then
+    `call.WhenRemoteHungUp.IsCompleted`, then `answerTask.IsCompleted` -
+    because `ringTimeoutTask` is cancelled by the same `ct` as a shutdown,
+    so which of `ringTimeoutTask` and `call.WhenRemoteHungUp` `WhenAny`
+    happens to observe as complete first isn't a reliable way to tell a
+    shutdown apart from a genuine ring timeout; `ct.IsCancellationRequested`
+    is a plain synchronous read with no such ambiguity. Checking
+    `answerTask` itself last (rather than trusting which task `WhenAny`
+    reported as the winner) then gives a genuine answer priority if it
+    lands at the same moment the ring timeout elapses.
   - Bridges `Call.Audio` and its own `RtpSessionCallAudio` (wrapping the
     `RTCPeerConnection`, restricted to the same `Call.AudioFormat` as the
     SIP leg) by forwarding RTP frames unchanged each way - the same raw

@@ -84,11 +84,9 @@ public sealed class NosCallSink(
                 : new Task[] { answerTask, call.WhenRemoteHungUp };
             await Task.WhenAny(waitTasks);
 
-            // Checked before anything else, ahead of call.WhenRemoteHungUp:
-            // ringTimeoutTask is also cancelled by ct, and relying on task
-            // completion ordering to tell a shutdown apart from a genuine
-            // ring timeout is fragile - ct.IsCancellationRequested is a
-            // plain synchronous read with no such ambiguity.
+            // Checked before call.WhenRemoteHungUp - see docs/voicemail.md
+            // for why task-completion order alone isn't a reliable signal
+            // here.
             if (ct.IsCancellationRequested)
             {
                 logger.Information(

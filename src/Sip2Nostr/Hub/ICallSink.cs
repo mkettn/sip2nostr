@@ -1,10 +1,7 @@
 namespace Sip2Nostr.Hub;
 
-// Something CallHub can offer a call to. Returning true means it handled
-// the call end-to-end (bridged it until hangup, or recorded a voicemail) -
-// CallHub won't try any further sinks. Returning false means it declined
-// (e.g. NosCallSink's ring timeout elapsed) and the next configured sink
-// gets a turn.
+// Something CallHub can offer a call to - see docs/hub-architecture.md
+// for the sink-chain contract (what true/false mean here).
 public interface ICallSink
 {
     Task<bool> TryHandleAsync(Call call, CancellationToken ct);

@@ -3,10 +3,7 @@ using Serilog;
 namespace Sip2Nostr.Hub;
 
 // Routes every call from every attached source through the same ordered
-// sink chain (e.g. NosCallSink, then VoicemailSink) - the first sink that
-// returns true wins. If none does, the call is left connected until the
-// caller hangs up (unchanged from the pre-hub behavior for [nostr].enabled
-// = false or [voicemail].enabled = false with no other sink configured).
+// sink chain - see docs/hub-architecture.md for the design.
 public sealed class CallHub(IReadOnlyList<ICallSink> sinks, ILogger logger)
 {
     public void Attach(ICallSource source, CancellationToken ct)
