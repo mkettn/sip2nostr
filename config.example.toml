@@ -64,7 +64,9 @@ ring_timeout_seconds = 20
 # Caller is disconnected after this long even if they keep talking.
 # The default is the largest value that reliably still fits in a single
 # NIP-17 DM at the current Opus encoding - ConfigLoader rejects anything
-# larger at startup. See docs/voicemail.md.
+# larger at startup. This ceiling only applies to delivery = "audio"
+# below; delivery = "text" allows up to 600s instead, since a transcript
+# isn't bound by the same DM size budget. See docs/voicemail.md.
 max_recording_seconds = 27
 # Optional. Same format rules as [[lines]].sound: raw 8 kHz 16-bit PCM
 # works directly, other formats require ffmpeg. Falls back to a short

@@ -27,5 +27,11 @@ public static class VoicemailBudget
     // inlined audio, so - unlike MaxAudioBytes - no 4/3 base64 inflation
     // needs undoing here: this is a direct UTF-8 byte budget for the
     // transcript text itself, after rumor JSON overhead.
+    //
+    // 40,000 + the surrounding prose/tags in
+    // TranscribedTextDeliveryBackend (~92 bytes) + rumor JSON overhead
+    // (~352 bytes) leaves only ~500 bytes of headroom under the 40,960
+    // bucket. Widening the prose prefix or adding tags there needs this
+    // constant revisited, not just assumed to still fit.
     public const int MaxTranscriptBytes = 40_000;
 }
