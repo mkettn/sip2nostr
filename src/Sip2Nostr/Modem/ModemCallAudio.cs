@@ -5,13 +5,11 @@ using Sip2Nostr.Hub;
 
 namespace Sip2Nostr.Modem;
 
-// Adapts a raw duplex ALSA PCM device (AlsaPcmDevice) to ICallAudio.
-// Unlike Sip.RtpSessionCallAudio (a zero-cost RTP relay over an existing
-// RTPSession), a modem's audio never arrives RTP-shaped - ModemManager only
-// controls call state over D-Bus, the PCM samples come straight off the
-// device - so this is the one place in the modem call source that actually
-// encodes/decodes G.711 (via SIPSorcery.Media.AudioEncoder, already a
-// dependency), per docs/hub-architecture.md's "Why RTP, not PCM" section.
+// Adapts a raw duplex ALSA PCM device (AlsaPcmDevice) to ICallAudio - the
+// one place in the modem call source that actually encodes/decodes G.711
+// (via SIPSorcery.Media.AudioEncoder, already a dependency), unlike
+// Sip.RtpSessionCallAudio's zero-cost RTP relay. See
+// docs/hub-architecture.md's "Why RTP, not PCM" section for why.
 internal sealed class ModemCallAudio : ICallAudio, IAsyncDisposable
 {
     private readonly AlsaPcmDevice _alsa;
@@ -99,11 +97,7 @@ internal sealed class ModemCallAudio : ICallAudio, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _captureCts.Cancel();
-        // Cancellation alone can leave the capture loop stuck: it only
-        // checks the token between iterations, but a blocking
-        // snd_pcm_readi doesn't observe it mid-call. Drop the capture
-        // stream to force that call to return immediately.
-        _alsa.DropCapture();
+        _alsa.DropCapture(); // see AlsaPcmDevice.DropCapture for why this is needed too
         try
         {
             await _captureLoop;

@@ -95,13 +95,13 @@ forward byte-for-byte with no decode/re-encode step.
 
 A source or sink whose transport isn't RTP-shaped encodes/decodes at its
 own boundary instead of the hub doing it for every pair regardless of
-need. `Modem/ModemCallAudio.cs` is the clearest example: ModemManager
-never carries call audio over D-Bus, only call control, so the modem leg
-is raw PCM off an ALSA device, encoded to/decoded from G.711 against
-`Call.AudioFormat` right there in the adapter - `CallHub` and every sink
-still only ever see `RtpAudioFrame`s, exactly as if the call had arrived
-over SIP. `VoicemailSink` and `LocalTestAudioSink` work the same way on
-the sink side: recording decodes each frame via
+need. `Modem/ModemCallAudio.cs` is the clearest example: it's raw PCM off
+an ALSA device (see `docs/receiving-modem-calls.md` for why), encoded
+to/decoded from G.711 against `Call.AudioFormat` right there in the
+adapter - `CallHub` and every sink still only ever see `RtpAudioFrame`s,
+exactly as if the call had arrived over SIP. `VoicemailSink` and
+`LocalTestAudioSink` work the same way on the sink side: recording
+decodes each frame via
 `SIPSorcery.Media.AudioEncoder.DecodeAudio` against `Call.AudioFormat`,
 and playback (a greeting, a tone, a looped sound file) uses SIPSorcery's
 own `AudioExtrasSource`, wired into `ICallAudio.SendEncodedSample`, so

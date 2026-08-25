@@ -11,9 +11,8 @@ public sealed record ModemIncomingCall(ICall Call, ObjectPath CallPath, string? 
 
 // Talks to ModemManager (https://www.freedesktop.org/software/ModemManager/)
 // over the system D-Bus to find a directly attached phone/modem device and
-// watch it for inbound calls - the D-Bus equivalent of SipCallSource's SIP
-// registration + OnIncomingCall for a locally attached device instead of a
-// SIP trunk.
+// watch it for inbound calls; used by ModemCallSource, the ICallSource
+// this feeds.
 public sealed class ModemManagerClient(ModemConfig config, ILogger logger) : IAsyncDisposable
 {
     private const string ServiceName = "org.freedesktop.ModemManager1";

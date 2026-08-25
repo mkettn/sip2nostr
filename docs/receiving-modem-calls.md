@@ -75,16 +75,10 @@ for continuous low-latency full-duplex ALSA PCM streaming:
       └─ [nostr].enabled = false → LocalTestAudioSink
 ```
 
-`ModemCallAudio` is the one place in this leg that actually
-encodes/decodes G.711, since (unlike the SIP leg, a raw RTP-to-RTP relay)
-ModemManager never carries call audio over D-Bus: it reads raw PCM off
-`[modem].alsa_device`, encodes it to G.711 via
-`SIPSorcery.Media.AudioEncoder`, and hands it to `CallHub`/the sink chain
-as an `RtpAudioFrame` exactly as if it had arrived over SIP - see
-`docs/hub-architecture.md`'s "Why RTP, not PCM" section. Everything past
-that point (ringing `target_npub` over Nostr, the WebRTC bridge, the
-voicemail fallback) is `NosCallSink`/`VoicemailSink` code shared with the
-SIP leg; nothing modem-specific exists there.
+`ModemCallAudio` is the only place in this leg that touches codec bytes
+directly (see "Why D-Bus, and why it doesn't cover audio" above) - see
+`docs/hub-architecture.md`'s "Why RTP, not PCM" section for how that fits
+into the hub's design generally.
 
 `SipCallSource` (SIP) and `ModemCallSource` (modem) run side by side as two
 independent call sources attached to the same `CallHub` - enabling
@@ -106,12 +100,9 @@ was before this feature (SIP-only), which is covered by
 
 ## Blind spots
 
-- **Not verified against real hardware.** Everything above is implemented
-  against ModemManager's documented D-Bus API and libasound's documented
-  PCM API, not against an actual modem or a live ModemManager instance -
-  there wasn't one available while building this. Verify call detection,
-  accept, audio in both directions, and hangup against real hardware before
-  relying on this.
+- **Not verified against real hardware** (see Status above) - verify call
+  detection, accept, audio in both directions, and hangup against real
+  hardware before relying on this.
 - **`alsa_device` is not auto-detected.** ModemManager's `Call.AudioPort`
   property exists for this, but what it names (a raw serial port needing
   vendor-specific `AT+CPCMREG`-style in-band PCM, a kernel audio device, or

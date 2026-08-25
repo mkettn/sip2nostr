@@ -9,9 +9,8 @@ namespace Sip2Nostr.Modem;
 // ModemManager's introspection XML (org.freedesktop.ModemManager1.Modem.Voice.xml,
 // org.freedesktop.ModemManager1.Call.xml), not guessed.
 //
-// Call audio itself is never carried over D-Bus - ModemManager only
-// controls call state - so there is no audio-related member here; see
-// AlsaPcmDevice for the actual audio path.
+// No audio-related member here - see AlsaPcmDevice for the actual audio
+// path, and docs/receiving-modem-calls.md for why it's separate.
 
 [DBusInterface("org.freedesktop.DBus.ObjectManager")]
 public interface IObjectManager : IDBusObject
