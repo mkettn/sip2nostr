@@ -3,20 +3,16 @@ using Serilog;
 
 namespace Sip2Nostr.Signaling;
 
-// Shared connect-and-log helper. Connect() is fire-and-forget - it kicks
-// off each relay's connection loop and returns immediately, with no
-// guarantee any attempt even started (confirmed against rust-nostr's
-// source: sdk/src/pool/mod.rs). TryConnect() actually awaits a real
-// per-relay connection attempt within the timeout and returns which
-// relays succeeded/failed, with the real underlying error
-// (DNS/TLS/refused/etc.) per failure - not just an opaque status enum.
+// Uses TryConnect(), not Connect(): the latter is fire-and-forget and
+// returns before any attempt necessarily started (confirmed against
+// rust-nostr's source, sdk/src/pool/mod.rs), while TryConnect() actually
+// awaits each relay within the timeout and reports the real per-relay
+// failure reason.
 internal static class RelayConnector
 {
-    // Returns the relays actually reachable, pool-wide - not scoped to
-    // just the `relays` argument if the client already had others
-    // connected. A caller that needs to know whether *its own* specific
-    // relays connected, on a client whose pool may include others, must
-    // intersect the result against its own list.
+    // The returned relays are reachable pool-wide, not scoped to
+    // `relays` - a client that already had others connected includes
+    // those too. Intersect against `relays` if only that set matters.
     public static async Task<List<RelayUrl>> ConnectAsync(Client client, List<RelayUrl> relays, TimeSpan timeout, ILogger logger)
     {
         foreach (var relay in relays)

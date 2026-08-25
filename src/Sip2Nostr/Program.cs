@@ -64,9 +64,6 @@ try
         Log.Information("Writing this run's log to {RunLogPath}.", runLogPath);
     }
 
-    // Printed regardless of [nostr].enabled - bridge_nsec is always
-    // required, and knowing this npub is what lets someone add the
-    // bridge as a contact in their receiving client (see README).
     var bridgeNpub = Keys.Parse(config.Nostr.BridgeNsec).PublicKey().ToBech32();
     Log.Information("Bridge Nostr identity: {BridgeNpub}", bridgeNpub);
 

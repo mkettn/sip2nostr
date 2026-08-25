@@ -111,11 +111,35 @@ VoicemailSender then, independently of any particular call:
     signal. A signaling exception (e.g. no relay reachable) triggers the
     same fallback as a timeout, not just an explicit timeout - the point
     is "this call is not going to be answered over Nostr", not literally
-    just the clock.
+    just the clock. After `Task.WhenAny` returns, the code checks
+    `hangupTcs.Task.IsCompleted` before anything else: cancellation
+    callbacks on a `CancellationToken` run LIFO, and the ring-timeout
+    delay's own internal registration is created after `ctReg` (the
+    shutdown hookup), so on shutdown it can observe cancellation - and
+    so complete - before `ctReg`'s callback does, which would otherwise
+    misreport a shutdown as a genuine ring timeout. Checking `answerTask`
+    itself next (rather than trusting which task `WhenAny` reported as
+    the winner) then gives a genuine answer priority if it lands at the
+    same moment the ring timeout elapses.
+  - `RunVoicemailAsync`'s `recordingActive` flag is read on SIPSorcery's
+    RTP receive thread and written on the call-handling thread; both
+    sides go through the same lock, since without one there's no
+    guarantee the receive thread ever observes the write.
+  - When a call *was* answered over Nostr, ending it also calls
+    `ua.Hangup()` rather than a plain session `Close()`: `hangupTcs` also
+    completes on shutdown, and at that point the call may still be
+    actively bridged (unlike the caller-hung-up case, where `Hangup()`
+    is already a safe no-op per `IsCallActive`) - so this is what
+    actually sends a BYE on shutdown, matching every other path in
+    `HandleIncomingCallAsync`.
   - `BridgeAudio` gained a `forwardSipToWebRtc` gate on the SIP-leg →
     WebRTC-leg direction only, so falling back to voicemail can stop
     relaying into the (now closed) `RTCPeerConnection` without needing to
-    unsubscribe an anonymous event handler.
+    unsubscribe an anonymous event handler. The other direction needs no
+    gate - it naturally stops once `pc.close()` stops firing its own
+    `OnRtpPacketReceived`. The flag is written on the call-handling
+    thread and read on SIPSorcery's RTP receive thread, hence
+    `Volatile`.
   - `RunVoicemailAsync` reuses the **already-answered SIP `RTPSession`**
     directly instead of building a second media session: a manually wired
     `SIPSorcery.Media.AudioExtrasSource` plays the greeting/tone
@@ -172,7 +196,17 @@ VoicemailSender then, independently of any particular call:
     `NostrSignalingClient` - so its own relay pool, and `TryConnect`'s
     reachability result, is never polluted by relays something else
     already had connected), sends the whole batch, then shuts that
-    `Client` down and goes back to waiting.
+    `Client` down and goes back to waiting. `SendBatchAsync`'s own setup
+    (parsing keys/relays, connecting, shutting the `Client` down) is
+    guarded separately from each individual send (`SendOneSafeAsync`
+    guards those) - without it, a failure there (a bad relay URL, a
+    connect exception) would escape to `RunAsync`'s outer catch and
+    permanently stop the worker for the rest of the process, silently
+    dropping every job enqueued afterwards despite each still being
+    logged as "queued". A batch that fails this way is not retried
+    automatically - only the worker itself survives, ready for the next
+    `Enqueue` - though a `VoicemailAudioJob`'s WAV stays safe on disk
+    regardless; a `MissedCallNoticeJob` has nothing else backing it up.
   - `BuildMissedCallNoticeContent` builds a short plain-text DM naming
     `CallerNumber`; no encoding, no size check needed - it's well under
     any NIP-17 budget.
@@ -193,7 +227,11 @@ VoicemailSender then, independently of any particular call:
     whole feature working in a self-contained single-file binary with
     nothing to install on the host, and there's no intermediate `.ogg`
     file on disk at all (`OpusOggWriteStream` writes straight into a
-    `MemoryStream`). The encoded size is checked against
+    `MemoryStream`). `OpusOggWriteStream` deliberately has no `using` -
+    it isn't `IDisposable`; its `Finish()` is what pads the trailing
+    frame, writes the end-of-stream page, and flushes, and `leaveOpen`
+    keeps the `MemoryStream` readable afterwards. The encoded size is
+    checked against
     `VoicemailBudget.MaxAudioBytes` before anything is sent - see Blind
     spots below - throwing rather than attempting a send that can only
     fail deep inside NIP-44 encryption or at the relay. Then
@@ -255,8 +293,10 @@ VoicemailSender then, independently of any particular call:
     bytes/sec against a naive estimate of 1,000 - a 30s recording came
     out to ~31.8 KB, over budget despite "fitting" the naive math. 10%
     of `MaxAudioBytes` is reserved for that overhead plus slack for
-    `CallerNumber` (bounded, but still variable-length) eating into the
-    fixed rumor-overhead assumed above, giving `MaxRecordingSeconds` =
+    `CallerNumber` (bounded by `PhoneNumberNormalizer` at 32 digits -
+    generous headroom over E.164's 15-digit max, but still enough that
+    an unbounded, possibly malicious From-header can't eat arbitrarily
+    into the fixed rumor-overhead assumed above), giving `MaxRecordingSeconds` =
     27 at the current 8 kbps encoding; `ConfigLoader` rejects a
     configured `max_recording_seconds` above that at startup (see
     Implementation above). The shipped default (`max_recording_seconds =
@@ -286,10 +326,10 @@ VoicemailSender then, independently of any particular call:
   currently supported in Ogg streams")`, confirmed by reading its
   source). Enabling `IOpusEncoder.UseDTX` would make every encode throw,
   and with no WAV fallback (see above) that means nothing gets sent at
-  all - the opposite of the goal - so it's deliberately left off (see
-  the comment in `VoicemailSender.EncodeOpusOgg`). Revisiting this needs
-  either a different (DTX-aware) Ogg writer or hand-rolling the Ogg
-  container framing to tolerate the granule-position gaps DTX produces.
+  all - the opposite of the goal - so it's deliberately left off.
+  Revisiting this needs either a different (DTX-aware) Ogg writer or
+  hand-rolling the Ogg container framing to tolerate the
+  granule-position gaps DTX produces.
 - **No silence/VAD trimming or beep tone.** Recording starts immediately
   after the greeting/tone finishes and runs for the full
   `max_recording_seconds` (or until hangup) regardless of whether the

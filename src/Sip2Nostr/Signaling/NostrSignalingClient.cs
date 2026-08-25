@@ -98,12 +98,7 @@ public sealed class NostrSignalingClient : IAsyncDisposable
     public Task<EventId> SendIceCandidateAsync(IceCandidatePayload candidate) =>
         PublishAsync(CallSignalKinds.IceCandidate, JsonSerializer.Serialize(candidate));
 
-    // The bridge is always the caller in NIP-AC terms (it originates the
-    // offer), so giving up on an unanswered call is a Hangup, not a
-    // Reject - Reject is the callee's decline signal, which a receiving
-    // client (e.g. NosCall) has no reason to act on since it never sent
-    // it. Using the wrong kind here means the ringing device just keeps
-    // ringing.
+    // Hangup, not Reject - see docs/voicemail.md.
     public Task<EventId> SendHangupAsync(string reason) =>
         PublishAsync(CallSignalKinds.Hangup, reason);
 

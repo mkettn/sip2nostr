@@ -3,11 +3,9 @@ using Serilog;
 
 namespace Sip2Nostr.Signaling;
 
-// Shared by NostrSignalingClient (NIP-AC signaling) and VoicemailSender
-// (NIP-17 DMs): a relay rejects an event with `OK: false` over an
-// otherwise-healthy connection, which doesn't throw - a caller that
-// discards SendEventOutput would report a rejected publish (e.g. a
-// voicemail DM too large for a relay's max event size) as a success.
+// A relay rejects an event with `OK: false` over an otherwise-healthy
+// connection, which doesn't throw - discarding SendEventOutput would
+// report a rejected publish as a success.
 internal static class PublishOutcome
 {
     public static void ThrowIfFailed(ILogger logger, string what, SendEventOutput output)

@@ -89,13 +89,7 @@ public sealed class CallBridge(
             "Created WebRTC peer connection with {IceServerCount} ICE server(s).",
             rtcConfig.iceServers.Count);
 
-        // Gates the SIP-leg -> WebRTC-leg forwarding direction only; it's
-        // switched off if the call falls back to voicemail below, so a late
-        // caller-side RTP packet never gets handed to a closed peer
-        // connection. The other direction needs no gate: it naturally stops
-        // once pc.close() below stops firing its OnRtpPacketReceived event.
-        // Volatile: the write happens on this async method's thread, the
-        // read happens on SIPSorcery's RTP receive thread.
+        // See docs/voicemail.md for why this gate (and Volatile) exists.
         var forwardToWebRtc = true;
         BridgeAudio(sipMediaSession, pc, () => Volatile.Read(ref forwardToWebRtc));
 
@@ -160,14 +154,8 @@ public sealed class CallBridge(
                 : new Task[] { answerTask, hangupTcs.Task };
             await Task.WhenAny(waitTasks);
 
-            // hangupTcs also completes on shutdown (ctReg above). Checking
-            // it's completed - rather than trusting which task Task.WhenAny
-            // happened to report as the winner - avoids a race: cancellation
-            // callbacks on a token run LIFO, and ringTimeoutTask's own
-            // internal registration on ct is created after ctReg above, so
-            // on shutdown it can observe cancellation (and so complete)
-            // before ctReg's callback runs, which would otherwise misreport
-            // a shutdown as a genuine ring timeout.
+            // See docs/voicemail.md for why this order (hangupTcs, then
+            // answerTask) matters - it's not just "whichever WhenAny picked".
             if (hangupTcs.Task.IsCompleted)
             {
                 logger.Information("Call ended before a WebRTC SDP answer arrived; closing media sessions.");
@@ -176,14 +164,6 @@ public sealed class CallBridge(
                 return;
             }
 
-            // Checking answerTask itself, rather than ringTimeoutTask, gives
-            // a genuine answer priority if it lands at the same moment the
-            // ring timeout elapses - Task.WhenAny only guarantees *a* task
-            // completed, not which one "should" win a near-simultaneous
-            // race. If answerTask hasn't completed here, hangupTcs hasn't
-            // either (checked above, and it shares ct with answerTask's own
-            // cancellation registration), so ringTimeoutTask is the only
-            // remaining task that could have completed.
             if (answerTask.IsCompleted)
             {
                 var answerSdp = await answerTask;
@@ -215,19 +195,10 @@ public sealed class CallBridge(
             await hangupTcs.Task;
             logger.Information("Call ended; closing media sessions.");
             pc.close();
-            // ua.Hangup() rather than a plain Close(): hangupTcs also
-            // completes on shutdown, and at that point the call may still
-            // be actively bridged (unlike the caller-hung-up case, where
-            // this is already a safe no-op per IsCallActive) - so this is
-            // what actually sends a BYE in that case, matching every other
-            // path in this method.
             ua.Hangup();
             return;
         }
 
-        // No WebRTC answer, by timeout or by a signaling failure - stop
-        // trying to bridge to the (now closed) peer connection and either
-        // record a voicemail or just leave the call connected to silence.
         Volatile.Write(ref forwardToWebRtc, false);
         pc.close();
         await SendHangupSafeAsync(signaling);
@@ -246,34 +217,17 @@ public sealed class CallBridge(
         }
         catch (Exception exception)
         {
-            // RunVoicemailAsync only enqueues a job on its own success
-            // paths (the early returns and the final recording-finished
-            // path each enqueue exactly one) - if it throws instead (a
-            // bad greeting_sound path, a disk error saving the
-            // recording), none of those run, and nothing gets enqueued
-            // at all. That would silently drop exactly the caller this
-            // notice feature exists for, so send one here instead of
-            // letting the failure propagate to the generic per-call
-            // catch in BridgeService, which only logs.
+            // See docs/voicemail.md - a RunVoicemailAsync failure still
+            // needs to notify target_npub, not just log.
             logger.Error(exception, "Voicemail recording failed for call {CallId}; sending a missed-call notice instead.", callId);
             voicemailSender.Enqueue(new MissedCallNoticeJob(callerNumber, callId));
         }
         finally
         {
-            // Ends the SIP dialog (BYE) and closes the media session -
-            // ua.Hangup() no-ops safely if the caller already hung up
-            // during the greeting/recording (SIPUserAgent.Hangup() checks
-            // IsCallActive). Always runs, even if RunVoicemailAsync threw
-            // (e.g. a bad greeting_sound path, or a disk error saving the
-            // recording), so a failure there can't leak the RTP session -
-            // and the caller, whose max_recording_seconds elapsed, is
-            // actually disconnected instead of left on a silent call.
             ua.Hangup();
         }
     }
 
-    // The bridge originated this call (it's the NIP-AC caller), so giving
-    // up on it is a Hangup, not a Reject - see NostrSignalingClient.
     private async Task SendHangupSafeAsync(NostrSignalingClient signaling)
     {
         try
@@ -287,18 +241,8 @@ public sealed class CallBridge(
         }
     }
 
-    // Plays the configured greeting once (or a short tone if none is
-    // configured), then records the caller's audio - captured from the
-    // already-answered SIP RTP session directly, the same way BridgeAudio
-    // relays it when a WebRTC leg is present - for up to
-    // [voicemail].max_recording_seconds or until the caller hangs up,
-    // whichever comes first. See docs/voicemail.md.
-    //
-    // Exactly one job is ever enqueued on voicemailSender per call: a
-    // MissedCallNoticeJob if nothing worth sending was recorded (caller
-    // hung up during the greeting/tone, or the recording was too short),
-    // otherwise a VoicemailAudioJob - never both, so target_npub gets a
-    // single DM per missed call either way.
+    // See docs/voicemail.md for the full flow and the exactly-one-job
+    // guarantee.
     private async Task RunVoicemailAsync(
         RTPSession sipMediaSession,
         SDPWellKnownMediaFormatsEnum selectedAudioFormat,
@@ -314,10 +258,6 @@ public sealed class CallBridge(
         var recordedSamples = new List<short>();
         var recordingActive = false;
 
-        // recordingActive is read and written under recordingLock on both
-        // sides - it's read on SIPSorcery's RTP receive thread and written
-        // on this async method's thread, so without a shared lock there's
-        // no guarantee the receive thread ever observes the write.
         sipMediaSession.OnRtpPacketReceived += (_, media, pkt) =>
         {
             if (media != SDPMediaTypesEnum.audio)
@@ -423,10 +363,6 @@ public sealed class CallBridge(
         voicemailSender.Enqueue(new VoicemailAudioJob(wavPath, sampleRate, durationSeconds, callerNumber, callId));
     }
 
-    // Just the durable local write - encoding and sending happen later,
-    // off this call's critical path, in VoicemailSender. Always saved
-    // regardless of what happens after, so a delivery failure never loses
-    // the recording.
     private async Task<string> SaveRecordingAsync(short[] samples, int sampleRate, string callId)
     {
         var wavBytes = WavEncoder.Encode(samples, sampleRate);
@@ -454,10 +390,7 @@ public sealed class CallBridge(
         }
     }
 
-    // forwardSipToWebRtc gates only the SIP-leg -> WebRTC-leg direction, so
-    // a caller falling back to voicemail can be switched off this relay
-    // without also having to unhook the lambda below (event handlers can't
-    // be removed once subscribed as an anonymous delegate).
+    // See docs/voicemail.md for why forwardSipToWebRtc exists.
     private static void BridgeAudio(RTPSession sipSide, RTPSession webRtcSide, Func<bool> forwardSipToWebRtc)
     {
         sipSide.OnRtpPacketReceived += (_, media, pkt) =>

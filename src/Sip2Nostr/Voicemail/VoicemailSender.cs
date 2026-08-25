@@ -12,25 +12,7 @@ using Sip2Nostr.Sip;
 namespace Sip2Nostr.Voicemail;
 
 // Background worker that owns delivery of missed-call notices and
-// recorded voicemails (see SendJob), decoupled from the call that
-// produced them. CallBridge only ever enqueues a job and moves on - a
-// call is never held up waiting on a relay connection, Opus encoding, or
-// a slow publish, and the SIP dialog is torn down (BYE) right after the
-// recording finishes rather than after the Nostr send.
-//
-// This also means no DM-relay connection is held open between sends:
-// the worker wakes on a non-empty queue, connects once, drains everything
-// queued at that point over that one connection (a backlog of several
-// jobs costs one connect, not one per job), then disconnects and goes
-// back to waiting. One instance is shared across every call for the life
-// of the process - see BridgeService.
-//
-// Deliberately its own Client per batch, separate from the per-call
-// NostrSignalingClient's pool: that keeps this worker's relay set (
-// dm_relays, or [nostr].relays as a fallback) fully decoupled from
-// whatever the in-progress call's signaling relays happen to be, and
-// means TryConnect's reachability result is never polluted by relays
-// something else already had connected.
+// recorded voicemails - see docs/voicemail.md for the full flow.
 public sealed class VoicemailSender : IAsyncDisposable
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
@@ -51,9 +33,6 @@ public sealed class VoicemailSender : IAsyncDisposable
         _worker = Task.Run(() => RunAsync(_stopCts.Token));
     }
 
-    // Fire-and-forget by design: neither a missed-call notice nor a
-    // recorded voicemail should ever block on delivery. TryWrite never
-    // blocks or fails on an unbounded channel.
     public void Enqueue(SendJob job)
     {
         if (job is VoicemailAudioJob audio)
@@ -85,28 +64,15 @@ public sealed class VoicemailSender : IAsyncDisposable
 
                 if (batch.Count > 0)
                 {
-                    // Guards just this batch: SendBatchAsync's own setup
-                    // (parsing keys/relays, connecting, shutting the Client
-                    // down) isn't otherwise wrapped the way SendOneSafeAsync
-                    // guards each individual send, and an unhandled
-                    // exception here would otherwise escape to the catch
-                    // below and permanently stop the worker for the rest of
-                    // the process - silently dropping every job enqueued
-                    // afterwards despite them still being logged as
-                    // "queued".
+                    // Guards just this batch, so a failure here (e.g. a bad
+                    // relay URL) can't permanently stop the worker - see
+                    // docs/voicemail.md.
                     try
                     {
                         await SendBatchAsync(batch, ct).ConfigureAwait(false);
                     }
                     catch (Exception exception)
                     {
-                        // The batch is already drained from the channel by
-                        // this point, so these specific jobs will not be
-                        // retried automatically - only the worker itself
-                        // survives, ready for the next Enqueue. Any
-                        // voicemail recordings in the batch are still safe
-                        // on disk regardless; a missed-call notice has
-                        // nothing else backing it up.
                         _logger.Error(
                             exception,
                             "Failed to send a batch of {Count} job(s); they will not be retried automatically.",
@@ -181,12 +147,6 @@ public sealed class VoicemailSender : IAsyncDisposable
                 _ => throw new NotSupportedException($"Unknown send job type {job.GetType()}."),
             };
 
-            // Targets connectedRelays - the subset of dm_relays (or
-            // [nostr].relays as a fallback) just verified reachable above,
-            // not the full configured list - rather than Nostr.Sdk's own
-            // separate NIP-17 relay-discovery logic via plain
-            // SendPrivateMsg, which could resolve to a different relay set
-            // entirely.
             var output = await client.SendPrivateMsgTo(connectedRelays, targetPubkey, content, tags);
             PublishOutcome.ThrowIfFailed(_logger, description, output);
 
@@ -227,26 +187,14 @@ public sealed class VoicemailSender : IAsyncDisposable
         return (content, tags, $"voicemail ({job.DurationSeconds}s, {audioBytes.Length} bytes, {mimeType})");
     }
 
-    // No WAV fallback: raw 8kHz 16-bit mono WAV runs 16,000 bytes/sec, so
-    // MaxAudioBytes (30,400) only ever fits a 1.0-1.9s WAV, and
-    // recordings under 1.0s are already dropped before this is called
-    // (see CallBridge.RunVoicemailAsync) - a WAV fallback could never
-    // actually succeed for a real voicemail, only fail later inside
-    // SendPrivateMsgTo instead of here. If Opus encoding fails, the
-    // caller's catch logs the WavPath and nothing is sent - the
-    // recording is still safe on disk either way.
+    // No WAV fallback if Opus encoding fails - see docs/voicemail.md.
     private async Task<(byte[] AudioBytes, string MimeType)> LoadAudioAsync(VoicemailAudioJob job)
     {
         var wavBytes = await File.ReadAllBytesAsync(job.WavPath);
         var audioBytes = EncodeOpusOgg(wavBytes, job.SampleRate);
 
-        // MaxRecordingSeconds is only a heuristic ceiling on the
-        // *configured* recording length (see VoicemailBudget) - this is
-        // the actual enforcement, against the real encoded size, so a
-        // recording that slips past the heuristic (container overhead,
-        // encoder overshoot, a long caller number) fails loudly here
-        // instead of inside SendPrivateMsgTo as an opaque encryption or
-        // relay error.
+        // The real enforcement against encoded size - MaxRecordingSeconds
+        // is only a heuristic ceiling on the configured value.
         if (audioBytes.Length > VoicemailBudget.MaxAudioBytes)
         {
             throw new InvalidOperationException(
@@ -256,10 +204,6 @@ public sealed class VoicemailSender : IAsyncDisposable
         return (audioBytes, "audio/ogg");
     }
 
-    // Re-encodes to Opus/OGG entirely in-process via Concentus (a pure
-    // C# port of libopus) and Concentus.Oggfile (writes the Ogg
-    // container around the encoded packets) - no external process, no
-    // host dependency on ffmpeg being installed.
     private byte[] EncodeOpusOgg(byte[] wavBytes, int sampleRate)
     {
         var samples = WavEncoder.Decode(wavBytes);
@@ -267,24 +211,14 @@ public sealed class VoicemailSender : IAsyncDisposable
         using var encoder = OpusCodecFactory.CreateEncoder(sampleRate, 1, OpusApplication.OPUS_APPLICATION_VOIP);
         encoder.Bitrate = VoicemailBudget.OpusBitrateBps;
 
-        // Without this, Concentus (like libopus) defaults to VBR,
-        // where Bitrate is a target the encoder can exceed on
-        // complex input - which would make it a false floor for the
-        // size budget below. CBR bounds the encoded size close to
-        // Bitrate regardless of content (verified empirically: see
-        // VoicemailBudget's derivation of MaxRecordingSeconds).
+        // CBR, not VBR (the Concentus/libopus default) - see docs/voicemail.md.
         encoder.UseVBR = false;
 
-        // DTX deliberately not enabled - see docs/voicemail.md blind
-        // spots for why.
+        // DTX deliberately not enabled - see docs/voicemail.md.
 
         using var outputStream = new MemoryStream();
 
-        // OpusOggWriteStream deliberately isn't IDisposable - Finish()
-        // (below) is what pads the trailing frame, writes the
-        // end-of-stream page, and flushes; leaveOpen keeps
-        // outputStream open afterwards so ToArray() below can still
-        // read it.
+        // No using: OpusOggWriteStream isn't IDisposable - see docs/voicemail.md.
         var oggWriter = new OpusOggWriteStream(encoder, outputStream, new OpusTags(), sampleRate, OpusResamplerQuality, leaveOpen: true);
         oggWriter.WriteSamples(samples, 0, samples.Length);
         oggWriter.Finish();

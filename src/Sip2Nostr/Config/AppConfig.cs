@@ -131,10 +131,7 @@ public sealed class VoicemailConfig
     [property: TomlPropertyName("ring_timeout_seconds")]
     public int RingTimeoutSeconds { get; init; } = 20;
 
-    // Defaults to Shared.VoicemailBudget.MaxRecordingSeconds - the
-    // largest value guaranteed to still fit in a NIP-17 DM at the
-    // current Opus bitrate (see docs/voicemail.md); ConfigLoader rejects
-    // anything larger at startup.
+    // See docs/voicemail.md - ConfigLoader rejects anything larger.
     [property: TomlPropertyName("max_recording_seconds")]
     public int MaxRecordingSeconds { get; init; } = Sip2Nostr.Shared.VoicemailBudget.MaxRecordingSeconds;
 

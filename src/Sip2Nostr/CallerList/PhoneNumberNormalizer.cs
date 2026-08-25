@@ -12,12 +12,7 @@ namespace Sip2Nostr.CallerList;
 // marker, which silently broke blacklist/whitelist matching.
 public static class PhoneNumberNormalizer
 {
-    // E.164 numbers top out at 15 digits; this is generous headroom for
-    // odd trunk formatting while still bounding the result. Without a
-    // cap, a malformed or malicious From-header could produce an
-    // arbitrarily long digit string that (via CallBridge.callerNumber)
-    // ends up in the voicemail DM's rumor prose, eating into the fixed
-    // overhead VoicemailBudget assumes for that field.
+    // See docs/voicemail.md for why this cap exists.
     private const int MaxDigits = 32;
 
     public static string Normalize(string rawNumber)

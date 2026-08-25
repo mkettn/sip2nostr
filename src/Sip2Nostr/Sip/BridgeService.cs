@@ -75,10 +75,6 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
         var callerListGate = new CallerListGate(
             [new ConfigCallerListProvider(config.CallerList, logger.ForContext<ConfigCallerListProvider>())],
             logger.ForContext<CallerListGate>());
-        // One shared, long-lived worker for the whole process - not
-        // per-call like NostrSignalingClient. It connects to the DM
-        // relay(s) only when it wakes up to a queued voicemail, and
-        // disconnects once the queue drains. See Voicemail/VoicemailSender.cs.
         _voicemailSender = new VoicemailSender(config.Nostr, config.Voicemail, logger.ForContext<VoicemailSender>());
         _callBridge = new CallBridge(
             config.WebRtc,

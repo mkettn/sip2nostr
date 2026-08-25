@@ -4,10 +4,6 @@ namespace Sip2Nostr.Sip;
 // player to read a mono voicemail recording. No extension chunks.
 public static class WavEncoder
 {
-    // Public and used by both Encode and Decode (and by VoicemailSender,
-    // which needs to recover the PCM samples this class wrote) so the two
-    // never drift apart - this is the whole header with no chunks beyond
-    // fmt/data, always exactly this many bytes for anything Encode wrote.
     public const int HeaderLength = 44;
 
     private const int BitsPerSample = 16;
@@ -43,12 +39,7 @@ public static class WavEncoder
         return stream.ToArray();
     }
 
-    // The counterpart to Encode - recovers the PCM samples from a WAV
-    // buffer this class produced. Not a general WAV parser: it trusts the
-    // header is exactly HeaderLength bytes of the layout Encode writes,
-    // which is true for anything that came from Encode (the only producer
-    // in this codebase), and throws rather than silently misreading a
-    // shorter/foreign buffer as audio.
+    // Not a general WAV parser - only decodes Encode's own output.
     public static short[] Decode(byte[] wav)
     {
         if (wav.Length < HeaderLength)

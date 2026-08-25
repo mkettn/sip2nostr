@@ -20,12 +20,7 @@ public static class ConfigLoader
         return config;
     }
 
-    // Fails fast at startup instead of surfacing as a confusing runtime
-    // symptom mid-call - an unchecked non-positive value here turns into
-    // an ArgumentOutOfRangeException from Task.Delay deep inside
-    // CallBridge, which the broad catch around Nostr signaling reports as
-    // "signaling failed", silently sending every call straight to
-    // voicemail with the wrong diagnosis.
+    // See docs/voicemail.md for why these fail fast here.
     private static void Validate(AppConfig config)
     {
         if (config.Voicemail.RingTimeoutSeconds <= 0)
@@ -40,11 +35,6 @@ public static class ConfigLoader
                 $"[voicemail].max_recording_seconds must be greater than 0, got {config.Voicemail.MaxRecordingSeconds}.");
         }
 
-        // A voicemail longer than this can never actually be delivered -
-        // NIP-17's double NIP-44 encryption caps how much encoded audio
-        // fits in one DM (see Shared/VoicemailBudget.cs) - so reject it
-        // at startup instead of only finding out after a caller has
-        // already left an undeliverable message.
         if (config.Voicemail.MaxRecordingSeconds > VoicemailBudget.MaxRecordingSeconds)
         {
             throw new InvalidDataException(
