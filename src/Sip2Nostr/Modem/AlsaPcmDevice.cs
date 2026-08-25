@@ -31,7 +31,20 @@ internal sealed class AlsaPcmDevice : IDisposable
         _deviceName = deviceName;
         _logger = logger;
         _capture = Open(deviceName, NativeMethods.SndPcmStreamCapture);
-        _playback = Open(deviceName, NativeMethods.SndPcmStreamPlayback);
+        try
+        {
+            _playback = Open(deviceName, NativeMethods.SndPcmStreamPlayback);
+        }
+        catch
+        {
+            // Otherwise the capture handle leaks (no finalizer, Dispose
+            // never runs since construction never completed), and a later
+            // retry on the same device hits -EBUSY against the leaked
+            // handle - turning one transient open failure into a
+            // permanently broken modem source.
+            NativeMethods.snd_pcm_close(_capture);
+            throw;
+        }
     }
 
     private static nint Open(string deviceName, int stream)
@@ -56,20 +69,32 @@ internal sealed class AlsaPcmDevice : IDisposable
         return handle;
     }
 
-    // Blocking read of one frame's worth of mono 16-bit samples. Returns an
-    // all-zero (silence) frame on a recoverable error (xrun/suspend) rather
-    // than throwing, since a single lost frame shouldn't tear down the call.
+    // Blocking read of one frame's worth of mono 16-bit samples. Loops
+    // until the full frame is transferred - snd_pcm_readi can return fewer
+    // frames than requested (e.g. on signal interruption) even in blocking
+    // mode, and treating a partial transfer as a complete one would present
+    // whatever garbage is left in the tail of the buffer as audio. Returns
+    // an all-zero (silence) frame on a recoverable error (xrun/suspend)
+    // rather than throwing, since a single lost frame shouldn't tear down
+    // the call.
     public short[] Read()
     {
         var buffer = new short[FrameSamples];
         var handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
         try
         {
-            var framesRead = NativeMethods.snd_pcm_readi(_capture, handle.AddrOfPinnedObject(), (nuint)FrameSamples);
-            if (framesRead < 0)
+            var received = 0;
+            while (received < FrameSamples)
             {
-                RecoverOrThrow(_capture, (int)framesRead, "snd_pcm_readi");
-                return new short[FrameSamples];
+                var offset = IntPtr.Add(handle.AddrOfPinnedObject(), received * sizeof(short));
+                var framesRead = NativeMethods.snd_pcm_readi(_capture, offset, (nuint)(FrameSamples - received));
+                if (framesRead < 0)
+                {
+                    RecoverOrThrow(_capture, (int)framesRead, "snd_pcm_readi");
+                    return new short[FrameSamples];
+                }
+
+                received += (int)framesRead;
             }
 
             return buffer;
@@ -80,21 +105,43 @@ internal sealed class AlsaPcmDevice : IDisposable
         }
     }
 
+    // Loops until every sample is transferred - see Read() for why a
+    // partial snd_pcm_writei return can't just be treated as "done"; here
+    // that would silently drop the untransferred tail of the frame instead.
     public void Write(short[] samples)
     {
         var handle = GCHandle.Alloc(samples, GCHandleType.Pinned);
         try
         {
-            var framesWritten = NativeMethods.snd_pcm_writei(_playback, handle.AddrOfPinnedObject(), (nuint)samples.Length);
-            if (framesWritten < 0)
+            var sent = 0;
+            while (sent < samples.Length)
             {
-                RecoverOrThrow(_playback, (int)framesWritten, "snd_pcm_writei");
+                var offset = IntPtr.Add(handle.AddrOfPinnedObject(), sent * sizeof(short));
+                var framesWritten = NativeMethods.snd_pcm_writei(_playback, offset, (nuint)(samples.Length - sent));
+                if (framesWritten < 0)
+                {
+                    RecoverOrThrow(_playback, (int)framesWritten, "snd_pcm_writei");
+                    return;
+                }
+
+                sent += (int)framesWritten;
             }
         }
         finally
         {
             handle.Free();
         }
+    }
+
+    // Unblocks a thread currently inside a blocking snd_pcm_readi on the
+    // capture handle (the standard way to interrupt one from another
+    // thread - a cancellation token can't reach into libasound) so shutdown
+    // doesn't hang waiting for the capture loop to notice cancellation
+    // between reads. Best-effort: the capture handle is about to be closed
+    // regardless, so its return code isn't checked.
+    public void DropCapture()
+    {
+        NativeMethods.snd_pcm_drop(_capture);
     }
 
     private void RecoverOrThrow(nint pcm, int error, string operation)
@@ -166,6 +213,9 @@ internal sealed class AlsaPcmDevice : IDisposable
 
         [DllImport("libasound.so.2", CallingConvention = CallingConvention.Cdecl)]
         public static extern int snd_pcm_recover(nint pcm, int err, int silent);
+
+        [DllImport("libasound.so.2", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int snd_pcm_drop(nint pcm);
 
         [DllImport("libasound.so.2", CallingConvention = CallingConvention.Cdecl)]
         public static extern nint snd_strerror(int errnum);

@@ -16,6 +16,15 @@ public class AlsaPcmDeviceTests
     [Fact]
     public void OpenReadWriteClose_RoundTripsAgainstNullDevice()
     {
+        // P/Invokes libasound.so.2 directly - only present on Linux. Passing
+        // trivially here (rather than a hard failure) keeps `dotnet test` on
+        // macOS/Windows from failing on a library this project never ships
+        // for those platforms in the first place.
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
         using var device = new AlsaPcmDevice("null", Log.Logger);
 
         var frame = device.Read();
@@ -27,6 +36,24 @@ public class AlsaPcmDeviceTests
     [Fact]
     public void Constructor_ThrowsForNonexistentDevice()
     {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
         Assert.Throws<InvalidOperationException>(() => new AlsaPcmDevice("this-device-does-not-exist", Log.Logger));
+    }
+
+    [Fact]
+    public void DropCapture_DoesNotThrow()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        using var device = new AlsaPcmDevice("null", Log.Logger);
+
+        device.DropCapture();
     }
 }

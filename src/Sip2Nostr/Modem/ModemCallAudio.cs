@@ -89,6 +89,11 @@ internal sealed class ModemCallAudio : ICallAudio, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _captureCts.Cancel();
+        // Cancellation alone can leave the capture loop stuck: it only
+        // checks the token between iterations, but a blocking
+        // snd_pcm_readi doesn't observe it mid-call. Drop the capture
+        // stream to force that call to return immediately.
+        _alsa.DropCapture();
         try
         {
             await _captureLoop;
