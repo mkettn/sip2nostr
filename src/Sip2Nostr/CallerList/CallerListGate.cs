@@ -2,9 +2,9 @@ using Serilog;
 
 namespace Sip2Nostr.CallerList;
 
-// The single dependency CallBridge takes - it never sees a concrete
+// The single dependency SipCallSource takes - it never sees a concrete
 // ICallerListProvider, so wiring up an additional source later (CardDAV,
-// Google contacts) is purely a BridgeService construction-site change. Any
+// Google contacts) is purely a SipCallSource construction-site change. Any
 // provider denying blocks the call; otherwise it's allowed by default.
 public sealed class CallerListGate
 {

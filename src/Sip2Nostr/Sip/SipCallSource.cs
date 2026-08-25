@@ -2,38 +2,50 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using Serilog;
+using SIPSorcery.Net;
 using SIPSorcery.SIP;
 using SIPSorcery.SIP.App;
+using SIPSorceryMedia.Abstractions;
 using Sip2Nostr.CallerList;
 using Sip2Nostr.Config;
 using Sip2Nostr.Dns;
-using Sip2Nostr.Signaling;
-using Sip2Nostr.Voicemail;
+using Sip2Nostr.Hub;
 
 namespace Sip2Nostr.Sip;
 
-// Registers to the VoIP provider and dispatches inbound calls to CallBridge.
-// One REGISTER for the whole account (per README: [sip] carries a single
-// set of credentials for the trunk); [[lines]] are the DIDs that can ring
-// on it. In the MVP every line rings the same target_npub (no per-line
-// routing yet), so the matched line is only used for logging here.
-public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisposable
+// Registers to the VoIP provider and raises OnIncomingCall for CallHub to
+// route once a call is answered. One REGISTER for the whole account (per
+// README: [sip] carries a single set of credentials for the trunk);
+// [[lines]] are the DIDs that can ring on it. In the MVP every line rings
+// the same target_npub (no per-line routing yet), so the matched line is
+// only used for logging and for LocalTestAudioSink's per-line sound.
+public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSource, IAsyncDisposable
 {
     private const int RegistrationExpirySeconds = 3600;
     private const int RegistrationAttemptTimeoutSeconds = 20;
     private const int MaxRegisterAttemptsBeforeTemporaryFailure = 3;
 
+    private static readonly SDPWellKnownMediaFormatsEnum[] PreferredAudioFormats =
+    [
+        SDPWellKnownMediaFormatsEnum.PCMA,
+        SDPWellKnownMediaFormatsEnum.PCMU,
+    ];
+
     private readonly ConfiguredDnsResolver _dns = new(config.Dns);
     private readonly SIPTransport _sipTransport = new();
-    private CallBridge? _callBridge;
-    private VoicemailSender? _voicemailSender;
+    private readonly CallerListGate _callerListGate = new(
+        [new ConfigCallerListProvider(config.CallerList, logger.ForContext<ConfigCallerListProvider>())],
+        logger.ForContext<CallerListGate>());
     private SIPRegistrationUserAgent? _registration;
     private SIPUserAgent? _userAgent;
+    private IPAddress _localMediaAddress = IPAddress.Any;
     private bool _registerRequestSent;
     private bool _registerResponseReceived;
     private bool _hasLoggedOperational;
     private string? _contactHost;
     private readonly ConcurrentDictionary<string, byte> _loggedInviteCallIds = new();
+
+    public event Func<Call, Task>? OnIncomingCall;
 
     public async Task StartAsync(CancellationToken ct)
     {
@@ -59,9 +71,9 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
         logger.Information("Resolving SIP provider host {ProviderHost}.", config.Sip.ProviderHost);
         var providerIp = await _dns.ResolveAsync(config.Sip.ProviderHost, ct);
         var providerEndpoint = new SIPEndPoint(SIPProtocolsEnum.udp, providerIp, 5060);
-        var localMediaAddress = GetLocalAddressFor(providerIp);
+        _localMediaAddress = GetLocalAddressFor(providerIp);
         _contactHost = string.IsNullOrWhiteSpace(config.Sip.ContactHost)
-            ? localMediaAddress.ToString()
+            ? _localMediaAddress.ToString()
             : config.Sip.ContactHost;
         logger.Information("Using SIP Contact host {ContactHost}.", _contactHost);
         var registrar = $"{config.Sip.ProviderHost}:5060";
@@ -69,28 +81,9 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
             "Resolved SIP provider {ProviderHost} to {ProviderEndpoint}; local media address is {LocalMediaAddress}; registrar URI host remains {Registrar}.",
             config.Sip.ProviderHost,
             providerEndpoint,
-            localMediaAddress,
+            _localMediaAddress,
             registrar);
         InstallSipUriResolver(providerEndpoint);
-        var callerListGate = new CallerListGate(
-            [new ConfigCallerListProvider(config.CallerList, logger.ForContext<ConfigCallerListProvider>())],
-            logger.ForContext<CallerListGate>());
-        _voicemailSender = new VoicemailSender(config.Nostr, config.Voicemail, logger.ForContext<VoicemailSender>());
-        _callBridge = new CallBridge(
-            config.WebRtc,
-            config.Nostr,
-            config.Voicemail,
-            _voicemailSender,
-            config.ConfigDirectory,
-            localMediaAddress,
-            config.Sip.RtpPort,
-            callerListGate,
-            logger.ForContext<CallBridge>());
-
-        if (config.Nostr.Enabled)
-        {
-            _ = CheckNostrConnectivitySafeAsync();
-        }
 
         _userAgent = new SIPUserAgent(_sipTransport, null, true, null);
         _userAgent.OnIncomingCall += (ua, req) => HandleIncomingCall(ua, req, ct);
@@ -212,7 +205,7 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
     {
         try
         {
-            await _callBridge!.HandleIncomingCallAsync(ua, inviteRequest, matchedLine, ct);
+            await AcceptAndRouteCallAsync(ua, inviteRequest, matchedLine, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -224,19 +217,84 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
         }
     }
 
-    // Runs at startup, in parallel with SIP registration, so relay
-    // reachability is known up front instead of only surfacing when the
-    // first call tries to publish. Failures here are diagnostic only -
-    // NostrSignalingClient.ConnectAsync connects fresh per call regardless.
-    private async Task CheckNostrConnectivitySafeAsync()
+    // Answers the SIP/RTP leg and hands the resulting Call to CallHub - see
+    // Call.cs for why there's no separate "answer" step at the hub level.
+    private async Task AcceptAndRouteCallAsync(
+        SIPUserAgent ua,
+        SIPRequest inviteRequest,
+        LineConfig? matchedLine,
+        CancellationToken ct)
     {
-        try
+        logger.Information("Accepting SIP call for {RequestUri}.", inviteRequest.URI);
+        LogInviteSdp(inviteRequest);
+        var selectedAudioFormat = SelectOfferedG711Format(inviteRequest);
+        logger.Information("Selected SIP audio codec {AudioCodec} for the SDP answer.", selectedAudioFormat);
+        var uas = ua.AcceptCall(inviteRequest);
+        uas.ClientTransaction.OnAckReceived += (_, _, _, ackRequest) =>
         {
-            await NostrSignalingClient.CheckConnectivityAsync(config.Nostr, logger.ForContext<NostrSignalingClient>());
+            logger.Information(
+                "Received SIP ACK for answered INVITE; call-id: {CallId}; request URI: {RequestUri}; to tag: {ToTag}; from tag: {FromTag}.",
+                ackRequest.Header.CallId,
+                ackRequest.URI,
+                ackRequest.Header.To?.ToTag,
+                ackRequest.Header.From?.FromTag);
+            return Task.FromResult(SocketError.Success);
+        };
+        logger.Information("Accepted SIP INVITE with local transaction tag {LocalTag}.", uas.ClientTransaction.LocalTag);
+
+        var rawCallerNumber = inviteRequest.Header.From?.FromURI?.User ?? string.Empty;
+        var callerNumber = PhoneNumberNormalizer.Normalize(rawCallerNumber);
+        logger.Information(
+            "Caller number normalized to {CallerNumber} (raw: {RawCallerNumber}).",
+            callerNumber,
+            rawCallerNumber);
+
+        if (!await _callerListGate.IsAllowedAsync(callerNumber, ct))
+        {
+            logger.Information("Caller {CallerNumber} is not allowed to reach this line; rejecting.", callerNumber);
+            uas.Reject(SIPResponseStatusCodesEnum.Forbidden, null);
+            return;
         }
-        catch (Exception exception)
+
+        var sipMediaSession = new RTPSession(false, false, false);
+        sipMediaSession.addTrack(CreateAudioTrack(selectedAudioFormat, MediaStreamStatusEnum.SendRecv));
+
+        logger.Information("Answering SIP call.");
+        var answered = await ua.Answer(uas, sipMediaSession, null, _localMediaAddress);
+        LogFinalInviteResponse(uas);
+        if (!answered)
         {
-            logger.Warning(exception, "Nostr startup connectivity check failed unexpectedly.");
+            logger.Warning("SIP call answer failed; closing media session.");
+            sipMediaSession.Close("sip answer failed");
+            return;
+        }
+
+        var callId = Guid.NewGuid().ToString();
+        logger.Information("SIP call answered with call-id {CallId}.", callId);
+
+        // Wired up before OnIncomingCall is raised (not after) so a caller
+        // hangup while a sink is still working on the call (waiting for a
+        // WebRTC answer, recording voicemail) is observed promptly instead
+        // of only surfacing when the sink gives up on its own.
+        var hangupTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ua.OnCallHungup += _ => hangupTcs.TrySetResult();
+        using var ctReg = ct.Register(() => hangupTcs.TrySetResult());
+
+        var call = new Call(
+            callId,
+            callerNumber,
+            matchedLine?.Label,
+            new RtpSessionCallAudio(sipMediaSession, new AudioFormat(selectedAudioFormat)),
+            () =>
+            {
+                ua.Hangup();
+                return Task.CompletedTask;
+            },
+            hangupTcs.Task);
+
+        if (OnIncomingCall is not null)
+        {
+            await OnIncomingCall.Invoke(call);
         }
     }
 
@@ -246,11 +304,6 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
         _registration?.Stop(sendZeroExpiryRegister: true);
         _userAgent?.Close();
         _sipTransport.Shutdown();
-
-        if (_voicemailSender is not null)
-        {
-            await _voicemailSender.DisposeAsync();
-        }
     }
 
     private void InstallSipTraceLogging()
@@ -556,5 +609,76 @@ public sealed class BridgeService(AppConfig config, ILogger logger) : IAsyncDisp
         using var socket = new Socket(remoteAddress.AddressFamily, SocketType.Dgram, ProtocolType.Udp);
         socket.Connect(remoteAddress, 5060);
         return ((IPEndPoint)socket.LocalEndPoint!).Address;
+    }
+
+    private static SDPWellKnownMediaFormatsEnum SelectOfferedG711Format(SIPRequest inviteRequest)
+    {
+        var offeredPayloads = GetOfferedAudioPayloads(inviteRequest.Body);
+        foreach (var payload in offeredPayloads)
+        {
+            if (payload == "8")
+            {
+                return SDPWellKnownMediaFormatsEnum.PCMA;
+            }
+
+            if (payload == "0")
+            {
+                return SDPWellKnownMediaFormatsEnum.PCMU;
+            }
+        }
+
+        return PreferredAudioFormats[0];
+    }
+
+    private static IEnumerable<string> GetOfferedAudioPayloads(string? sdp)
+    {
+        if (string.IsNullOrWhiteSpace(sdp))
+        {
+            yield break;
+        }
+
+        foreach (var line in sdp.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!line.StartsWith("m=audio ", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            for (var index = 3; index < parts.Length; index++)
+            {
+                yield return parts[index];
+            }
+
+            yield break;
+        }
+    }
+
+    private static MediaStreamTrack CreateAudioTrack(
+        SDPWellKnownMediaFormatsEnum audioFormat,
+        MediaStreamStatusEnum streamStatus) =>
+        new(new AudioFormat(audioFormat), streamStatus);
+
+    private void LogFinalInviteResponse(SIPServerUserAgent uas)
+    {
+        var response = uas.ClientTransaction.TransactionFinalResponse;
+        if (response is null)
+        {
+            logger.Warning("SIP INVITE transaction has no final response to log after answer attempt.");
+            return;
+        }
+
+        logger.Information("Actual final SIP INVITE response:\n{SipResponse}", response.ToString().Trim());
+    }
+
+    private void LogInviteSdp(SIPRequest inviteRequest)
+    {
+        if (string.IsNullOrWhiteSpace(inviteRequest.Body))
+        {
+            logger.Warning("Incoming INVITE has no SDP body.");
+            return;
+        }
+
+        logger.Information("Incoming INVITE SDP offer:\n{SdpOffer}", inviteRequest.Body.Trim());
     }
 }

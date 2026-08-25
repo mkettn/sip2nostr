@@ -71,8 +71,9 @@ additional handshake step before the incoming-call UI appears.
   ephemeral keypair via `NostrSigner.Nip44Encrypt`, and publishes the outer
   event via `Client.SendEvent`. The receive path mirrors this in reverse
   and dispatches `answer`/`candidate` events to the waiting call.
-- `Sip/CallBridge.cs` — mints one `Guid.NewGuid()` call-id per inbound
-  call and passes it into `NostrSignalingClient`.
+- `Sip/SipCallSource.cs` — mints one `Guid.NewGuid()` call-id per inbound
+  call (`Call.CallId`). `Sinks/NosCallSink.cs` passes it into
+  `NostrSignalingClient`.
 
 The wrap/unwrap logic was first verified locally with a round-trip test
 (two throwaway keypairs, no network): build and sign an offer as the

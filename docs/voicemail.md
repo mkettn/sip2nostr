@@ -22,21 +22,31 @@ shares the same delivery code as the verified `VoicemailAudioJob` path.
 
 ## Flow
 
+Since the hub-architecture refactor (see `docs/hub-architecture.md`), the
+ring-timeout race lives in `NosCallSink` and the recording flow lives in
+`VoicemailSink` - two `ICallSink`s tried in order by `CallHub` for the same
+already-answered `Call`, rather than one function doing both.
+
 ```
- CallBridge.HandleIncomingCallAsync (Nostr enabled)
+ CallHub, routing a Call from SipCallSource (Nostr enabled)
       │
-      ├─ SIP call answered immediately, same as today
+      ├─ SIP call already answered by SipCallSource before CallHub sees it
+      │
+      ▼
+ NosCallSink.TryHandleAsync
       ├─ WebRTC offer sent over Nostr, same as today
       │
       ▼
  Wait for: Nostr answer | ring_timeout_seconds elapses | caller hangs up | signaling fails
       │
-      ├─ Nostr answers in time  → bridge audio, unchanged from today
-      ├─ Caller hangs up first  → tear down, unchanged from today
+      ├─ Nostr answers in time  → bridge audio, returns true (handled)
+      ├─ Caller hangs up first  → tear down, returns true (handled)
       │
-      └─ Timeout or signaling failure → voicemail fallback:
+      └─ Timeout or signaling failure → decline (return false); CallHub
+         offers the Call to the next configured sink, VoicemailSink:
            1. Close the WebRTC peer connection; the already-answered SIP
-              RTP session stays up and is reused directly.
+              leg's Call.Audio stays up and is reused directly - no new
+              media session is created.
            2. Send a NIP-AC `hangup` over Nostr so a ringing device (e.g.
               NosCall) stops ringing (best-effort; failure is logged, not
               fatal) - the bridge originated this call, so giving up on it
@@ -50,11 +60,13 @@ shares the same delivery code as the verified `VoicemailAudioJob` path.
            5. Save the recording as a WAV file under `recordings_dir`
               (always - this is the durability point, independent of
               whatever happens to the send afterward).
-           6. Hang up the SIP call (`ua.Hangup()`) - immediately, without
-              waiting on delivery. Always runs even if step 5 threw (e.g.
-              a bad `greeting_sound` path, a disk error), so a failure
-              there can't leave the caller on a silent, still-connected
-              call or leak the RTP session.
+           6. Return true (handled) - CallHub's own `finally` calls
+              `Call.HangupAsync` unconditionally once a sink is done, so
+              VoicemailSink doesn't need to hang up the SIP call itself.
+              This always runs even if step 5 threw (e.g. a bad
+              `greeting_sound` path, a disk error), so a failure there
+              can't leave the caller on a silent, still-connected call or
+              leak the RTP session.
            7. If the recording is long enough to be worth sending, enqueue
               a VoicemailAudioJob (the WAV path) on VoicemailSender and
               move on - encoding and delivery happen off this call's
@@ -63,11 +75,11 @@ shares the same delivery code as the verified `VoicemailAudioJob` path.
               instead - the same "exactly one job" rule as step 3.
            8. If RunVoicemailAsync throws instead of reaching step 7 (a
               bad greeting_sound path, a disk error saving the
-              recording), HandleIncomingCallAsync's own catch around the
-              call enqueues a MissedCallNoticeJob - so a misconfiguration
-              still notifies target_npub instead of silently dropping
-              the caller with nothing to show for it anywhere but a log
-              line.
+              recording), VoicemailSink.TryHandleAsync's own catch around
+              the call enqueues a MissedCallNoticeJob - so a
+              misconfiguration still notifies target_npub instead of
+              silently dropping the caller with nothing to show for it
+              anywhere but a log line.
 ```
 
 Exactly one job is enqueued per call that reaches the voicemail
@@ -108,61 +120,58 @@ VoicemailSender then, independently of any particular call:
 
 ## Implementation
 
-- `Sip/CallBridge.cs`:
-  - `HandleIncomingCallAsync` races the existing `WaitForAnswerAsync` Nostr
-    call against `Task.Delay(ring_timeout_seconds)` and the caller-hangup
-    signal. A signaling exception (e.g. no relay reachable) triggers the
-    same fallback as a timeout, not just an explicit timeout - the point
-    is "this call is not going to be answered over Nostr", not literally
+- `Sinks/NosCallSink.cs`:
+  - `TryHandleAsync` races the existing `WaitForAnswerAsync` Nostr call
+    against `Task.Delay(ringTimeoutSeconds)` and `Call.WhenRemoteHungUp`.
+    `ringTimeoutSeconds` is `null` unless `[voicemail].enabled` (wired up
+    in `Program.cs`), so with voicemail disabled this sink rings
+    indefinitely instead of timing out, matching pre-voicemail behavior.
+    A signaling exception (e.g. no relay reachable) triggers the same
+    decline as a timeout, not just an explicit timeout - the point is
+    "this call is not going to be answered over Nostr", not literally
     just the clock. After `Task.WhenAny` returns, the code checks
-    `hangupTcs.Task.IsCompleted` before anything else: cancellation
+    `call.WhenRemoteHungUp.IsCompleted` before anything else: cancellation
     callbacks on a `CancellationToken` run LIFO, and the ring-timeout
-    delay's own internal registration is created after `ctReg` (the
-    shutdown hookup), so on shutdown it can observe cancellation - and
-    so complete - before `ctReg`'s callback does, which would otherwise
-    misreport a shutdown as a genuine ring timeout. Checking `answerTask`
-    itself next (rather than trusting which task `WhenAny` reported as
-    the winner) then gives a genuine answer priority if it lands at the
-    same moment the ring timeout elapses.
-  - `RunVoicemailAsync`'s `recordingActive` flag is read on SIPSorcery's
-    RTP receive thread and written on the call-handling thread; both
-    sides go through the same lock, since without one there's no
-    guarantee the receive thread ever observes the write.
-  - When a call *was* answered over Nostr, ending it also calls
-    `ua.Hangup()` rather than a plain session `Close()`: `hangupTcs` also
-    completes on shutdown, and at that point the call may still be
-    actively bridged (unlike the caller-hung-up case, where `Hangup()`
-    is already a safe no-op per `IsCallActive`) - so this is what
-    actually sends a BYE on shutdown, matching every other path in
-    `HandleIncomingCallAsync`.
-  - `BridgeAudio` gained a `forwardSipToWebRtc` gate on the SIP-leg →
-    WebRTC-leg direction only, so falling back to voicemail can stop
-    relaying into the (now closed) `RTCPeerConnection` without needing to
-    unsubscribe an anonymous event handler. The other direction needs no
-    gate - it naturally stops once `pc.close()` stops firing its own
-    `OnRtpPacketReceived`. The flag is written on the call-handling
-    thread and read on SIPSorcery's RTP receive thread, hence
-    `Volatile`.
-  - `RunVoicemailAsync` reuses the **already-answered SIP `RTPSession`**
-    directly instead of building a second media session: a manually wired
-    `SIPSorcery.Media.AudioExtrasSource` plays the greeting/tone
-    (`SendAudioFromStream`, the same mechanism `[[lines]].sound` already
-    uses via `AudioSendOnlyMediaSession`, just wired to a plain
-    `RTPSession` here since the SIP dialog is already up), while a second
-    `OnRtpPacketReceived` subscriber decodes inbound caller audio via
-    `SIPSorcery.Media.AudioEncoder.DecodeAudio` and buffers it.
-  - `WavEncoder` (new, pure logic, unit tested) writes a minimal canonical
+    delay's own internal registration is created after `SipCallSource`'s
+    shutdown hookup on the same TCS, so on shutdown it can observe
+    cancellation - and so complete - before that callback does, which
+    would otherwise misreport a shutdown as a genuine ring timeout.
+    Checking `answerTask` itself next (rather than trusting which task
+    `WhenAny` reported as the winner) then gives a genuine answer priority
+    if it lands at the same moment the ring timeout elapses.
+  - Bridges `Call.Audio` and its own `RtpSessionCallAudio` (wrapping the
+    `RTCPeerConnection`) by forwarding decoded PCM each way, rather than
+    the pre-hub raw-RTP relay - this is what makes the SIP and WebRTC legs
+    independent of each other's codec (see `docs/hub-architecture.md`).
+    Declining (returning `false`) unsubscribes both forwarding handlers
+    before returning, so a fallback to `VoicemailSink` can't keep relaying
+    audio into the (now closed) `RTCPeerConnection` - no `Volatile` gate
+    needed, since `ICallAudio.OnAudioReceived` is a plain event and the
+    handlers are named delegates that can be removed directly.
+- `Sinks/VoicemailSink.cs`:
+  - `RunVoicemailAsync`'s `recordingActive` flag is read on the thread
+    delivering decoded `Call.Audio.OnAudioReceived` callbacks and written
+    on the sink's own async flow; both sides go through the same lock,
+    since without one there's no guarantee the receiving side ever
+    observes the write.
+  - Reuses the **already-answered `Call.Audio`** directly instead of
+    building a second media session: `Hub/PcmPlayback.cs` paces the
+    greeting/tone samples out over it (the generic replacement for
+    SIPSorcery's `AudioExtrasSource`, which is tied to `RTPSession` and
+    can't play through the source/sink-agnostic `ICallAudio` contract),
+    while an `OnAudioReceived` subscriber buffers inbound caller PCM
+    directly - no decode step needed here, since `Call.Audio` already
+    hands over decoded PCM.
+  - `WavEncoder` (pure logic, unit tested) writes a minimal canonical
     16-bit PCM WAV header around the buffered samples.
-  - The final `ua.Hangup()` in `HandleIncomingCallAsync` runs in a
-    `finally` around the `RunVoicemailAsync` call, and `SIPUserAgent`'s own
-    `MediaSession` field is the same `RTPSession` instance
-    `RunVoicemailAsync` recorded on - so `ua.Hangup()` both sends the BYE
-    and closes the RTP session in one call; it's also safe to call
-    unconditionally (it checks `IsCallActive` internally, so it's a no-op
-    if the caller already hung up). `RunVoicemailAsync` only ever writes
-    the WAV and calls `VoicemailSender.Enqueue` - it has no Nostr.Sdk
-    dependency at all, so nothing in the call-handling path blocks on
-    relay connectivity or a publish.
+  - `TryHandleAsync` always returns `true`: `CallHub`'s own `finally`
+    calls `Call.HangupAsync` unconditionally once a sink is done, so this
+    sink doesn't hang up the SIP call itself and doesn't need a `finally`
+    of its own to guarantee that happens even if `RunVoicemailAsync`
+    throws. `RunVoicemailAsync` only ever writes the WAV and calls
+    `VoicemailSender.Enqueue` - it has no Nostr.Sdk dependency at all, so
+    nothing in the call-handling path blocks on relay connectivity or a
+    publish.
   - `[voicemail].ring_timeout_seconds` / `max_recording_seconds` are
     validated (`> 0`) in `Config/ConfigLoader.cs` at startup, alongside
     the rest of config loading - an unchecked bad value would otherwise
@@ -178,10 +187,9 @@ VoicemailSender then, independently of any particular call:
     every send, since `MaxRecordingSeconds` is a heuristic ceiling on the
     configured value, not a guarantee about what any given recording
     encodes to.
-- `Voicemail/VoicemailSender.cs` (new): one instance, constructed once in
-  `BridgeService.StartAsync` and shared across every call for the life of
-  the process - unlike `NostrSignalingClient`, which is scoped to a
-  single call.
+- `Voicemail/VoicemailSender.cs`: one instance, constructed once in
+  `Program.cs` and shared across every call for the life of the process -
+  unlike `NostrSignalingClient`, which is scoped to a single call.
   - `Enqueue` takes a `Voicemail/SendJob.cs` - either a `MissedCallNoticeJob`
     (`CallerNumber`, `CallId`, no audio) or a `VoicemailAudioJob` (adds
     `WavPath`, `SampleRate`, `DurationSeconds`) - and writes it to an
@@ -316,7 +324,7 @@ VoicemailSender then, independently of any particular call:
   fallback could never actually succeed for a real voicemail: 8kHz
   16-bit mono WAV runs 16,000 bytes/sec, so `MaxAudioBytes` (30,400)
   only fits a 1.0-1.9s WAV, and recordings under 1.0s are already
-  dropped before encoding is ever attempted (`CallBridge.RunVoicemailAsync`).
+  dropped before encoding is ever attempted (`VoicemailSink.RunVoicemailAsync`).
   The fallback was therefore dead weight that just moved the failure
   later (an opaque error inside `SendPrivateMsgTo`) instead of avoiding
   it. `LoadAudioAsync` now throws directly on an encoding failure - the
@@ -338,8 +346,8 @@ VoicemailSender then, independently of any particular call:
   `max_recording_seconds` (or until hangup) regardless of whether the
   caller is actually speaking.
 - **DTMF-triggered early hangup, "press 1 to skip greeting", etc. are not
-  implemented** - matches the existing "DTMF is explicitly disabled"
-  blind spot in `receiving-calls.md`.
+  implemented** - matches the existing "DTMF is not relayed" blind spot in
+  `receiving-calls.md`.
 - **Concurrent calls are untested**, same caveat as the rest of the
   SIP/RTP path per `receiving-calls.md`.
 - **The send queue is in-memory only, not persisted across restarts.** A
