@@ -26,9 +26,15 @@ public sealed class LocalTestAudioSink(
         testAudioSource.OnAudioSourceEncodedSample += call.Audio.SendEncodedSample;
         ConfigureTestAudioSource(testAudioSource, matchedLine);
 
-        await testAudioSource.StartAudio();
-        await call.WhenRemoteHungUp;
-        await testAudioSource.CloseAudio();
+        try
+        {
+            await testAudioSource.StartAudio();
+            await call.WhenRemoteHungUp;
+        }
+        finally
+        {
+            await testAudioSource.CloseAudio();
+        }
 
         return true;
     }
