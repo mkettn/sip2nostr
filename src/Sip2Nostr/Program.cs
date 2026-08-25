@@ -47,6 +47,33 @@ static async Task CheckNostrConnectivitySafeAsync(NostrConfig nostrConfig, ILogg
     }
 }
 
+// Only loads a transcriber (and its GGML model) when it'll actually be
+// used - voicemail disabled, or [voicemail].delivery = "audio" (the
+// default), stays as cheap to start up as before this existed.
+static IVoicemailDeliveryBackend CreateVoicemailDeliveryBackend(AppConfig config, ILogger logger)
+{
+    if (!config.Voicemail.Enabled || config.Voicemail.Delivery != "text")
+    {
+        return new AudioInlineDeliveryBackend(logger.ForContext<AudioInlineDeliveryBackend>());
+    }
+
+    var transcriber = CreateTranscriber(config.Voicemail.Transcription, config.ConfigDirectory, logger);
+    return new TranscribedTextDeliveryBackend(transcriber, logger.ForContext<TranscribedTextDeliveryBackend>());
+}
+
+static IVoicemailTranscriber CreateTranscriber(TranscriptionConfig transcriptionConfig, string configDirectory, ILogger logger)
+{
+    var modelPath = Path.IsPathRooted(transcriptionConfig.ModelPath!)
+        ? transcriptionConfig.ModelPath!
+        : Path.GetFullPath(Path.Combine(configDirectory, transcriptionConfig.ModelPath!));
+
+    return transcriptionConfig.Engine switch
+    {
+        "whisper" => new WhisperNetTranscriber(modelPath, transcriptionConfig.Language, logger.ForContext<WhisperNetTranscriber>()),
+        _ => throw new InvalidOperationException($"Unknown [voicemail.transcription] engine '{transcriptionConfig.Engine}'."),
+    };
+}
+
 static string? ResolveRunLogPath(string? runFile, string configDirectory)
 {
     if (string.IsNullOrWhiteSpace(runFile))
@@ -95,7 +122,8 @@ try
         cts.Cancel();
     };
 
-    await using var voicemailSender = new VoicemailSender(config.Nostr, config.Voicemail, Log.Logger.ForContext<VoicemailSender>());
+    var voicemailDeliveryBackend = CreateVoicemailDeliveryBackend(config, Log.Logger);
+    await using var voicemailSender = new VoicemailSender(config.Nostr, config.Voicemail, voicemailDeliveryBackend, Log.Logger.ForContext<VoicemailSender>());
 
     var sinks = new List<ICallSink>();
     if (config.Nostr.Enabled)

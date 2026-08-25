@@ -1,34 +1,36 @@
 using System.Threading.Channels;
-using Concentus;
-using Concentus.Enums;
-using Concentus.Oggfile;
 using Nostr.Sdk;
 using Serilog;
 using Sip2Nostr.Config;
-using Sip2Nostr.Shared;
 using Sip2Nostr.Signaling;
-using Sip2Nostr.Sip;
 
 namespace Sip2Nostr.Voicemail;
 
 // Background worker that owns delivery of missed-call notices and
-// recorded voicemails - see docs/voicemail.md for the full flow.
+// recorded voicemails - see docs/voicemail.md for the full flow. How a
+// VoicemailAudioJob turns into DM content (audio vs. transcript) is
+// delegated to the configured IVoicemailDeliveryBackend.
 public sealed class VoicemailSender : IAsyncDisposable
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
-    private const int OpusResamplerQuality = 5;
 
     private readonly NostrConfig _nostrConfig;
     private readonly VoicemailConfig _voicemailConfig;
+    private readonly IVoicemailDeliveryBackend _deliveryBackend;
     private readonly ILogger _logger;
     private readonly Channel<SendJob> _queue = Channel.CreateUnbounded<SendJob>();
     private readonly CancellationTokenSource _stopCts = new();
     private readonly Task _worker;
 
-    public VoicemailSender(NostrConfig nostrConfig, VoicemailConfig voicemailConfig, ILogger logger)
+    public VoicemailSender(
+        NostrConfig nostrConfig,
+        VoicemailConfig voicemailConfig,
+        IVoicemailDeliveryBackend deliveryBackend,
+        ILogger logger)
     {
         _nostrConfig = nostrConfig;
         _voicemailConfig = voicemailConfig;
+        _deliveryBackend = deliveryBackend;
         _logger = logger;
         _worker = Task.Run(() => RunAsync(_stopCts.Token));
     }
@@ -126,7 +128,7 @@ public sealed class VoicemailSender : IAsyncDisposable
                     break;
                 }
 
-                await SendOneSafeAsync(client, targetPubkey, connectedRelays, job).ConfigureAwait(false);
+                await SendOneSafeAsync(client, targetPubkey, connectedRelays, job, ct).ConfigureAwait(false);
             }
         }
         finally
@@ -136,14 +138,14 @@ public sealed class VoicemailSender : IAsyncDisposable
         }
     }
 
-    private async Task SendOneSafeAsync(Client client, PublicKey targetPubkey, List<RelayUrl> connectedRelays, SendJob job)
+    private async Task SendOneSafeAsync(Client client, PublicKey targetPubkey, List<RelayUrl> connectedRelays, SendJob job, CancellationToken ct)
     {
         try
         {
             var (content, tags, description) = job switch
             {
                 MissedCallNoticeJob notice => BuildMissedCallNoticeContent(notice),
-                VoicemailAudioJob audio => await BuildVoicemailContentAsync(audio),
+                VoicemailAudioJob audio => await _deliveryBackend.BuildContentAsync(audio, ct),
                 _ => throw new NotSupportedException($"Unknown send job type {job.GetType()}."),
             };
 
@@ -173,61 +175,6 @@ public sealed class VoicemailSender : IAsyncDisposable
         return (content, tags, "missed-call notice");
     }
 
-    private async Task<(string Content, List<Tag> Tags, string Description)> BuildVoicemailContentAsync(VoicemailAudioJob job)
-    {
-        var (audioBytes, mimeType) = await LoadAudioAsync(job);
-        var dataUri = $"data:{mimeType};base64,{Convert.ToBase64String(audioBytes)}";
-        var content =
-            $"🎤 Voicemail from {job.CallerNumber} ({job.DurationSeconds}s) - the call wasn't answered.\n\n{dataUri}";
-        var tags = new List<Tag>
-        {
-            Tag.Parse(["alt", "sip2nostr voicemail"]),
-            Tag.Parse(["duration", job.DurationSeconds.ToString()]),
-        };
-        return (content, tags, $"voicemail ({job.DurationSeconds}s, {audioBytes.Length} bytes, {mimeType})");
-    }
-
-    // No WAV fallback if Opus encoding fails - see docs/voicemail.md.
-    private async Task<(byte[] AudioBytes, string MimeType)> LoadAudioAsync(VoicemailAudioJob job)
-    {
-        var wavBytes = await File.ReadAllBytesAsync(job.WavPath);
-        var audioBytes = EncodeOpusOgg(wavBytes, job.SampleRate);
-
-        // The real enforcement against encoded size - MaxRecordingSeconds
-        // is only a heuristic ceiling on the configured value.
-        if (audioBytes.Length > VoicemailBudget.MaxAudioBytes)
-        {
-            throw new InvalidOperationException(
-                $"Encoded voicemail is {audioBytes.Length} bytes, over the {VoicemailBudget.MaxAudioBytes}-byte NIP-17 budget; sending it would fail.");
-        }
-
-        return (audioBytes, "audio/ogg");
-    }
-
-    private byte[] EncodeOpusOgg(byte[] wavBytes, int sampleRate)
-    {
-        var samples = WavEncoder.Decode(wavBytes);
-
-        using var encoder = OpusCodecFactory.CreateEncoder(sampleRate, 1, OpusApplication.OPUS_APPLICATION_VOIP);
-        encoder.Bitrate = VoicemailBudget.OpusBitrateBps;
-
-        // CBR, not VBR (the Concentus/libopus default) - see docs/voicemail.md.
-        encoder.UseVBR = false;
-
-        // DTX deliberately not enabled - see docs/voicemail.md.
-
-        using var outputStream = new MemoryStream();
-
-        // No using: OpusOggWriteStream isn't IDisposable - see docs/voicemail.md.
-        var oggWriter = new OpusOggWriteStream(encoder, outputStream, new OpusTags(), sampleRate, OpusResamplerQuality, leaveOpen: true);
-        oggWriter.WriteSamples(samples, 0, samples.Length);
-        oggWriter.Finish();
-
-        var oggBytes = outputStream.ToArray();
-        _logger.Information("Encoded voicemail as Opus/OGG ({AudioBytes} bytes).", oggBytes.Length);
-        return oggBytes;
-    }
-
     public async ValueTask DisposeAsync()
     {
         _stopCts.Cancel();
@@ -243,5 +190,7 @@ public sealed class VoicemailSender : IAsyncDisposable
         {
             _stopCts.Dispose();
         }
+
+        await _deliveryBackend.DisposeAsync();
     }
 }

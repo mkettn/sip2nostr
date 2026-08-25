@@ -151,4 +151,31 @@ public sealed class VoicemailConfig
     // NIP-17 relay resolution against [nostr].relays if unset/empty.
     [property: TomlPropertyName("dm_relays")]
     public List<string> DmRelays { get; init; } = [];
+
+    // "audio" inlines Opus/OGG (default); "text" sends a transcript
+    // instead - see [voicemail.transcription] and docs/voicemail.md.
+    [property: TomlPropertyName("delivery")]
+    public string Delivery { get; init; } = "audio";
+
+    [property: TomlPropertyName("transcription")]
+    public TranscriptionConfig Transcription { get; init; } = new();
+}
+
+// Only consulted when [voicemail].delivery = "text" - see docs/voicemail.md.
+public sealed class TranscriptionConfig
+{
+    // The only engine today; the interface behind it
+    // (Voicemail/IVoicemailTranscriber.cs) is built to take more.
+    [property: TomlPropertyName("engine")]
+    public string Engine { get; init; } = "whisper";
+
+    // Path to a GGML model file (e.g. downloaded via whisper.cpp's
+    // models/download-ggml-model.sh) - required for the "whisper" engine.
+    [property: TomlPropertyName("model_path")]
+    public string? ModelPath { get; init; }
+
+    // Optional. An ISO 639-1 code (e.g. "en"); unset auto-detects the
+    // spoken language per recording, at some accuracy/latency cost.
+    [property: TomlPropertyName("language")]
+    public string? Language { get; init; }
 }

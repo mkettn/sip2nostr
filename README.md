@@ -168,6 +168,12 @@ ring_timeout_seconds = 20
 max_recording_seconds = 60
 # greeting_sound = "sounds/greeting.opus"   # optional; a short tone plays if unset
 # dm_relays = ["wss://dm-relay.example.com"] # optional; defaults to [nostr].relays
+delivery = "audio"             # or "text" - see [voicemail.transcription] below
+
+[voicemail.transcription]      # only consulted when delivery = "text"
+engine = "whisper"
+# model_path = "models/ggml-base.en.bin"   # required for delivery = "text"
+# language = "en"                          # optional; auto-detected if unset
 ```
 
 ## Voicemail: answering-machine fallback
@@ -183,9 +189,13 @@ background worker (`Voicemail/VoicemailSender.cs`, one instance shared
 for the process lifetime) that connects to `[voicemail].dm_relays` (or
 `[nostr].relays` as a fallback — a NIP-17 DM inbox, kind:10050, can
 legitimately differ from the relays used for call signaling) only when
-something's queued, sends it as a Nostr direct message (NIP-17, audio
-re-encoded as Opus/OGG in-process via `Concentus` — pure C#, no external
-program required — to keep it small), then disconnects. Exactly one DM
+something's queued, sends it as a Nostr direct message, then disconnects.
+How the recording turns into DM content is pluggable via
+`[voicemail].delivery`: `"audio"` (default) re-encodes it as Opus/OGG
+in-process via `Concentus` — pure C#, no external program required — and
+inlines it; `"text"` transcribes it offline via Whisper.net and sends the
+transcript instead, no relay-side or third-party involvement needed for
+the transcription itself (just a local GGML model file). Exactly one DM
 per missed call: the recording, or - if the caller hung up before
 anything worth sending was captured - a plain-text missed-call notice
 naming the caller. Recordings on disk don't depend on delivery
