@@ -138,7 +138,14 @@ VoicemailSender then, independently of any particular call:
     would otherwise misreport a shutdown as a genuine ring timeout.
     Checking `answerTask` itself next (rather than trusting which task
     `WhenAny` reported as the winner) then gives a genuine answer priority
-    if it lands at the same moment the ring timeout elapses.
+    if it lands at the same moment the ring timeout elapses. Even so,
+    `ct.IsCancellationRequested` is checked first, ahead of
+    `call.WhenRemoteHungUp.IsCompleted`: `ringTimeoutTask` is cancelled by
+    the same `ct`, so telling a shutdown apart from a genuine ring timeout
+    by which `Task` `WhenAny` happened to observe as complete first is
+    exactly the kind of ordering-dependent check the paragraph above is
+    already being this careful about - a plain, synchronous
+    `ct.IsCancellationRequested` read has no such ambiguity.
   - Bridges `Call.Audio` and its own `RtpSessionCallAudio` (wrapping the
     `RTCPeerConnection`, restricted to the same `Call.AudioFormat` as the
     SIP leg) by forwarding RTP frames unchanged each way - the same raw
@@ -157,12 +164,23 @@ VoicemailSender then, independently of any particular call:
     without one there's no guarantee the receiving side ever observes the
     write.
   - Reuses the **already-answered `Call.Audio`** directly instead of
-    building a second media session: `Hub/RtpAudioPlayback.cs` encodes the
-    greeting/tone PCM against `Call.AudioFormat` and paces it out as RTP
-    frames (the generic replacement for SIPSorcery's `AudioExtrasSource`,
-    which is tied to `RTPSession` and can't play through the source/
-    sink-agnostic `ICallAudio` contract), while an `OnAudioReceived`
-    subscriber decodes each inbound frame via
+    building a second media session: a `SIPSorcery.Media.AudioExtrasSource`
+    plays the greeting/tone, wired via `OnAudioSourceEncodedSample +=
+    call.Audio.SendEncodedSample` instead of the pre-hub code's `+=
+    sipMediaSession.SendAudio` - same off-the-shelf player, same signature
+    (`ICallAudio.SendEncodedSample` exists specifically to match it), just
+    retargeted at the hub's `ICallAudio` instead of a concrete
+    `RTPSession`. An earlier version of this sink hand-rolled its own PCM
+    pacing/RTP-framing loop instead; that reimplemented exactly what
+    `AudioExtrasSource` already does correctly (a monotonic timestamp, a
+    real-time-paced send loop, marker bits) and got two of the three
+    wrong - see the PR review that caught it. `AudioExtrasSource` needs a
+    real file to stream from, so the sound-file path from
+    `SoundFileResolver.Resolve` is opened directly (`File.OpenRead` +
+    `SendAudioFromStream`) rather than loaded into a `short[]` first, and
+    the no-greeting-configured case now uses `SetSource(SineWave)` instead
+    of a hand-generated tone. Meanwhile an `OnAudioReceived` subscriber
+    decodes each inbound frame via
     `SIPSorcery.Media.AudioEncoder.DecodeAudio` and buffers the PCM - the
     hub itself only ever hands over RTP frames, so this sink is the one
     that knows how to turn them into samples.

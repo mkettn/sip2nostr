@@ -32,6 +32,10 @@ public sealed class CallHub(IReadOnlyList<ICallSink> sinks, ILogger logger)
                 call.CallerNumber);
             await call.WhenRemoteHungUp;
         }
+        catch (Exception exception)
+        {
+            logger.Error(exception, "Unhandled exception routing call {CallId} from {CallerNumber}.", call.CallId, call.CallerNumber);
+        }
         finally
         {
             await call.HangupAsync();

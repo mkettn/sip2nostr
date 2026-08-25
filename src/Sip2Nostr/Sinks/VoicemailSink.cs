@@ -1,5 +1,6 @@
 using Serilog;
 using SIPSorcery.Media;
+using SIPSorceryMedia.Abstractions;
 using Sip2Nostr.Config;
 using Sip2Nostr.Hub;
 using Sip2Nostr.Shared;
@@ -12,8 +13,10 @@ namespace Sip2Nostr.Sinks;
 // configured), records the caller, and enqueues it for delivery over
 // Nostr. Always handles the call it's offered - see docs/voicemail.md for
 // the full flow and the exactly-one-job guarantee. The hub only ever
-// exchanges RTP frames (see RtpAudioFrame), so this sink decodes/encodes
-// against Call.AudioFormat itself wherever it needs actual PCM samples.
+// exchanges RTP frames (see RtpAudioFrame), so this sink decodes recorded
+// audio against Call.AudioFormat itself, and plays the greeting/tone via
+// SIPSorcery's own AudioExtrasSource wired into Call.Audio.SendEncodedSample
+// rather than reimplementing RTP pacing/framing.
 public sealed class VoicemailSink(
     VoicemailConfig voicemailConfig,
     VoicemailSender voicemailSender,
@@ -56,9 +59,15 @@ public sealed class VoicemailSink(
             }
         }
 
+        var greetingSource = new AudioExtrasSource(new AudioEncoder(), new AudioSourceOptions { AudioSource = AudioSourcesEnum.Silence });
+        greetingSource.SetAudioSourceFormat(call.AudioFormat);
+        greetingSource.OnAudioSourceEncodedSample += call.Audio.SendEncodedSample;
+
         call.Audio.OnAudioReceived += OnAudioReceived;
         try
         {
+            await greetingSource.StartAudio();
+
             var greetingPath = string.IsNullOrWhiteSpace(voicemailConfig.GreetingSound)
                 ? null
                 : SoundFileResolver.Resolve(voicemailConfig.GreetingSound, configDirectory, logger);
@@ -66,9 +75,11 @@ public sealed class VoicemailSink(
             if (greetingPath is not null)
             {
                 logger.Information("Playing voicemail greeting {GreetingPath} for call {CallId}.", greetingPath, call.CallId);
-                var greetingSamples = SoundFileResolver.LoadPcmSamples(greetingPath);
-                if (await PlayUntilHungUpAsync(call, greetingSamples, ct))
+                using var greetingStream = File.OpenRead(greetingPath);
+                var playTask = greetingSource.SendAudioFromStream(greetingStream, AudioSamplingRatesEnum.Rate8KHz);
+                if (await Task.WhenAny(playTask, call.WhenRemoteHungUp) == call.WhenRemoteHungUp)
                 {
+                    greetingSource.CancelSendAudioFromStream();
                     logger.Information(
                         "Caller {CallerNumber} hung up during the voicemail greeting; nothing recorded.",
                         call.CallerNumber);
@@ -79,8 +90,8 @@ public sealed class VoicemailSink(
             else
             {
                 logger.Information("No voicemail greeting configured; playing a short tone before recording for call {CallId}.", call.CallId);
-                var tone = RtpAudioPlayback.GenerateTone(440, 1.5, sampleRate);
-                if (await PlayUntilHungUpAsync(call, tone, ct))
+                greetingSource.SetSource(AudioSourcesEnum.SineWave);
+                if (await Task.WhenAny(Task.Delay(TimeSpan.FromSeconds(1.5), ct), call.WhenRemoteHungUp) == call.WhenRemoteHungUp)
                 {
                     logger.Information(
                         "Caller {CallerNumber} hung up before the voicemail tone finished; nothing recorded.",
@@ -88,6 +99,8 @@ public sealed class VoicemailSink(
                     voicemailSender.Enqueue(new MissedCallNoticeJob(call.CallerNumber, call.CallId));
                     return;
                 }
+
+                greetingSource.SetSource(AudioSourcesEnum.Silence);
             }
 
             logger.Information("Recording voicemail for up to {MaxRecordingSeconds}s for call {CallId}.", voicemailConfig.MaxRecordingSeconds, call.CallId);
@@ -106,6 +119,7 @@ public sealed class VoicemailSink(
         finally
         {
             call.Audio.OnAudioReceived -= OnAudioReceived;
+            await greetingSource.CloseAudio();
         }
 
         short[] samples;
@@ -132,13 +146,6 @@ public sealed class VoicemailSink(
         var durationSeconds = (int)Math.Round(recordedSeconds);
         var wavPath = await SaveRecordingAsync(samples, sampleRate, call.CallId);
         voicemailSender.Enqueue(new VoicemailAudioJob(wavPath, sampleRate, durationSeconds, call.CallerNumber, call.CallId));
-    }
-
-    // Returns true if the caller hung up before playback finished.
-    private static async Task<bool> PlayUntilHungUpAsync(Call call, short[] samples, CancellationToken ct)
-    {
-        var playTask = RtpAudioPlayback.PlayOnceAsync(call.Audio, samples, call.AudioFormat, ct);
-        return await Task.WhenAny(playTask, call.WhenRemoteHungUp) == call.WhenRemoteHungUp;
     }
 
     private async Task<string> SaveRecordingAsync(short[] samples, int sampleRate, string callId)

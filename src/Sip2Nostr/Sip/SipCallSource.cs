@@ -277,7 +277,8 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
         // WebRTC answer, recording voicemail) is observed promptly instead
         // of only surfacing when the sink gives up on its own.
         var hangupTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        ua.OnCallHungup += _ => hangupTcs.TrySetResult();
+        void OnCallHungup(SIPDialogue _) => hangupTcs.TrySetResult();
+        ua.OnCallHungup += OnCallHungup;
         using var ctReg = ct.Register(() => hangupTcs.TrySetResult());
 
         var call = new Call(
@@ -293,9 +294,24 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
             },
             hangupTcs.Task);
 
-        if (OnIncomingCall is not null)
+        try
         {
-            await OnIncomingCall.Invoke(call);
+            // ua (the shared _userAgent) only ever raises one incoming call
+            // at a time in practice, but OnIncomingCall is a public event -
+            // await every subscriber explicitly rather than Invoke(), which
+            // on a multicast delegate only awaits whichever Task the last
+            // subscriber returned.
+            if (OnIncomingCall is not null)
+            {
+                foreach (var handler in OnIncomingCall.GetInvocationList())
+                {
+                    await ((Func<Call, Task>)handler)(call);
+                }
+            }
+        }
+        finally
+        {
+            ua.OnCallHungup -= OnCallHungup;
         }
     }
 

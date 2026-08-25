@@ -24,6 +24,11 @@ public sealed class RtpSessionCallAudio : ICallAudio
         session.SendRtpRaw(SDPMediaTypesEnum.audio, frame.Payload, frame.Timestamp, frame.MarkerBit, frame.PayloadType);
     }
 
+    public void SendEncodedSample(uint durationRtpUnits, byte[] sample)
+    {
+        session.SendAudio(durationRtpUnits, sample);
+    }
+
     private void HandleRtpPacketReceived(System.Net.IPEndPoint _, SDPMediaTypesEnum media, RTPPacket packet)
     {
         if (media != SDPMediaTypesEnum.audio)

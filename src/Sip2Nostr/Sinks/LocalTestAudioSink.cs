@@ -1,4 +1,6 @@
 using Serilog;
+using SIPSorcery.Media;
+using SIPSorceryMedia.Abstractions;
 using Sip2Nostr.Config;
 using Sip2Nostr.Hub;
 using Sip2Nostr.Shared;
@@ -7,8 +9,9 @@ namespace Sip2Nostr.Sinks;
 
 // Local-only fallback for [nostr].enabled = false (dev/testing without a
 // Nostr relay): plays a per-line test sound (or a sine wave if none is
-// configured) on loop until the caller hangs up. Never records or
-// forwards anywhere.
+// configured) on loop until the caller hangs up, via SIPSorcery's own
+// AudioExtrasSource wired into Call.Audio.SendEncodedSample. Never
+// records or forwards anywhere.
 public sealed class LocalTestAudioSink(
     IReadOnlyList<LineConfig> lines,
     string configDirectory,
@@ -17,18 +20,20 @@ public sealed class LocalTestAudioSink(
     public async Task<bool> TryHandleAsync(Call call, CancellationToken ct)
     {
         var matchedLine = lines.FirstOrDefault(line => line.Label == call.LineLabel);
-        var samples = ResolveTestAudio(matchedLine, call.AudioFormat.ClockRate);
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var playTask = RtpAudioPlayback.PlayLoopAsync(call.Audio, samples, call.AudioFormat, cts.Token);
+        var testAudioSource = new AudioExtrasSource(new AudioEncoder(), new AudioSourceOptions { AudioSource = AudioSourcesEnum.Silence });
+        testAudioSource.SetAudioSourceFormat(call.AudioFormat);
+        testAudioSource.OnAudioSourceEncodedSample += call.Audio.SendEncodedSample;
+        ConfigureTestAudioSource(testAudioSource, matchedLine);
+
+        await testAudioSource.StartAudio();
         await call.WhenRemoteHungUp;
-        cts.Cancel();
-        await playTask;
+        await testAudioSource.CloseAudio();
 
         return true;
     }
 
-    private short[] ResolveTestAudio(LineConfig? matchedLine, int sampleRate)
+    private void ConfigureTestAudioSource(AudioExtrasSource testAudioSource, LineConfig? matchedLine)
     {
         if (!string.IsNullOrWhiteSpace(matchedLine?.Sound))
         {
@@ -36,7 +41,13 @@ public sealed class LocalTestAudioSink(
             if (soundPath is not null)
             {
                 logger.Information("Playing local test sound {SoundPath} on loop for line {LineLabel}.", soundPath, matchedLine.Label);
-                return SoundFileResolver.LoadPcmSamples(soundPath);
+                testAudioSource.SetSource(new AudioSourceOptions
+                {
+                    AudioSource = AudioSourcesEnum.Music,
+                    MusicFile = soundPath,
+                    MusicInputSamplingRate = AudioSamplingRatesEnum.Rate8KHz,
+                });
+                return;
             }
 
             logger.Warning(
@@ -49,6 +60,6 @@ public sealed class LocalTestAudioSink(
             logger.Information("No line sound configured; sending sine wave test audio.");
         }
 
-        return RtpAudioPlayback.GenerateTone(440, 1.0, sampleRate);
+        testAudioSource.SetSource(AudioSourcesEnum.SineWave);
     }
 }

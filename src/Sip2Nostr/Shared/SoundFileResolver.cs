@@ -34,14 +34,6 @@ public static class SoundFileResolver
         return ConvertSoundToRawPcm(resolvedSoundPath, logger);
     }
 
-    public static short[] LoadPcmSamples(string rawPcmPath)
-    {
-        var bytes = File.ReadAllBytes(rawPcmPath);
-        var samples = new short[bytes.Length / 2];
-        Buffer.BlockCopy(bytes, 0, samples, 0, samples.Length * 2);
-        return samples;
-    }
-
     private static string? ConvertSoundToRawPcm(string soundPath, ILogger logger)
     {
         var cachePath = GetConvertedSoundPath(soundPath);

@@ -36,18 +36,25 @@ does with it" into three pieces:
   ends. There's no separate "answer" step at this level - a source only
   ever raises `OnIncomingCall` once audio is actually flowing, so a `Call`
   is always ready to bridge or record immediately.
-- **`ICallAudio`** (`Hub/ICallAudio.cs`) relays `RtpAudioFrame`s (`Hub/
-  RtpAudioFrame.cs`) - an RTP payload plus just enough header (timestamp,
-  marker bit, payload type) to resend it unchanged elsewhere. This is the
-  hub's fixed exchange format - see "Why RTP, not PCM" below. `Sip/
-  RtpSessionCallAudio.cs` adapts it to sipsorcery's `RTPSession` (used for
-  both the SIP leg and, in `NosCallSink`, the WebRTC leg - `RTCPeerConnection`
-  is itself an `RTPSession` subclass) by relaying `OnRtpPacketReceived`
-  payloads unchanged - no decode/encode, same as the pre-refactor
-  `CallBridge.BridgeAudio`. `Call.AudioFormat` carries the codec those
-  frames are encoded with, for the sinks that need actual PCM samples
-  (`VoicemailSink`, `LocalTestAudioSink`) or need to negotiate a matching
-  format on another leg (`NosCallSink`).
+- **`ICallAudio`** (`Hub/ICallAudio.cs`) has two send paths. `Send(RtpAudioFrame
+  frame)` relays an RTP payload plus just enough header (timestamp, marker
+  bit, payload type) to resend it unchanged elsewhere - the hub's fixed
+  exchange format for relayed audio, see "Why RTP, not PCM" below.
+  `SendEncodedSample(uint durationRtpUnits, byte[] sample)` is for a sink
+  that generates audio instead of relaying it (a greeting, a tone): it
+  matches SIPSorcery's own `AudioExtrasSource.OnAudioSourceEncodedSample`
+  signature exactly, so that off-the-shelf player can be wired straight
+  into it rather than a sink reimplementing RTP timestamp/pacing itself.
+  `Sip/RtpSessionCallAudio.cs` adapts both to sipsorcery's `RTPSession`
+  (used for both the SIP leg and, in `NosCallSink`, the WebRTC leg -
+  `RTCPeerConnection` is itself an `RTPSession` subclass): `Send` relays
+  `OnRtpPacketReceived` payloads unchanged via `SendRtpRaw` - no decode/
+  encode, same as the pre-refactor `CallBridge.BridgeAudio` - while
+  `SendEncodedSample` is a straight passthrough to `RTPSession.SendAudio`.
+  `Call.AudioFormat` carries the codec those frames are encoded with, for
+  the sinks that need actual PCM samples (`VoicemailSink`,
+  `LocalTestAudioSink`) or need to negotiate a matching format on another
+  leg (`NosCallSink`).
 - **`ICallSink`** (`Hub/ICallSink.cs`) is anything `CallHub` can offer a
   `Call` to. Returning `true` means it handled the call end to end
   (bridged it until hangup, or recorded a voicemail); `CallHub` won't try
@@ -96,9 +103,14 @@ This does mean a source or sink whose transport isn't RTP-shaped (a
 modem capturing raw PCM off an ALSA device, say) has to encode/decode at
 its own boundary rather than getting that translation for free from the
 hub - `VoicemailSink` and `LocalTestAudioSink` already do exactly this
-today (via `SIPSorcery.Media.AudioEncoder` and `Hub/RtpAudioPlayback.cs`)
-since they need actual samples to record or generate a tone, not just
-frames to relay. That's the right place for it: recoding is a source/sink
+today: recording decodes via `SIPSorcery.Media.AudioEncoder.DecodeAudio`,
+and playback wires SIPSorcery's own `AudioExtrasSource` into
+`ICallAudio.SendEncodedSample` instead of hand-rolling PCM pacing/RTP
+framing (an earlier version of this refactor did exactly that, and got
+the RTP timestamp and marker bit wrong - reimplementing something
+`AudioExtrasSource` already handles correctly bought nothing). Both sinks
+need actual samples to record or generate a tone, not just frames to
+relay. That's the right place for it: recoding is a source/sink
 concern, not something the hub should force onto every pair regardless of
 whether either side actually needs it.
 
