@@ -1,14 +1,19 @@
+using System.Text;
 using Nostr.Sdk;
 using Serilog;
+using Sip2Nostr.Shared;
 using Sip2Nostr.Sip;
 
 namespace Sip2Nostr.Voicemail;
 
 // Alternative voicemail delivery backend: transcribes the recording via
 // an IVoicemailTranscriber and sends the text instead of inlining audio.
-// A transcript is tiny compared to the NIP-17 size budget that constrains
-// AudioInlineDeliveryBackend, so there's no equivalent size-fitting logic
-// here. See docs/voicemail.md.
+// A transcript is normally tiny compared to the NIP-17 budget that
+// constrains AudioInlineDeliveryBackend, but it's still checked against
+// the actual output (MaxTranscriptBytes) rather than trusted to stay
+// small just because recordings are duration-capped - whisper.cpp's
+// repetition-loop failure mode on silence/noise can produce far more
+// text than any real voicemail would. See docs/voicemail.md.
 public sealed class TranscribedTextDeliveryBackend(IVoicemailTranscriber transcriber, ILogger logger) : IVoicemailDeliveryBackend
 {
     public async Task<(string Content, List<Tag> Tags, string Description)> BuildContentAsync(VoicemailAudioJob job, CancellationToken ct)
@@ -27,6 +32,13 @@ public sealed class TranscribedTextDeliveryBackend(IVoicemailTranscriber transcr
             return (fallbackContent, fallbackTags, "voicemail notice (transcription failed)");
         }
 
+        var transcriptBytes = Encoding.UTF8.GetByteCount(text);
+        if (transcriptBytes > VoicemailBudget.MaxTranscriptBytes)
+        {
+            throw new InvalidOperationException(
+                $"Transcript is {transcriptBytes} bytes, over the {VoicemailBudget.MaxTranscriptBytes}-byte NIP-17 budget; sending it would fail.");
+        }
+
         var content =
             $"🎤 Voicemail from {job.CallerNumber} ({job.DurationSeconds}s) - the call wasn't answered:\n\n{text}";
         var tags = new List<Tag>
@@ -34,7 +46,7 @@ public sealed class TranscribedTextDeliveryBackend(IVoicemailTranscriber transcr
             Tag.Parse(["alt", "sip2nostr voicemail transcript"]),
             Tag.Parse(["duration", job.DurationSeconds.ToString()]),
         };
-        return (content, tags, $"voicemail transcript ({text.Length} chars)");
+        return (content, tags, $"voicemail transcript ({transcriptBytes} bytes)");
     }
 
     public async ValueTask DisposeAsync() => await transcriber.DisposeAsync();

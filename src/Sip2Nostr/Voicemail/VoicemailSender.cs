@@ -99,15 +99,42 @@ public sealed class VoicemailSender : IAsyncDisposable
         }
     }
 
+    private sealed record PreparedJob(SendJob Job, string Content, List<Tag> Tags, string Description);
+
     private async Task SendBatchAsync(List<SendJob> batch, CancellationToken ct)
     {
+        // Content is built for every job - including transcription, which
+        // can take seconds to minutes - before any relay connection opens.
+        // Holding a connection open (and idle) for that whole time risks
+        // the relay dropping it, and blocks whatever else is queued behind
+        // a slow job. See docs/voicemail.md.
+        var preparedJobs = new List<PreparedJob>();
+        foreach (var job in batch)
+        {
+            if (ct.IsCancellationRequested)
+            {
+                break;
+            }
+
+            var prepared = await PrepareJobSafeAsync(job, ct).ConfigureAwait(false);
+            if (prepared is not null)
+            {
+                preparedJobs.Add(prepared);
+            }
+        }
+
+        if (preparedJobs.Count == 0)
+        {
+            return;
+        }
+
         var bridgeKeys = Keys.Parse(_nostrConfig.BridgeNsec);
         var targetPubkey = PublicKey.Parse(_nostrConfig.TargetNpub);
         var relayUrls = (_voicemailConfig.DmRelays.Count > 0 ? _voicemailConfig.DmRelays : _nostrConfig.Relays)
             .Select(RelayUrl.Parse)
             .ToList();
 
-        _logger.Information("Connecting to send {Count} queued job(s).", batch.Count);
+        _logger.Information("Connecting to send {Count} prepared job(s).", preparedJobs.Count);
         var client = new ClientBuilder().Signer(NostrSigner.Keys(bridgeKeys)).Build();
         try
         {
@@ -117,18 +144,18 @@ public sealed class VoicemailSender : IAsyncDisposable
                 _logger.Error(
                     "None of the {TotalCount} configured voicemail relay(s) are reachable; {Count} job(s) undelivered.",
                     relayUrls.Count,
-                    batch.Count);
+                    preparedJobs.Count);
                 return;
             }
 
-            foreach (var job in batch)
+            foreach (var prepared in preparedJobs)
             {
                 if (ct.IsCancellationRequested)
                 {
                     break;
                 }
 
-                await SendOneSafeAsync(client, targetPubkey, connectedRelays, job, ct).ConfigureAwait(false);
+                await SendPreparedJobSafeAsync(client, targetPubkey, connectedRelays, prepared).ConfigureAwait(false);
             }
         }
         finally
@@ -138,7 +165,7 @@ public sealed class VoicemailSender : IAsyncDisposable
         }
     }
 
-    private async Task SendOneSafeAsync(Client client, PublicKey targetPubkey, List<RelayUrl> connectedRelays, SendJob job, CancellationToken ct)
+    private async Task<PreparedJob?> PrepareJobSafeAsync(SendJob job, CancellationToken ct)
     {
         try
         {
@@ -149,12 +176,37 @@ public sealed class VoicemailSender : IAsyncDisposable
                 _ => throw new NotSupportedException($"Unknown send job type {job.GetType()}."),
             };
 
-            var output = await client.SendPrivateMsgTo(connectedRelays, targetPubkey, content, tags);
-            PublishOutcome.ThrowIfFailed(_logger, description, output);
-
-            _logger.Information("Sent {Description} for call {CallId} to target_npub over Nostr.", description, job.CallId);
+            return new PreparedJob(job, content, tags, description);
         }
         catch (Exception exception) when (job is VoicemailAudioJob audioJob)
+        {
+            _logger.Error(
+                exception,
+                "Failed to prepare voicemail for call {CallId} for sending; the recording is still saved at {WavPath}.",
+                audioJob.CallId,
+                audioJob.WavPath);
+            return null;
+        }
+        catch (Exception exception)
+        {
+            _logger.Error(exception, "Failed to prepare missed-call notice for call {CallId} for sending.", job.CallId);
+            return null;
+        }
+    }
+
+    private async Task SendPreparedJobSafeAsync(Client client, PublicKey targetPubkey, List<RelayUrl> connectedRelays, PreparedJob prepared)
+    {
+        try
+        {
+            var output = await client.SendPrivateMsgTo(connectedRelays, targetPubkey, prepared.Content, prepared.Tags);
+            PublishOutcome.ThrowIfFailed(_logger, prepared.Description, output);
+
+            _logger.Information(
+                "Sent {Description} for call {CallId} to target_npub over Nostr.",
+                prepared.Description,
+                prepared.Job.CallId);
+        }
+        catch (Exception exception) when (prepared.Job is VoicemailAudioJob audioJob)
         {
             _logger.Error(
                 exception,
@@ -164,7 +216,7 @@ public sealed class VoicemailSender : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            _logger.Error(exception, "Failed to send missed-call notice for call {CallId} over Nostr.", job.CallId);
+            _logger.Error(exception, "Failed to send missed-call notice for call {CallId} over Nostr.", prepared.Job.CallId);
         }
     }
 

@@ -35,22 +35,27 @@ public static class ConfigLoader
                 $"[voicemail].max_recording_seconds must be greater than 0, got {config.Voicemail.MaxRecordingSeconds}.");
         }
 
-        // Only a constraint on the "audio" backend - a transcript is tiny
-        // regardless of how long the recording was, so "text" delivery
-        // isn't bound by the Opus/NIP-17 size budget this checks against.
-        if (config.Voicemail.Delivery == "audio" &&
-            config.Voicemail.MaxRecordingSeconds > VoicemailBudget.MaxRecordingSeconds)
-        {
-            throw new InvalidDataException(
-                $"[voicemail].max_recording_seconds is {config.Voicemail.MaxRecordingSeconds}, but a recording that " +
-                $"long can never fit in a single NIP-17 DM at the current Opus encoding - the maximum that reliably " +
-                $"fits is {VoicemailBudget.MaxRecordingSeconds}s. See docs/voicemail.md.");
-        }
-
         if (config.Voicemail.Delivery is not ("audio" or "text"))
         {
             throw new InvalidDataException(
                 $"[voicemail].delivery must be \"audio\" or \"text\", got \"{config.Voicemail.Delivery}\".");
+        }
+
+        // The ceiling depends on which backend is actually recording-length
+        // sensitive: "audio" is bound by the Opus/NIP-17 size budget below;
+        // "text" isn't (a transcript stays small regardless - the real
+        // enforcement there is MaxTranscriptBytes, checked against the
+        // actual output at send time), but recording length still needs
+        // *some* sanity ceiling so VoicemailSink's in-memory PCM buffer
+        // can't grow unbounded. See docs/voicemail.md.
+        var maxRecordingSecondsCeiling = config.Voicemail.Delivery == "text"
+            ? VoicemailBudget.MaxTextRecordingSeconds
+            : VoicemailBudget.MaxRecordingSeconds;
+        if (config.Voicemail.MaxRecordingSeconds > maxRecordingSecondsCeiling)
+        {
+            throw new InvalidDataException(
+                $"[voicemail].max_recording_seconds is {config.Voicemail.MaxRecordingSeconds}, but the maximum for " +
+                $"[voicemail].delivery = \"{config.Voicemail.Delivery}\" is {maxRecordingSecondsCeiling}s. See docs/voicemail.md.");
         }
 
         if (config.Voicemail.Delivery == "text")

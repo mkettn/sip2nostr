@@ -168,6 +168,32 @@ public class ConfigLoaderTests
         }
     }
 
+    [Fact]
+    public void Load_TextDeliveryExceedingTextRecordingCeiling_Throws()
+    {
+        var modelPath = WriteTempFile("fake-model-bytes");
+        try
+        {
+            var overCeiling = VoicemailBudget.MaxTextRecordingSeconds + 1;
+            var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"text\"\nmax_recording_seconds = {overCeiling}\n\n" +
+                $"[voicemail.transcription]\nmodel_path = \"{EscapeTomlString(modelPath)}\"\n";
+            var path = WriteTempConfig(toml);
+            try
+            {
+                var exception = Assert.Throws<InvalidDataException>(() => ConfigLoader.Load(path));
+                Assert.Contains("max_recording_seconds", exception.Message);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+        finally
+        {
+            File.Delete(modelPath);
+        }
+    }
+
     [Theory]
     [InlineData("ring_timeout_seconds = 0", "ring_timeout_seconds")]
     [InlineData("ring_timeout_seconds = -5", "ring_timeout_seconds")]

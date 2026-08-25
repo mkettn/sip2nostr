@@ -128,13 +128,20 @@ How a recorded voicemail becomes DM content is pluggable via
   DM content, subject to the NIP-17 size budget covered above.
 - `"text"` - `Voicemail/TranscribedTextDeliveryBackend.cs` transcribes
   the recording via a speech-to-text engine and sends the transcript as
-  plain text instead. A transcript is tiny compared to the audio path's
-  budget, so there's no equivalent size-fitting logic here -
-  `max_recording_seconds` isn't checked against
-  `VoicemailBudget.MaxRecordingSeconds` when this mode is selected (see
-  `Config/ConfigLoader.cs`). If nothing could be transcribed (silence, an
-  engine failure), the backend sends a plain-text notice instead of an
-  empty message.
+  plain text instead. This path isn't bound by the Opus/NIP-17 budget
+  above, so it has its own two checks: `max_recording_seconds` is capped
+  at `VoicemailBudget.MaxTextRecordingSeconds` (600s) instead of
+  `VoicemailBudget.MaxRecordingSeconds` (see `Config/ConfigLoader.cs`) -
+  a sanity ceiling on how much PCM `VoicemailSink` buffers in memory
+  while recording, not a size budget - and the transcript itself is
+  checked against `VoicemailBudget.MaxTranscriptBytes` (40,000 bytes) at
+  send time, mirroring `AudioInlineDeliveryBackend`'s `MaxAudioBytes`
+  check. A transcript is normally tiny compared to that budget, but
+  whisper.cpp can fall into a repetition loop on silence or noise and
+  produce far more text than any real voicemail would, so the check
+  guards against that rather than being trusted to never trigger. If
+  nothing could be transcribed (silence, an engine failure), the backend
+  sends a plain-text notice instead of an empty message.
 
 Both implement `Voicemail/IVoicemailDeliveryBackend.cs`
 (`BuildContentAsync(VoicemailAudioJob, CancellationToken) -> (Content,
@@ -426,9 +433,10 @@ string?`, `null` meaning nothing could be transcribed), selected by
 - **No accuracy floor on transcription.** Whisper (like any STT model)
   can mishear words, especially on noisy phone audio, and there's no
   confidence-threshold gating - a bad transcription is sent as if it
-  were correct, unlike the audio path's byte-budget check, which at
-  least fails predictably (too large) rather than silently (wrong
-  words).
+  were correct. `MaxTranscriptBytes` catches a transcript that's grown
+  implausibly large (e.g. whisper.cpp's repetition-loop failure mode on
+  silence or noise), but it's a size check, not an accuracy one - a
+  wrong-but-plausibly-sized transcription still goes out silently.
 - **GGML model files for `WhisperNetTranscriber` aren't bundled or
   auto-downloaded.** Unlike the self-contained Opus encoding path,
   `delivery = "text"` requires manually obtaining a model file and
