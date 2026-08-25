@@ -27,6 +27,9 @@ public sealed class AppConfig
 
     [property: TomlPropertyName("callerlist")]
     public CallerListConfig CallerList { get; init; } = new();
+
+    [property: TomlPropertyName("voicemail")]
+    public VoicemailConfig Voicemail { get; init; } = new();
 }
 
 public sealed class SipConfig
@@ -114,4 +117,38 @@ public sealed class CallerListConfig
 
     [property: TomlPropertyName("whitelist")]
     public List<string> Whitelist { get; init; } = [];
+}
+
+// Answering-machine fallback for when [nostr] is enabled but the callee
+// never answers over Nostr within ring_timeout_seconds: the call is
+// diverted to a local greeting + recording instead of ringing forever.
+// Opt-in (disabled by default) - see docs/voicemail.md.
+public sealed class VoicemailConfig
+{
+    [property: TomlPropertyName("enabled")]
+    public bool Enabled { get; init; } = false;
+
+    [property: TomlPropertyName("ring_timeout_seconds")]
+    public int RingTimeoutSeconds { get; init; } = 20;
+
+    // See docs/voicemail.md - ConfigLoader rejects anything larger.
+    [property: TomlPropertyName("max_recording_seconds")]
+    public int MaxRecordingSeconds { get; init; } = Sip2Nostr.Shared.VoicemailBudget.MaxRecordingSeconds;
+
+    // Optional. Same format rules as [[lines]].sound: raw 8 kHz 16-bit PCM
+    // works directly, other formats require ffmpeg. Falls back to a short
+    // tone if unset.
+    [property: TomlPropertyName("greeting_sound")]
+    public string? GreetingSound { get; init; }
+
+    // Relative to the config file's directory unless rooted.
+    [property: TomlPropertyName("recordings_dir")]
+    public string RecordingsDir { get; init; } = "voicemail";
+
+    // Optional. Relays to publish the voicemail NIP-17 DM to, if different
+    // from [nostr].relays (e.g. target_npub advertises a separate NIP-17
+    // kind:10050 DM inbox relay list). Falls back to Nostr.Sdk's default
+    // NIP-17 relay resolution against [nostr].relays if unset/empty.
+    [property: TomlPropertyName("dm_relays")]
+    public List<string> DmRelays { get; init; } = [];
 }

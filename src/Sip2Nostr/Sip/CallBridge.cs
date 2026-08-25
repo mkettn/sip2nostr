@@ -10,6 +10,7 @@ using SIPSorceryMedia.Abstractions;
 using Sip2Nostr.CallerList;
 using Sip2Nostr.Config;
 using Sip2Nostr.Signaling;
+using Sip2Nostr.Voicemail;
 
 namespace Sip2Nostr.Sip;
 
@@ -21,6 +22,8 @@ namespace Sip2Nostr.Sip;
 public sealed class CallBridge(
     WebRtcConfig webRtcConfig,
     NostrConfig nostrConfig,
+    VoicemailConfig voicemailConfig,
+    VoicemailSender voicemailSender,
     string configDirectory,
     IPAddress localMediaAddress,
     int rtpPort,
@@ -86,7 +89,9 @@ public sealed class CallBridge(
             "Created WebRTC peer connection with {IceServerCount} ICE server(s).",
             rtcConfig.iceServers.Count);
 
-        BridgeAudio(sipMediaSession, pc);
+        // See docs/voicemail.md for why this gate (and Volatile) exists.
+        var forwardToWebRtc = true;
+        BridgeAudio(sipMediaSession, pc, () => Volatile.Read(ref forwardToWebRtc));
 
         logger.Information("Answering SIP call.");
         var answered = await ua.Answer(uas, sipMediaSession, null, localMediaAddress);
@@ -102,8 +107,6 @@ public sealed class CallBridge(
         var callId = Guid.NewGuid().ToString();
         logger.Information("SIP call answered; connecting Nostr signaling with call-id {CallId}.", callId);
         await using var signaling = new NostrSignalingClient(nostrConfig, callId, logger.ForContext<NostrSignalingClient>());
-        await signaling.ConnectAsync();
-        logger.Information("Nostr signaling connected.");
 
         // Wired up before waiting on the Nostr answer (not after) so a
         // caller hangup while we're still waiting for NosCall to answer
@@ -112,60 +115,266 @@ public sealed class CallBridge(
         ua.OnCallHungup += _ => hangupTcs.TrySetResult();
         using var ctReg = ct.Register(() => hangupTcs.TrySetResult());
 
-        pc.onicecandidate += candidate =>
-        {
-            _ = SendIceCandidateSafeAsync(signaling, candidate);
-        };
-        signaling.OnIceCandidateReceived(candidate =>
-        {
-            logger.Information("Received WebRTC ICE candidate over Nostr.");
-            pc.addIceCandidate(new RTCIceCandidateInit
-            {
-                candidate = candidate.Candidate,
-                sdpMid = candidate.SdpMid,
-                sdpMLineIndex = candidate.SdpMLineIndex,
-            });
-        });
-
-        var offer = pc.createOffer(null);
-        await pc.setLocalDescription(offer);
-        logger.Information("Sending WebRTC SDP offer over Nostr.");
-        await signaling.SendOfferAsync(offer.sdp);
-
-        logger.Information("Waiting for WebRTC SDP answer over Nostr.");
-        var answerTask = signaling.WaitForAnswerAsync(ct);
-        if (await Task.WhenAny(answerTask, hangupTcs.Task) == hangupTcs.Task)
-        {
-            logger.Information("Call ended before a WebRTC SDP answer arrived; closing media sessions.");
-            pc.close();
-            sipMediaSession.Close("call ended before nostr answer");
-            return;
-        }
-
-        string answerSdp;
+        var nostrAnswered = false;
         try
         {
-            answerSdp = await answerTask;
+            await signaling.ConnectAsync();
+            logger.Information("Nostr signaling connected.");
+
+            pc.onicecandidate += candidate =>
+            {
+                _ = SendIceCandidateSafeAsync(signaling, candidate);
+            };
+            signaling.OnIceCandidateReceived(candidate =>
+            {
+                logger.Information("Received WebRTC ICE candidate over Nostr.");
+                pc.addIceCandidate(new RTCIceCandidateInit
+                {
+                    candidate = candidate.Candidate,
+                    sdpMid = candidate.SdpMid,
+                    sdpMLineIndex = candidate.SdpMLineIndex,
+                });
+            });
+
+            var offer = pc.createOffer(null);
+            await pc.setLocalDescription(offer);
+            logger.Information("Sending WebRTC SDP offer over Nostr.");
+            await signaling.SendOfferAsync(offer.sdp);
+
+            var answerTask = signaling.WaitForAnswerAsync(ct);
+            var ringTimeoutTask = voicemailConfig.Enabled
+                ? Task.Delay(TimeSpan.FromSeconds(voicemailConfig.RingTimeoutSeconds), ct)
+                : null;
+            logger.Information(
+                "Waiting for WebRTC SDP answer over Nostr{RingTimeout}.",
+                voicemailConfig.Enabled ? $" (up to {voicemailConfig.RingTimeoutSeconds}s before falling back to voicemail)" : string.Empty);
+
+            var waitTasks = ringTimeoutTask is not null
+                ? new Task[] { answerTask, ringTimeoutTask, hangupTcs.Task }
+                : new Task[] { answerTask, hangupTcs.Task };
+            await Task.WhenAny(waitTasks);
+
+            // See docs/voicemail.md for why this order (hangupTcs, then
+            // answerTask) matters - it's not just "whichever WhenAny picked".
+            if (hangupTcs.Task.IsCompleted)
+            {
+                logger.Information("Call ended before a WebRTC SDP answer arrived; closing media sessions.");
+                pc.close();
+                ua.Hangup();
+                return;
+            }
+
+            if (answerTask.IsCompleted)
+            {
+                var answerSdp = await answerTask;
+                logger.Information("Received WebRTC SDP answer over Nostr.");
+                pc.setRemoteDescription(new RTCSessionDescriptionInit { type = RTCSdpType.answer, sdp = answerSdp });
+                nostrAnswered = true;
+            }
+            else
+            {
+                logger.Information(
+                    "No WebRTC SDP answer arrived within {RingTimeoutSeconds}s; falling back to voicemail.",
+                    voicemailConfig.RingTimeoutSeconds);
+            }
         }
         catch (OperationCanceledException)
         {
-            // No answer over Nostr before shutdown. MVP: no fallback, the
-            // call is left ringing until the caller hangs up or the SIP
-            // transaction times out on its own (see README open questions).
             logger.Warning("Stopped waiting for WebRTC SDP answer because shutdown was requested.");
             pc.close();
-            sipMediaSession.Close("no nostr answer");
+            ua.Hangup();
+            return;
+        }
+        catch (Exception exception)
+        {
+            logger.Warning(exception, "Nostr signaling failed before a WebRTC SDP answer arrived; falling back to voicemail.");
+        }
+
+        if (nostrAnswered)
+        {
+            await hangupTcs.Task;
+            logger.Information("Call ended; closing media sessions.");
+            pc.close();
+            ua.Hangup();
             return;
         }
 
-        logger.Information("Received WebRTC SDP answer over Nostr.");
-        pc.setRemoteDescription(new RTCSessionDescriptionInit { type = RTCSdpType.answer, sdp = answerSdp });
-
-        await hangupTcs.Task;
-
-        logger.Information("Call ended; closing media sessions.");
+        Volatile.Write(ref forwardToWebRtc, false);
         pc.close();
-        sipMediaSession.Close("call ended");
+        await SendHangupSafeAsync(signaling);
+
+        if (!voicemailConfig.Enabled)
+        {
+            logger.Information("Voicemail is disabled; leaving the call connected with silence until the caller hangs up.");
+            await hangupTcs.Task;
+            ua.Hangup();
+            return;
+        }
+
+        try
+        {
+            await RunVoicemailAsync(sipMediaSession, selectedAudioFormat, callerNumber, callId, hangupTcs, ct);
+        }
+        catch (Exception exception)
+        {
+            // See docs/voicemail.md - a RunVoicemailAsync failure still
+            // needs to notify target_npub, not just log.
+            logger.Error(exception, "Voicemail recording failed for call {CallId}; sending a missed-call notice instead.", callId);
+            voicemailSender.Enqueue(new MissedCallNoticeJob(callerNumber, callId));
+        }
+        finally
+        {
+            ua.Hangup();
+        }
+    }
+
+    private async Task SendHangupSafeAsync(NostrSignalingClient signaling)
+    {
+        try
+        {
+            logger.Information("Sending WebRTC call hangup over Nostr so the ringing device stops.");
+            await signaling.SendHangupAsync("no answer - falling back to voicemail");
+        }
+        catch (Exception exception)
+        {
+            logger.Warning(exception, "Failed to send WebRTC call hangup over Nostr.");
+        }
+    }
+
+    // See docs/voicemail.md for the full flow and the exactly-one-job
+    // guarantee.
+    private async Task RunVoicemailAsync(
+        RTPSession sipMediaSession,
+        SDPWellKnownMediaFormatsEnum selectedAudioFormat,
+        string callerNumber,
+        string callId,
+        TaskCompletionSource hangupTcs,
+        CancellationToken ct)
+    {
+        var audioFormat = new AudioFormat(selectedAudioFormat);
+        var sampleRate = audioFormat.ClockRate;
+        var decoder = new AudioEncoder();
+        var recordingLock = new object();
+        var recordedSamples = new List<short>();
+        var recordingActive = false;
+
+        sipMediaSession.OnRtpPacketReceived += (_, media, pkt) =>
+        {
+            if (media != SDPMediaTypesEnum.audio)
+            {
+                return;
+            }
+
+            lock (recordingLock)
+            {
+                if (!recordingActive)
+                {
+                    return;
+                }
+
+                recordedSamples.AddRange(decoder.DecodeAudio(pkt.Payload, audioFormat));
+            }
+        };
+
+        var greetingSource = new AudioExtrasSource(new AudioEncoder(), new AudioSourceOptions { AudioSource = AudioSourcesEnum.Silence });
+        greetingSource.SetAudioSourceFormat(audioFormat);
+        greetingSource.OnAudioSourceEncodedSample += sipMediaSession.SendAudio;
+
+        try
+        {
+            await greetingSource.StartAudio();
+
+            var greetingPath = string.IsNullOrWhiteSpace(voicemailConfig.GreetingSound)
+                ? null
+                : ResolveSoundPath(voicemailConfig.GreetingSound);
+
+            if (greetingPath is not null)
+            {
+                logger.Information("Playing voicemail greeting {GreetingPath}.", greetingPath);
+                using var greetingStream = File.OpenRead(greetingPath);
+                var playTask = greetingSource.SendAudioFromStream(greetingStream, AudioSamplingRatesEnum.Rate8KHz);
+                if (await Task.WhenAny(playTask, hangupTcs.Task) == hangupTcs.Task)
+                {
+                    greetingSource.CancelSendAudioFromStream();
+                    logger.Information(
+                        "Caller {CallerNumber} hung up during the voicemail greeting; nothing recorded.",
+                        callerNumber);
+                    voicemailSender.Enqueue(new MissedCallNoticeJob(callerNumber, callId));
+                    return;
+                }
+            }
+            else
+            {
+                logger.Information("No voicemail greeting configured; playing a short tone before recording.");
+                greetingSource.SetSource(AudioSourcesEnum.SineWave);
+                if (await Task.WhenAny(Task.Delay(TimeSpan.FromSeconds(1.5), ct), hangupTcs.Task) == hangupTcs.Task)
+                {
+                    logger.Information(
+                        "Caller {CallerNumber} hung up before the voicemail tone finished; nothing recorded.",
+                        callerNumber);
+                    voicemailSender.Enqueue(new MissedCallNoticeJob(callerNumber, callId));
+                    return;
+                }
+
+                greetingSource.SetSource(AudioSourcesEnum.Silence);
+            }
+
+            logger.Information("Recording voicemail for up to {MaxRecordingSeconds}s.", voicemailConfig.MaxRecordingSeconds);
+            lock (recordingLock)
+            {
+                recordingActive = true;
+            }
+
+            await Task.WhenAny(Task.Delay(TimeSpan.FromSeconds(voicemailConfig.MaxRecordingSeconds), ct), hangupTcs.Task);
+
+            lock (recordingLock)
+            {
+                recordingActive = false;
+            }
+        }
+        finally
+        {
+            await greetingSource.CloseAudio();
+        }
+
+        short[] samples;
+        lock (recordingLock)
+        {
+            samples = recordedSamples.ToArray();
+        }
+
+        var recordedSeconds = samples.Length / (double)sampleRate;
+        if (recordedSeconds < 1.0)
+        {
+            logger.Information(
+                "Voicemail recording from {CallerNumber} was too short ({RecordedSeconds:F1}s); not sending.",
+                callerNumber,
+                recordedSeconds);
+            voicemailSender.Enqueue(new MissedCallNoticeJob(callerNumber, callId));
+            return;
+        }
+
+        logger.Information(
+            "Voicemail recording from {CallerNumber} finished: {RecordedSeconds:F1}s captured.",
+            callerNumber,
+            recordedSeconds);
+        var durationSeconds = (int)Math.Round(recordedSeconds);
+        var wavPath = await SaveRecordingAsync(samples, sampleRate, callId);
+        voicemailSender.Enqueue(new VoicemailAudioJob(wavPath, sampleRate, durationSeconds, callerNumber, callId));
+    }
+
+    private async Task<string> SaveRecordingAsync(short[] samples, int sampleRate, string callId)
+    {
+        var wavBytes = WavEncoder.Encode(samples, sampleRate);
+        var recordingsDir = Path.IsPathRooted(voicemailConfig.RecordingsDir)
+            ? voicemailConfig.RecordingsDir
+            : Path.GetFullPath(Path.Combine(configDirectory, voicemailConfig.RecordingsDir));
+        Directory.CreateDirectory(recordingsDir);
+
+        var wavPath = Path.Combine(recordingsDir, $"{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}-{callId}.wav");
+        await File.WriteAllBytesAsync(wavPath, wavBytes);
+        logger.Information("Saved voicemail recording to {WavPath}.", wavPath);
+        return wavPath;
     }
 
     private async Task SendIceCandidateSafeAsync(NostrSignalingClient signaling, RTCIceCandidate candidate)
@@ -181,11 +390,12 @@ public sealed class CallBridge(
         }
     }
 
-    private static void BridgeAudio(RTPSession sipSide, RTPSession webRtcSide)
+    // See docs/voicemail.md for why forwardSipToWebRtc exists.
+    private static void BridgeAudio(RTPSession sipSide, RTPSession webRtcSide, Func<bool> forwardSipToWebRtc)
     {
         sipSide.OnRtpPacketReceived += (_, media, pkt) =>
         {
-            if (media == SDPMediaTypesEnum.audio)
+            if (media == SDPMediaTypesEnum.audio && forwardSipToWebRtc())
             {
                 webRtcSide.SendRtpRaw(media, pkt.Payload, pkt.Header.Timestamp, pkt.Header.MarkerBit, pkt.Header.PayloadType);
             }

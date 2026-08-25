@@ -38,12 +38,12 @@ public sealed class NostrSignalingClient : IAsyncDisposable
     public async Task ConnectAsync()
     {
         _client = new ClientBuilder().Signer(NostrSigner.Keys(_bridgeKeys)).Build();
-        var connectedCount = await ConnectAndCheckRelaysAsync(_client, _relays, _logger);
-        if (connectedCount > 0)
+        var connectedRelays = await RelayConnector.ConnectAsync(_client, _relays, ConnectTimeout, _logger);
+        if (connectedRelays.Count > 0)
         {
             _logger.Information(
                 "Nostr signaling connected: {ConnectedCount}/{TotalCount} relay(s) reachable.",
-                connectedCount,
+                connectedRelays.Count,
                 _relays.Count);
         }
         else
@@ -73,10 +73,10 @@ public sealed class NostrSignalingClient : IAsyncDisposable
         var relays = config.Relays.Select(RelayUrl.Parse).ToList();
         var client = new ClientBuilder().Signer(NostrSigner.Keys(bridgeKeys)).Build();
 
-        var connectedCount = await ConnectAndCheckRelaysAsync(client, relays, logger);
-        if (connectedCount > 0)
+        var connectedRelays = await RelayConnector.ConnectAsync(client, relays, ConnectTimeout, logger);
+        if (connectedRelays.Count > 0)
         {
-            logger.Information("Nostr connected: {ConnectedCount}/{TotalCount} relay(s) reachable.", connectedCount, relays.Count);
+            logger.Information("Nostr connected: {ConnectedCount}/{TotalCount} relay(s) reachable.", connectedRelays.Count, relays.Count);
         }
         else
         {
@@ -90,29 +90,6 @@ public sealed class NostrSignalingClient : IAsyncDisposable
         client.Dispose();
     }
 
-    // Connect() is fire-and-forget - it kicks off each relay's connection
-    // loop and returns immediately, with no guarantee any attempt even
-    // started (confirmed against rust-nostr's source: sdk/src/pool/mod.rs).
-    // TryConnect() actually awaits a real per-relay connection attempt
-    // within the timeout and returns which relays succeeded/failed, with
-    // the real underlying error (DNS/TLS/refused/etc.) per failure - not
-    // just an opaque status enum.
-    private static async Task<int> ConnectAndCheckRelaysAsync(Client client, List<RelayUrl> relays, ILogger logger)
-    {
-        foreach (var relay in relays)
-        {
-            await client.AddRelay(relay);
-        }
-
-        var output = await client.TryConnect(ConnectTimeout);
-        foreach (var failure in output.failed)
-        {
-            logger.Warning("Nostr relay {RelayUrl} failed to connect: {Reason}.", failure.Key, failure.Value);
-        }
-
-        return output.success.Count;
-    }
-
     // Content is the raw SDP offer string; call-type is required by
     // NIP-AC on offers only. sip2nostr only ever bridges audio.
     public Task<EventId> SendOfferAsync(string sdp) =>
@@ -120,6 +97,10 @@ public sealed class NostrSignalingClient : IAsyncDisposable
 
     public Task<EventId> SendIceCandidateAsync(IceCandidatePayload candidate) =>
         PublishAsync(CallSignalKinds.IceCandidate, JsonSerializer.Serialize(candidate));
+
+    // Hangup, not Reject - see docs/voicemail.md.
+    public Task<EventId> SendHangupAsync(string reason) =>
+        PublishAsync(CallSignalKinds.Hangup, reason);
 
     public Task<string> WaitForAnswerAsync(CancellationToken ct)
     {
@@ -154,27 +135,7 @@ public sealed class NostrSignalingClient : IAsyncDisposable
             .SignWithKeys(ephemeralKeys);
 
         var output = await _client!.SendEvent(outerEvent);
-        if (output.success.Count == 0)
-        {
-            var reasons = string.Join("; ", output.failed.Select(f => $"{f.Key}: {f.Value}"));
-            _logger.Error(
-                "Failed to publish NIP-AC event (inner kind {InnerKind}, call-id {CallId}) to any relay: {Reasons}",
-                kind,
-                _callId,
-                reasons);
-            throw new InvalidOperationException($"No relay accepted the event (inner kind {kind}): {reasons}");
-        }
-
-        if (output.failed.Count > 0)
-        {
-            var reasons = string.Join("; ", output.failed.Select(f => $"{f.Key}: {f.Value}"));
-            _logger.Warning(
-                "NIP-AC event (inner kind {InnerKind}, call-id {CallId}) reached {SuccessCount} relay(s) but was rejected by others: {Reasons}",
-                kind,
-                _callId,
-                output.success.Count,
-                reasons);
-        }
+        PublishOutcome.ThrowIfFailed(_logger, $"NIP-AC event (inner kind {kind}, call-id {_callId})", output);
 
         return output.id;
     }

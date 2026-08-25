@@ -9,7 +9,8 @@ local relay: NosCall rings, answers, and audio flows both ways.
 already follows (a NIP-02 contact-list check). Add the bridge's public key
 (derived from `[nostr].bridge_nsec`) as a followed contact in NosCall
 before testing, or every signaling event will be silently dropped as
-`not-followed`.
+`not-followed`. `Program.cs` prints this as `npub1...` on every startup
+(`Bridge Nostr identity: ...`), so there's no need to derive it by hand.
 
 ## Where the protocol came from
 

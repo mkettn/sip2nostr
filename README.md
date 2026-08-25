@@ -21,7 +21,12 @@ propagation to a real NosCall install is verified end-to-end over NIP-AC:
 NosCall rings, answers, and audio flows both ways — see
 `docs/propagating-to-nostr.md` for the protocol and its blind spots. Note
 NosCall only accepts calls from a followed contact, so the bridge's pubkey
-(from `bridge_nsec`) needs to be added as a contact there first.
+(from `bridge_nsec`) needs to be added as a contact there first - printed
+as `npub1...` on every startup so there's no need to derive it by hand.
+The `[voicemail]` answer-timeout fallback is also verified end-to-end
+against a real SIP trunk: the greeting/tone plays, the caller's audio is
+recorded, encoded to Opus/OGG, and delivered as a NIP-17 DM that a
+receiving client can decrypt and play back — see `docs/voicemail.md`.
 
 Copy `config.example.toml` to `config.toml`, fill in your SIP and Nostr
 credentials, and run:
@@ -149,7 +154,40 @@ target_npub = "npub1..."      # your identity — every call latches here in the
 [webrtc]
 stun_servers = ["stun:stun.l.google.com:19302"]
 turn_server = ""               # optional, recommended for NAT traversal
+
+[voicemail]
+enabled = false                # opt-in: falls back to a greeting + recording if target_npub doesn't answer
+ring_timeout_seconds = 20
+max_recording_seconds = 60
+# greeting_sound = "sounds/greeting.opus"   # optional; a short tone plays if unset
+# dm_relays = ["wss://dm-relay.example.com"] # optional; defaults to [nostr].relays
 ```
+
+## Voicemail: answering-machine fallback
+
+Opt-in (`[voicemail].enabled = false` by default). When enabled, if
+`target_npub` doesn't answer a call over Nostr within
+`[voicemail].ring_timeout_seconds`, the call diverts to a local greeting
+(or a short tone if `greeting_sound` isn't configured) followed by a
+recording of up to `max_recording_seconds`, saved locally under
+`[voicemail].recordings_dir` and the SIP call hung up immediately —
+encoding and delivery happen off the call's critical path, handed to a
+background worker (`Voicemail/VoicemailSender.cs`, one instance shared
+for the process lifetime) that connects to `[voicemail].dm_relays` (or
+`[nostr].relays` as a fallback — a NIP-17 DM inbox, kind:10050, can
+legitimately differ from the relays used for call signaling) only when
+something's queued, sends it as a Nostr direct message (NIP-17, audio
+re-encoded as Opus/OGG in-process via `Concentus` — pure C#, no external
+program required — to keep it small), then disconnects. Exactly one DM
+per missed call: the recording, or - if the caller hung up before
+anything worth sending was captured - a plain-text missed-call notice
+naming the caller. Recordings on disk don't depend on delivery
+succeeding. See `docs/voicemail.md` for the full flow and known
+limitations — notably, the recording is inlined directly into the DM
+rather than uploaded to a file host, which is what caps
+`max_recording_seconds`'s default well below a minute: NIP-17's own
+encryption (not just a relay's size limit) can't carry much more than
+~27 seconds of audio at the current encoding.
 
 ## Multiple lines, single identity (MVP)
 
@@ -209,8 +247,12 @@ keys/relays, WebRTC STUN/TURN) at startup. No runtime UI or admin surface.
 - [ ] TURN server requirement — verified working over a local network with
       STUN only; TURN/NAT behavior across the open internet is still
       untested (see `docs/propagating-to-nostr.md` blind spots).
-- [x] Fallback behavior: none for MVP, confirmed — if the Nostr side
-      doesn't answer, the call is left ringing until the caller hangs up.
+- [x] Fallback behavior: implemented, opt-in (`[voicemail].enabled = false`
+      by default), verified end-to-end against a real SIP trunk — if
+      enabled and the Nostr side doesn't answer within
+      `[voicemail].ring_timeout_seconds`, the call falls back to a local
+      greeting + recording, sent to `target_npub` as a Nostr DM. See
+      `docs/voicemail.md`.
 - [ ] DoT/DoH support for the configurable resolver (currently plain DNS
       only in the initial design).
 - [ ] Monitor Nostr.Sdk releases for breaking changes given its alpha status.

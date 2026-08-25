@@ -12,6 +12,9 @@ namespace Sip2Nostr.CallerList;
 // marker, which silently broke blacklist/whitelist matching.
 public static class PhoneNumberNormalizer
 {
+    // See docs/voicemail.md for why this cap exists.
+    private const int MaxDigits = 32;
+
     public static string Normalize(string rawNumber)
     {
         var user = rawNumber.Split(';')[0];
@@ -38,6 +41,6 @@ public static class PhoneNumberNormalizer
             result = result[2..];
         }
 
-        return result;
+        return result.Length > MaxDigits ? result[..MaxDigits] : result;
     }
 }

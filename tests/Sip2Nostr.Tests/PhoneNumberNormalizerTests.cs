@@ -13,4 +13,13 @@ public class PhoneNumberNormalizerTests
     {
         Assert.Equal(expected, PhoneNumberNormalizer.Normalize(raw));
     }
+
+    [Fact]
+    public void Normalize_MoreThan32Digits_TruncatesTo32()
+    {
+        var raw = new string('1', 100);
+        var result = PhoneNumberNormalizer.Normalize(raw);
+        Assert.Equal(32, result.Length);
+        Assert.Equal(new string('1', 32), result);
+    }
 }

@@ -10,6 +10,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Concentus" Version="2.2.2" />
+    <PackageReference Include="Concentus.Oggfile" Version="1.0.7" />
     <PackageReference Include="DnsClient" Version="1.8.0" />
     <PackageReference Include="Nostr.Sdk" Version="0.44.2" />
     <PackageReference Include="Serilog" Version="4.2.0" />

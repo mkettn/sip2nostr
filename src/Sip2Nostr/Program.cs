@@ -1,3 +1,4 @@
+using Nostr.Sdk;
 using Serilog;
 using Sip2Nostr.Config;
 using Sip2Nostr.Sip;
@@ -62,6 +63,9 @@ try
     {
         Log.Information("Writing this run's log to {RunLogPath}.", runLogPath);
     }
+
+    var bridgeNpub = Keys.Parse(config.Nostr.BridgeNsec).PublicKey().ToBech32();
+    Log.Information("Bridge Nostr identity: {BridgeNpub}", bridgeNpub);
 
     using var cts = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) =>
