@@ -28,6 +28,10 @@ against a real SIP trunk: the greeting/tone plays, the caller's audio is
 recorded, encoded to Opus/OGG, and delivered as a NIP-17 DM that a
 receiving client can decrypt and play back — see `docs/voicemail.md`.
 
+An optional second call source, for a phone/modem device attached directly
+to this machine instead of a SIP trunk, is implemented but **not yet
+verified against real hardware** — see `docs/receiving-modem-calls.md`.
+
 Copy `config.example.toml` to `config.toml`, fill in your SIP and Nostr
 credentials, and run:
 
@@ -90,6 +94,8 @@ needing to split languages.
 | Nostr protocol        | **Nostr.Sdk**                     | Official rust-nostr binding (UniFFI-generated, same project as the Rust/Swift/Kotlin bindings, not third-party). NIP-17/NIP-44/NIP-59 support inherited from the core Rust crate. Marked **ALPHA** upstream — expect breaking API changes between versions. |
 | DNS resolution        | **DnsClient.NET**                 | Mature .NET resolver library with explicit, configurable nameserver support (required feature, see below). |
 | Config                | **Tomlyn**                        | TOML parser for .NET. |
+| Modem call control (optional) | **Tmds.DBus**              | Talks to ModemManager over the system D-Bus to answer calls on a directly attached phone/modem device instead of (or alongside) the SIP trunk. See `docs/receiving-modem-calls.md`. |
+| Modem call audio (optional)   | **P/Invoke into `libasound.so.2`** | Call audio never travels over D-Bus; a directly attached modem's audio is bridged via a raw ALSA PCM device instead. No supplementary NuGet package needed. |
 
 Tradeoff worth naming: sipsorcery is newer and less battle-tested at telecom
 scale than PJSIP (which has ~20 years of production deployment behind it),

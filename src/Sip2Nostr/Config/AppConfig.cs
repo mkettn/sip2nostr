@@ -30,6 +30,9 @@ public sealed class AppConfig
 
     [property: TomlPropertyName("voicemail")]
     public VoicemailConfig Voicemail { get; init; } = new();
+
+    [property: TomlPropertyName("modem")]
+    public ModemConfig? Modem { get; init; }
 }
 
 public sealed class SipConfig
@@ -151,4 +154,29 @@ public sealed class VoicemailConfig
     // NIP-17 relay resolution against [nostr].relays if unset/empty.
     [property: TomlPropertyName("dm_relays")]
     public List<string> DmRelays { get; init; } = [];
+}
+
+// A directly attached phone/modem device, controlled over the system D-Bus
+// via ModemManager instead of a SIP trunk - a second ICallSource alongside
+// SipCallSource, feeding the same CallHub/sink chain. Call audio never
+// travels over D-Bus - ModemManager only controls call state - so this also
+// needs the ALSA PCM device the modem exposes for voice-call audio while a
+// call is active, which is vendor/model-specific and not auto-detected. See
+// docs/receiving-modem-calls.md.
+public sealed class ModemConfig
+{
+    [property: TomlPropertyName("enabled")]
+    public bool Enabled { get; init; } = true;
+
+    [property: TomlPropertyName("alsa_device")]
+    public required string AlsaDevice { get; init; }
+
+    // Optional: object path of the modem to use (e.g. when more than one is
+    // managed by ModemManager). Falls back to the first modem ModemManager
+    // reports with voice-call support.
+    [property: TomlPropertyName("modem_object_path")]
+    public string? ModemObjectPath { get; init; }
+
+    [property: TomlPropertyName("label")]
+    public string Label { get; init; } = "modem";
 }
