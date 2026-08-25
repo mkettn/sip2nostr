@@ -84,6 +84,16 @@ internal sealed class ModemCallAudio : ICallAudio, IAsyncDisposable
         {
             _logger.Error(exception, "Modem audio capture loop failed.");
         }
+        catch (Exception exception)
+        {
+            // DisposeAsync's DropCapture() forces the in-flight
+            // snd_pcm_readi to return an error (drop moves the stream to
+            // SETUP, which snd_pcm_recover can't resume from), so this
+            // fires on every ordinary call teardown, not just shutdown -
+            // Debug, not Warning/Error, so it doesn't mask a genuine fault
+            // caught by the branch above.
+            _logger.Debug(exception, "Modem audio capture loop ended during teardown.");
+        }
     }
 
     public async ValueTask DisposeAsync()

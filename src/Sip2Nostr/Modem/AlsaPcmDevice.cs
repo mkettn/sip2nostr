@@ -94,6 +94,15 @@ internal sealed class AlsaPcmDevice : IDisposable
                     return new short[FrameSamples];
                 }
 
+                if (framesRead == 0)
+                {
+                    // Not a documented outcome in blocking mode, but don't
+                    // trust that and spin forever making no progress if it
+                    // ever happens - return what's been read so far, zero-
+                    // padded for the rest.
+                    break;
+                }
+
                 received += (int)framesRead;
             }
 
@@ -121,6 +130,13 @@ internal sealed class AlsaPcmDevice : IDisposable
                 if (framesWritten < 0)
                 {
                     RecoverOrThrow(_playback, (int)framesWritten, "snd_pcm_writei");
+                    return;
+                }
+
+                if (framesWritten == 0)
+                {
+                    // See Read() - not documented in blocking mode, but
+                    // guarded against rather than trusted.
                     return;
                 }
 
