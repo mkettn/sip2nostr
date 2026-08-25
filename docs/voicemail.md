@@ -140,28 +140,32 @@ VoicemailSender then, independently of any particular call:
     `WhenAny` reported as the winner) then gives a genuine answer priority
     if it lands at the same moment the ring timeout elapses.
   - Bridges `Call.Audio` and its own `RtpSessionCallAudio` (wrapping the
-    `RTCPeerConnection`) by forwarding decoded PCM each way, rather than
-    the pre-hub raw-RTP relay - this is what makes the SIP and WebRTC legs
-    independent of each other's codec (see `docs/hub-architecture.md`).
-    Declining (returning `false`) unsubscribes both forwarding handlers
-    before returning, so a fallback to `VoicemailSink` can't keep relaying
-    audio into the (now closed) `RTCPeerConnection` - no `Volatile` gate
-    needed, since `ICallAudio.OnAudioReceived` is a plain event and the
-    handlers are named delegates that can be removed directly.
+    `RTCPeerConnection`, restricted to the same `Call.AudioFormat` as the
+    SIP leg) by forwarding RTP frames unchanged each way - the same raw
+    relay the pre-hub implementation used, just moved out of `CallBridge`
+    (see `docs/hub-architecture.md` for why the hub itself stays
+    RTP-shaped rather than PCM). Declining (returning `false`)
+    unsubscribes both forwarding handlers before returning, so a fallback
+    to `VoicemailSink` can't keep relaying audio into the (now closed)
+    `RTCPeerConnection` - no `Volatile` gate needed, since
+    `ICallAudio.OnAudioReceived` is a plain event and the handlers are
+    named delegates that can be removed directly.
 - `Sinks/VoicemailSink.cs`:
   - `RunVoicemailAsync`'s `recordingActive` flag is read on the thread
-    delivering decoded `Call.Audio.OnAudioReceived` callbacks and written
-    on the sink's own async flow; both sides go through the same lock,
-    since without one there's no guarantee the receiving side ever
-    observes the write.
+    delivering `Call.Audio.OnAudioReceived` callbacks and written on the
+    sink's own async flow; both sides go through the same lock, since
+    without one there's no guarantee the receiving side ever observes the
+    write.
   - Reuses the **already-answered `Call.Audio`** directly instead of
-    building a second media session: `Hub/PcmPlayback.cs` paces the
-    greeting/tone samples out over it (the generic replacement for
-    SIPSorcery's `AudioExtrasSource`, which is tied to `RTPSession` and
-    can't play through the source/sink-agnostic `ICallAudio` contract),
-    while an `OnAudioReceived` subscriber buffers inbound caller PCM
-    directly - no decode step needed here, since `Call.Audio` already
-    hands over decoded PCM.
+    building a second media session: `Hub/RtpAudioPlayback.cs` encodes the
+    greeting/tone PCM against `Call.AudioFormat` and paces it out as RTP
+    frames (the generic replacement for SIPSorcery's `AudioExtrasSource`,
+    which is tied to `RTPSession` and can't play through the source/
+    sink-agnostic `ICallAudio` contract), while an `OnAudioReceived`
+    subscriber decodes each inbound frame via
+    `SIPSorcery.Media.AudioEncoder.DecodeAudio` and buffers the PCM - the
+    hub itself only ever hands over RTP frames, so this sink is the one
+    that knows how to turn them into samples.
   - `WavEncoder` (pure logic, unit tested) writes a minimal canonical
     16-bit PCM WAV header around the buffered samples.
   - `TryHandleAsync` always returns `true`: `CallHub`'s own `finally`

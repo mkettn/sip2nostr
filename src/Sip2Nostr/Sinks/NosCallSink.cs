@@ -1,6 +1,5 @@
 using Serilog;
 using SIPSorcery.Net;
-using SIPSorceryMedia.Abstractions;
 using Sip2Nostr.Config;
 using Sip2Nostr.Hub;
 using Sip2Nostr.Signaling;
@@ -19,22 +18,20 @@ public sealed class NosCallSink(
     int? ringTimeoutSeconds,
     ILogger logger) : ICallSink
 {
-    // Fixed rather than matched to the SIP leg's codec: ICallAudio already
-    // decouples the two legs to plain PCM, so this only has to be a format
-    // WebRTC peers negotiate reliably.
-    private const SDPWellKnownMediaFormatsEnum WebRtcAudioFormat = SDPWellKnownMediaFormatsEnum.PCMA;
-
     public async Task<bool> TryHandleAsync(Call call, CancellationToken ct)
     {
+        // Matched to the SIP leg's codec, not a fixed choice: RTP frames
+        // are relayed unchanged between the two legs (see RtpAudioFrame),
+        // so both sides must agree on the payload-type/codec mapping.
         var rtcConfig = new RTCConfiguration { iceServers = BuildIceServers() };
         var pc = new RTCPeerConnection(rtcConfig, 0, null, false);
-        pc.addTrack(new MediaStreamTrack(new AudioFormat(WebRtcAudioFormat), MediaStreamStatusEnum.SendRecv));
+        pc.addTrack(new MediaStreamTrack(call.AudioFormat, MediaStreamStatusEnum.SendRecv));
         logger.Information(
             "Created WebRTC peer connection with {IceServerCount} ICE server(s) for call {CallId}.",
             rtcConfig.iceServers.Count,
             call.CallId);
 
-        var webRtcAudio = new RtpSessionCallAudio(pc, new AudioFormat(WebRtcAudioFormat));
+        var webRtcAudio = new RtpSessionCallAudio(pc);
         var forwardToWebRtc = webRtcAudio.Send;
         var forwardToSip = call.Audio.Send;
 

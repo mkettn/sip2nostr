@@ -14,15 +14,13 @@ public sealed class LocalTestAudioSink(
     string configDirectory,
     ILogger logger) : ICallSink
 {
-    private const int SampleRate = 8000;
-
     public async Task<bool> TryHandleAsync(Call call, CancellationToken ct)
     {
         var matchedLine = lines.FirstOrDefault(line => line.Label == call.LineLabel);
-        var samples = ResolveTestAudio(matchedLine);
+        var samples = ResolveTestAudio(matchedLine, call.AudioFormat.ClockRate);
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var playTask = PcmPlayback.PlayLoopAsync(call.Audio, samples, SampleRate, cts.Token);
+        var playTask = RtpAudioPlayback.PlayLoopAsync(call.Audio, samples, call.AudioFormat, cts.Token);
         await call.WhenRemoteHungUp;
         cts.Cancel();
         await playTask;
@@ -30,7 +28,7 @@ public sealed class LocalTestAudioSink(
         return true;
     }
 
-    private short[] ResolveTestAudio(LineConfig? matchedLine)
+    private short[] ResolveTestAudio(LineConfig? matchedLine, int sampleRate)
     {
         if (!string.IsNullOrWhiteSpace(matchedLine?.Sound))
         {
@@ -51,6 +49,6 @@ public sealed class LocalTestAudioSink(
             logger.Information("No line sound configured; sending sine wave test audio.");
         }
 
-        return PcmPlayback.GenerateTone(440, 1.0, SampleRate);
+        return RtpAudioPlayback.GenerateTone(440, 1.0, sampleRate);
     }
 }

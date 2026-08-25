@@ -36,14 +36,18 @@ does with it" into three pieces:
   ends. There's no separate "answer" step at this level - a source only
   ever raises `OnIncomingCall` once audio is actually flowing, so a `Call`
   is always ready to bridge or record immediately.
-- **`ICallAudio`** (`Hub/ICallAudio.cs`) is bidirectional 8 kHz mono
-  16-bit PCM, regardless of the transport underneath. `Sip/
+- **`ICallAudio`** (`Hub/ICallAudio.cs`) relays `RtpAudioFrame`s (`Hub/
+  RtpAudioFrame.cs`) - an RTP payload plus just enough header (timestamp,
+  marker bit, payload type) to resend it unchanged elsewhere. This is the
+  hub's fixed exchange format - see "Why RTP, not PCM" below. `Sip/
   RtpSessionCallAudio.cs` adapts it to sipsorcery's `RTPSession` (used for
   both the SIP leg and, in `NosCallSink`, the WebRTC leg - `RTCPeerConnection`
-  is itself an `RTPSession` subclass). Decoding SIP audio to PCM and
-  re-encoding it for WebRTC (rather than the pre-refactor raw-RTP relay,
-  which only worked because both legs happened to negotiate the same G.711
-  payload) is the price of this abstraction - see "Why PCM" below.
+  is itself an `RTPSession` subclass) by relaying `OnRtpPacketReceived`
+  payloads unchanged - no decode/encode, same as the pre-refactor
+  `CallBridge.BridgeAudio`. `Call.AudioFormat` carries the codec those
+  frames are encoded with, for the sinks that need actual PCM samples
+  (`VoicemailSink`, `LocalTestAudioSink`) or need to negotiate a matching
+  format on another leg (`NosCallSink`).
 - **`ICallSink`** (`Hub/ICallSink.cs`) is anything `CallHub` can offer a
   `Call` to. Returning `true` means it handled the call end to end
   (bridged it until hangup, or recorded a voicemail); `CallHub` won't try
@@ -74,19 +78,29 @@ Each sink only receives the config it actually needs; none of them checks
 `nostrConfig.Enabled` or `voicemailConfig.Enabled` itself, since whether a
 sink is even in the chain already encodes that.
 
-## Why PCM instead of a raw RTP relay
+## Why RTP, not PCM, is the hub's exchange format
 
-The pre-refactor `CallBridge.BridgeAudio` forwarded RTP packets unchanged
-between the SIP and WebRTC `RTPSession`s - zero-cost, but only correct
-because both sides were forced onto the same G.711 payload type. Bridging
-through `ICallAudio` instead means every sink (and every future source)
-speaks the same 8 kHz mono PCM regardless of what codec its transport
-negotiated, at the cost of a decode/re-encode step on the path that used
-to be a raw relay (`NosCallSink`). That trade was made deliberately: a
-raw-RTP contract can't survive a source or sink whose transport doesn't
-happen to speak the same RTP payload type (WebRTC choosing Opus, a modem's
-ALSA device, anything that isn't G.711 SIP-to-SIP), and this refactor
-exists specifically to stop assuming there's only ever one of each.
+An earlier version of this refactor made `ICallAudio` PCM-shaped instead -
+every sink and source would speak plain samples, and `NosCallSink` would
+decode SIP audio and re-encode it for WebRTC on every frame, purely to
+stay codec-agnostic. That traded a real, paid-today cost (a decode/re-
+encode step on the one bridging path that exists, `NosCallSink`) for a
+capability nothing in this codebase uses yet - no source or sink here is
+anything other than RTP-shaped underneath. `ICallAudio` relays
+`RtpAudioFrame`s instead, keeping `NosCallSink`'s SIP↔WebRTC bridge a
+zero-cost raw relay exactly like the pre-refactor `CallBridge.BridgeAudio`
+- both legs are still restricted to the same negotiated codec
+(`Call.AudioFormat`) for this to be correct, same as before.
+
+This does mean a source or sink whose transport isn't RTP-shaped (a
+modem capturing raw PCM off an ALSA device, say) has to encode/decode at
+its own boundary rather than getting that translation for free from the
+hub - `VoicemailSink` and `LocalTestAudioSink` already do exactly this
+today (via `SIPSorcery.Media.AudioEncoder` and `Hub/RtpAudioPlayback.cs`)
+since they need actual samples to record or generate a tone, not just
+frames to relay. That's the right place for it: recoding is a source/sink
+concern, not something the hub should force onto every pair regardless of
+whether either side actually needs it.
 
 ## Forward-compatibility: outbound dialing
 

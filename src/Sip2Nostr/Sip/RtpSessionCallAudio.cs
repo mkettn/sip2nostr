@@ -1,33 +1,27 @@
-using SIPSorcery.Media;
 using SIPSorcery.Net;
-using SIPSorceryMedia.Abstractions;
 using Sip2Nostr.Hub;
 
 namespace Sip2Nostr.Sip;
 
-// Adapts a SIP RTPSession to ICallAudio: decodes inbound RTP to PCM and
-// encodes outbound PCM back to the negotiated codec. For G.711 the RTP
-// clock rate equals the PCM sample rate, so a batch's duration in RTP
-// units is just its sample count.
+// Adapts a SIP RTPSession to ICallAudio by relaying its RTP audio payloads
+// unchanged - no decode/encode. sipsorcery's RTCPeerConnection is itself
+// an RTPSession subclass, so this also works for the WebRTC leg
+// (see NosCallSink).
 public sealed class RtpSessionCallAudio : ICallAudio
 {
     private readonly RTPSession session;
-    private readonly AudioFormat audioFormat;
-    private readonly AudioEncoder encoder = new();
 
-    public event Action<short[]>? OnAudioReceived;
+    public event Action<RtpAudioFrame>? OnAudioReceived;
 
-    public RtpSessionCallAudio(RTPSession session, AudioFormat audioFormat)
+    public RtpSessionCallAudio(RTPSession session)
     {
         this.session = session;
-        this.audioFormat = audioFormat;
         session.OnRtpPacketReceived += HandleRtpPacketReceived;
     }
 
-    public void Send(short[] samples)
+    public void Send(RtpAudioFrame frame)
     {
-        var encoded = encoder.EncodeAudio(samples, audioFormat);
-        session.SendAudio((uint)samples.Length, encoded);
+        session.SendRtpRaw(SDPMediaTypesEnum.audio, frame.Payload, frame.Timestamp, frame.MarkerBit, frame.PayloadType);
     }
 
     private void HandleRtpPacketReceived(System.Net.IPEndPoint _, SDPMediaTypesEnum media, RTPPacket packet)
@@ -37,6 +31,6 @@ public sealed class RtpSessionCallAudio : ICallAudio
             return;
         }
 
-        OnAudioReceived?.Invoke(encoder.DecodeAudio(packet.Payload, audioFormat));
+        OnAudioReceived?.Invoke(new RtpAudioFrame(packet.Payload, packet.Header.Timestamp, packet.Header.MarkerBit, packet.Header.PayloadType));
     }
 }

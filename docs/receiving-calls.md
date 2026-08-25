@@ -73,24 +73,25 @@ transport-agnostic `Call`, which `CallHub` routes through the configured
    `SIPUserAgent.Answer(uas, mediaSession, customHeaders: null,
    publicIpAddress: localMediaAddress)` — sipsorcery's own supported answer
    path, not a hand-built response. The session is wrapped in
-   `RtpSessionCallAudio` (an `ICallAudio` adapter that decodes inbound RTP
-   to 8 kHz mono PCM and encodes outbound PCM back to G.711) and handed to
-   `CallHub` as part of a `Call`. What happens to the audio from here is a
-   sink's job, not the source's:
+   `RtpSessionCallAudio` (an `ICallAudio` adapter that relays inbound/
+   outbound RTP audio payloads unchanged — no decode/encode) and handed to
+   `CallHub` as part of a `Call`, which also carries the negotiated
+   `AudioFormat` so a sink can decode/negotiate against it if it needs to.
+   What happens to the audio from here is a sink's job, not the source's:
 
-   - **Local test audio (`LocalTestAudioSink`, verified):** plays either a
-     configured sound file (`[[lines]].sound`, converted to raw 8 kHz PCM
+   - **Local test audio (`LocalTestAudioSink`, verified):** encodes either
+     a configured sound file (`[[lines]].sound`, converted to raw 8 kHz PCM
      via `ffmpeg` if it isn't already `.pcm`/`.raw`/`.s16le`) or a sine
-     wave test tone if none is configured, looping over `Call.Audio` until
+     wave test tone into RTP frames and loops them over `Call.Audio` until
      the caller hangs up. Only wired in when `[nostr].enabled = false`.
    - **Nostr/WebRTC bridging (`NosCallSink`, implemented and verified end-
-     to-end):** creates an `RTCPeerConnection` for the WebRTC leg, wrapped
-     in its own `RtpSessionCallAudio`, and bridges the two `ICallAudio`
-     legs by forwarding decoded PCM frames each way — unlike the pre-hub
-     implementation this is a decode/re-encode bridge, not a raw RTP
-     relay, which is what makes the SIP and WebRTC legs independent of
-     each other's codec. A `NostrSignalingClient` connects, an SDP offer is
-     generated from the `RTCPeerConnection` and gift-wrapped to
+     to-end):** creates an `RTCPeerConnection` for the WebRTC leg,
+     restricted to the same negotiated `Call.AudioFormat` as the SIP leg,
+     wrapped in its own `RtpSessionCallAudio`, and bridges the two
+     `ICallAudio` legs by forwarding RTP frames unchanged each way — a raw
+     relay, same as the pre-hub implementation, since both legs are forced
+     onto the same codec. A `NostrSignalingClient` connects, an SDP offer
+     is generated from the `RTCPeerConnection` and gift-wrapped to
      `target_npub`, and the call waits for a gift-wrapped SDP answer and
      ICE candidates back before completing the WebRTC side. See
      `docs/propagating-to-nostr.md` for the protocol.

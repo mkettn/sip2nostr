@@ -1,4 +1,5 @@
 using Serilog;
+using SIPSorcery.Media;
 using Sip2Nostr.Config;
 using Sip2Nostr.Hub;
 using Sip2Nostr.Shared;
@@ -10,15 +11,15 @@ namespace Sip2Nostr.Sinks;
 // Answering-machine fallback: plays a greeting (or a short tone if none is
 // configured), records the caller, and enqueues it for delivery over
 // Nostr. Always handles the call it's offered - see docs/voicemail.md for
-// the full flow and the exactly-one-job guarantee.
+// the full flow and the exactly-one-job guarantee. The hub only ever
+// exchanges RTP frames (see RtpAudioFrame), so this sink decodes/encodes
+// against Call.AudioFormat itself wherever it needs actual PCM samples.
 public sealed class VoicemailSink(
     VoicemailConfig voicemailConfig,
     VoicemailSender voicemailSender,
     string configDirectory,
     ILogger logger) : ICallSink
 {
-    private const int SampleRate = 8000;
-
     public async Task<bool> TryHandleAsync(Call call, CancellationToken ct)
     {
         try
@@ -38,17 +39,19 @@ public sealed class VoicemailSink(
 
     private async Task RunVoicemailAsync(Call call, CancellationToken ct)
     {
+        var sampleRate = call.AudioFormat.ClockRate;
+        var decoder = new AudioEncoder();
         var recordingLock = new object();
         var recordedSamples = new List<short>();
         var recordingActive = false;
 
-        void OnAudioReceived(short[] samples)
+        void OnAudioReceived(RtpAudioFrame frame)
         {
             lock (recordingLock)
             {
                 if (recordingActive)
                 {
-                    recordedSamples.AddRange(samples);
+                    recordedSamples.AddRange(decoder.DecodeAudio(frame.Payload, call.AudioFormat));
                 }
             }
         }
@@ -76,7 +79,7 @@ public sealed class VoicemailSink(
             else
             {
                 logger.Information("No voicemail greeting configured; playing a short tone before recording for call {CallId}.", call.CallId);
-                var tone = PcmPlayback.GenerateTone(440, 1.5, SampleRate);
+                var tone = RtpAudioPlayback.GenerateTone(440, 1.5, sampleRate);
                 if (await PlayUntilHungUpAsync(call, tone, ct))
                 {
                     logger.Information(
@@ -111,7 +114,7 @@ public sealed class VoicemailSink(
             samples = recordedSamples.ToArray();
         }
 
-        var recordedSeconds = samples.Length / (double)SampleRate;
+        var recordedSeconds = samples.Length / (double)sampleRate;
         if (recordedSeconds < 1.0)
         {
             logger.Information(
@@ -127,20 +130,20 @@ public sealed class VoicemailSink(
             call.CallerNumber,
             recordedSeconds);
         var durationSeconds = (int)Math.Round(recordedSeconds);
-        var wavPath = await SaveRecordingAsync(samples, call.CallId);
-        voicemailSender.Enqueue(new VoicemailAudioJob(wavPath, SampleRate, durationSeconds, call.CallerNumber, call.CallId));
+        var wavPath = await SaveRecordingAsync(samples, sampleRate, call.CallId);
+        voicemailSender.Enqueue(new VoicemailAudioJob(wavPath, sampleRate, durationSeconds, call.CallerNumber, call.CallId));
     }
 
     // Returns true if the caller hung up before playback finished.
     private static async Task<bool> PlayUntilHungUpAsync(Call call, short[] samples, CancellationToken ct)
     {
-        var playTask = PcmPlayback.PlayOnceAsync(call.Audio, samples, SampleRate, ct);
+        var playTask = RtpAudioPlayback.PlayOnceAsync(call.Audio, samples, call.AudioFormat, ct);
         return await Task.WhenAny(playTask, call.WhenRemoteHungUp) == call.WhenRemoteHungUp;
     }
 
-    private async Task<string> SaveRecordingAsync(short[] samples, string callId)
+    private async Task<string> SaveRecordingAsync(short[] samples, int sampleRate, string callId)
     {
-        var wavBytes = WavEncoder.Encode(samples, SampleRate);
+        var wavBytes = WavEncoder.Encode(samples, sampleRate);
         var recordingsDir = Path.IsPathRooted(voicemailConfig.RecordingsDir)
             ? voicemailConfig.RecordingsDir
             : Path.GetFullPath(Path.Combine(configDirectory, voicemailConfig.RecordingsDir));

@@ -1,20 +1,25 @@
+using SIPSorcery.Media;
+using SIPSorceryMedia.Abstractions;
+
 namespace Sip2Nostr.Hub;
 
-// Paces PCM samples out over an ICallAudio at 20ms frames - the generic
-// replacement for SIPSorcery's AudioExtrasSource, which is tied to
-// RTPSession and can't play through the source/sink-agnostic audio
-// contract. Used for voicemail greetings/tones and the local test-audio
-// sink.
-public static class PcmPlayback
+// Encodes PCM samples to the given codec and paces them out over an
+// ICallAudio as RTP frames at 20ms intervals - the shared player for
+// voicemail greetings/tones and the local test-audio sink, both of which
+// only have PCM to play (a generated tone, or a sound file decoded via
+// ffmpeg) but must hand it to the hub as RTP frames like everything else.
+public static class RtpAudioPlayback
 {
     private const int FrameMillis = 20;
 
     // Cancellation is treated as "stop playback", not an error - callers
     // race this against a hangup signal and don't want a thrown
     // OperationCanceledException on the common "caller hung up" path.
-    public static async Task PlayOnceAsync(ICallAudio audio, short[] samples, int sampleRate, CancellationToken ct)
+    public static async Task PlayOnceAsync(ICallAudio audio, short[] samples, AudioFormat audioFormat, CancellationToken ct)
     {
-        var frameSize = sampleRate * FrameMillis / 1000;
+        var encoder = new AudioEncoder();
+        var frameSize = audioFormat.ClockRate * FrameMillis / 1000;
+        var timestamp = 0u;
         for (var offset = 0; offset < samples.Length; offset += frameSize)
         {
             if (ct.IsCancellationRequested)
@@ -23,7 +28,10 @@ public static class PcmPlayback
             }
 
             var length = Math.Min(frameSize, samples.Length - offset);
-            audio.Send(samples[offset..(offset + length)]);
+            var frameSamples = samples[offset..(offset + length)];
+            var payload = encoder.EncodeAudio(frameSamples, audioFormat);
+            audio.Send(new RtpAudioFrame(payload, timestamp, MarkerBit: 0, audioFormat.FormatID));
+            timestamp += (uint)length;
 
             try
             {
@@ -36,11 +44,11 @@ public static class PcmPlayback
         }
     }
 
-    public static async Task PlayLoopAsync(ICallAudio audio, short[] samples, int sampleRate, CancellationToken ct)
+    public static async Task PlayLoopAsync(ICallAudio audio, short[] samples, AudioFormat audioFormat, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
-            await PlayOnceAsync(audio, samples, sampleRate, ct);
+            await PlayOnceAsync(audio, samples, audioFormat, ct);
         }
     }
 

@@ -1,11 +1,10 @@
 namespace Sip2Nostr.Hub;
 
-// Bidirectional 8kHz mono 16-bit PCM audio for one call, regardless of the
-// transport underneath (SIP RTP today; WebRTC or a modem's ALSA device are
-// both PCM-shaped too, so the same interface covers them without change).
+// Bidirectional RTP audio for one call - see RtpAudioFrame for why RTP,
+// not PCM, is the hub's fixed exchange format.
 public interface ICallAudio
 {
-    event Action<short[]> OnAudioReceived;
+    event Action<RtpAudioFrame> OnAudioReceived;
 
-    void Send(short[] samples);
+    void Send(RtpAudioFrame frame);
 }

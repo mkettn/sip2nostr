@@ -284,7 +284,8 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
             callId,
             callerNumber,
             matchedLine?.Label,
-            new RtpSessionCallAudio(sipMediaSession, new AudioFormat(selectedAudioFormat)),
+            new AudioFormat(selectedAudioFormat),
+            new RtpSessionCallAudio(sipMediaSession),
             () =>
             {
                 ua.Hangup();
@@ -298,12 +299,13 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         logger.Information("Stopping SIP registration and transport; sending zero-expiry REGISTER to remove the binding.");
         _registration?.Stop(sendZeroExpiryRegister: true);
         _userAgent?.Close();
         _sipTransport.Shutdown();
+        return ValueTask.CompletedTask;
     }
 
     private void InstallSipTraceLogging()
