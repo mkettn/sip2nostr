@@ -1,17 +1,12 @@
 # Hub Architecture
 
-sip2nostr originally had one call path hard-wired end to end: `BridgeService`
-answered SIP INVITEs and handed them straight to `CallBridge`, which decided
-whether to ring over Nostr, fall back to voicemail, or (with `[nostr].enabled
-= false`) just play local test audio - all in one class, one method. That
-worked for a single SIP trunk with exactly two possible outcomes, but it
-doesn't generalize: a future call source (a modem attached over D-Bus,
-say) would have needed its own copy of the same ring/voicemail/test-audio
-decision tree, because nothing about that decision tree was separable from
-`CallBridge`'s SIP-specific types.
-
-This refactor splits "how a call reaches sip2nostr" from "what sip2nostr
-does with it" into three pieces:
+sip2nostr splits "how a call reaches sip2nostr" from "what sip2nostr does
+with it" into three pieces: a source that produces calls, a hub that
+routes them, and a chain of sinks that decide what happens to each one.
+This keeps the call-handling logic (ring over Nostr, fall back to
+voicemail, play local test audio) independent of any particular
+transport, so a future call source - a modem attached over D-Bus, say -
+can reuse the same sinks without reimplementing that logic.
 
 ```
  ICallSource            produces Calls (SipCallSource today)
@@ -49,12 +44,11 @@ does with it" into three pieces:
   (used for both the SIP leg and, in `NosCallSink`, the WebRTC leg -
   `RTCPeerConnection` is itself an `RTPSession` subclass): `Send` relays
   `OnRtpPacketReceived` payloads unchanged via `SendRtpRaw` - no decode/
-  encode, same as the pre-refactor `CallBridge.BridgeAudio` - while
-  `SendEncodedSample` is a straight passthrough to `RTPSession.SendAudio`.
-  `Call.AudioFormat` carries the codec those frames are encoded with, for
-  the sinks that need actual PCM samples (`VoicemailSink`,
-  `LocalTestAudioSink`) or need to negotiate a matching format on another
-  leg (`NosCallSink`).
+  encode - while `SendEncodedSample` is a straight passthrough to
+  `RTPSession.SendAudio`. `Call.AudioFormat` carries the codec those
+  frames are encoded with, for the sinks that need actual PCM samples
+  (`VoicemailSink`, `LocalTestAudioSink`) or need to negotiate a matching
+  format on another leg (`NosCallSink`).
 - **`ICallSink`** (`Hub/ICallSink.cs`) is anything `CallHub` can offer a
   `Call` to. Returning `true` means it handled the call end to end
   (bridged it until hangup, or recorded a voicemail); `CallHub` won't try
@@ -63,9 +57,9 @@ does with it" into three pieces:
   a turn.
 - **`CallHub`** (`Hub/CallHub.cs`) ties a set of sources to one ordered
   sink chain. If no sink handles a call, it's left connected until the
-  caller hangs up - unchanged from the pre-refactor behavior for
-  `[nostr].enabled = false` or `[voicemail].enabled = false` with nothing
-  else configured.
+  caller hangs up - which is also what happens with `[nostr].enabled =
+  false` or `[voicemail].enabled = false` with nothing else configured,
+  since neither condition puts a matching sink in the chain.
 
 ## Sink wiring
 
@@ -73,10 +67,10 @@ does with it" into three pieces:
 
 - `[nostr].enabled = true` → `NosCallSink`, then (if `[voicemail].enabled`)
   `VoicemailSink`. `NosCallSink` only applies a ring timeout when
-  voicemail is enabled (otherwise it rings indefinitely, matching
-  pre-refactor behavior) - it takes that as a plain `int?` rather than a
-  `VoicemailConfig` reference, so it doesn't need to know voicemail exists
-  as a concept, only how long to wait before giving up.
+  voicemail is enabled - otherwise it rings until the caller hangs up - so
+  it takes that as a plain `int?` rather than a `VoicemailConfig`
+  reference, meaning it doesn't need to know voicemail exists as a
+  concept, only how long to wait before giving up.
 - `[nostr].enabled = false` → `LocalTestAudioSink` only. This is a
   dev/testing path (see `docs/receiving-calls.md`), not a sink that's ever
   combined with the other two.
@@ -87,43 +81,36 @@ sink is even in the chain already encodes that.
 
 ## Why RTP, not PCM, is the hub's exchange format
 
-An earlier version of this refactor made `ICallAudio` PCM-shaped instead -
-every sink and source would speak plain samples, and `NosCallSink` would
-decode SIP audio and re-encode it for WebRTC on every frame, purely to
-stay codec-agnostic. That traded a real, paid-today cost (a decode/re-
-encode step on the one bridging path that exists, `NosCallSink`) for a
-capability nothing in this codebase uses yet - no source or sink here is
-anything other than RTP-shaped underneath. `ICallAudio` relays
-`RtpAudioFrame`s instead, keeping `NosCallSink`'s SIP↔WebRTC bridge a
-zero-cost raw relay exactly like the pre-refactor `CallBridge.BridgeAudio`
-- both legs are still restricted to the same negotiated codec
-(`Call.AudioFormat`) for this to be correct, same as before.
+`ICallAudio` relays `RtpAudioFrame`s - RTP payload bytes plus enough
+header (timestamp, marker bit, payload type) to resend unchanged - rather
+than decoded PCM samples. Every source and sink today is RTP-shaped
+underneath (SIP's `RTPSession`, WebRTC's `RTCPeerConnection`, itself an
+`RTPSession` subclass), so relaying RTP frames directly keeps
+`NosCallSink`'s SIP↔WebRTC bridge a zero-cost raw relay: both legs are
+restricted to the same negotiated codec (`Call.AudioFormat`), so payloads
+forward byte-for-byte with no decode/re-encode step.
 
-This does mean a source or sink whose transport isn't RTP-shaped (a
-modem capturing raw PCM off an ALSA device, say) has to encode/decode at
-its own boundary rather than getting that translation for free from the
-hub - `VoicemailSink` and `LocalTestAudioSink` already do exactly this
-today: recording decodes via `SIPSorcery.Media.AudioEncoder.DecodeAudio`,
-and playback wires SIPSorcery's own `AudioExtrasSource` into
-`ICallAudio.SendEncodedSample` instead of hand-rolling PCM pacing/RTP
-framing (an earlier version of this refactor did exactly that, and got
-the RTP timestamp and marker bit wrong - reimplementing something
-`AudioExtrasSource` already handles correctly bought nothing). Both sinks
-need actual samples to record or generate a tone, not just frames to
-relay. That's the right place for it: recoding is a source/sink
-concern, not something the hub should force onto every pair regardless of
-whether either side actually needs it.
+A source or sink whose transport isn't RTP-shaped (a modem capturing raw
+PCM off an ALSA device, say) encodes/decodes at its own boundary instead
+of the hub doing it for every pair regardless of need. `VoicemailSink`
+and `LocalTestAudioSink` already work this way: recording decodes each
+frame via `SIPSorcery.Media.AudioEncoder.DecodeAudio` against
+`Call.AudioFormat`, and playback (a greeting, a tone, a looped sound
+file) uses SIPSorcery's own `AudioExtrasSource`, wired into
+`ICallAudio.SendEncodedSample`, so that off-the-shelf player manages RTP
+timestamp/pacing rather than either sink reimplementing it. Recoding is a
+source/sink concern, not something the hub forces onto every pair.
 
 ## Forward-compatibility: outbound dialing
 
-The immediate motivation for this refactor was wanting different sources
-(SIP today, maybe a modem/D-Bus line later) and different sinks (NosCall,
-voicemail) without duplicating the call-handling logic for each
-combination. A second, related goal shaped some of the naming choices
-without being built now: **outbound dialing isn't implemented**, but
-nothing here should need to be reshaped to add it later - e.g. NosCall
-gaining a "dial this number" DM that makes the bridge originate a call to
-both `target_npub` and a PSTN number.
+sip2nostr is designed to support different sources (SIP today, maybe a
+modem/D-Bus line later) and different sinks (NosCall, voicemail) without
+duplicating call-handling logic for each combination. A related goal
+shaped some of the naming choices without being built yet:
+**outbound dialing isn't implemented**, but nothing here should need to
+be reshaped to add it later - e.g. NosCall gaining a "dial this number"
+DM that makes the bridge originate a call to both `target_npub` and a
+PSTN number.
 
 Concretely, that's why:
 
@@ -146,22 +133,3 @@ load-bearing for the inbound-only feature set that does exist. It's
 mentioned here so the next person adding outbound dialing knows which
 design decisions were made with it in mind, and doesn't need to guess
 whether `Call`'s name was an oversight.
-
-## What changed for existing features
-
-Behavior is unchanged from the caller's and `target_npub`'s perspective;
-see `docs/receiving-calls.md` and `docs/voicemail.md` for the updated
-per-feature flow descriptions and implementation notes. In short:
-
-- `BridgeService` → `Sip/SipCallSource.cs` (SIP transport/registration/
-  trace-logging carried over essentially unchanged; only how it hands off
-  an answered call is new).
-- `CallBridge`'s Nostr/WebRTC bridging → `Sinks/NosCallSink.cs`.
-- `CallBridge`'s voicemail recording → `Sinks/VoicemailSink.cs`.
-- `CallBridge`'s `[nostr].enabled = false` local-audio path →
-  `Sinks/LocalTestAudioSink.cs`, now built on the same `RTPSession` +
-  `RtpSessionCallAudio` path as everything else rather than a separate
-  `AudioSendOnlyMediaSession`.
-- Sound-file resolution (`[[lines]].sound`, `[voicemail].greeting_sound`) →
-  `Shared/SoundFileResolver.cs`, shared by `LocalTestAudioSink` and
-  `VoicemailSink` instead of living inside `CallBridge`.
