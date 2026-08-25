@@ -23,10 +23,10 @@ NosCall rings, answers, and audio flows both ways — see
 NosCall only accepts calls from a followed contact, so the bridge's pubkey
 (from `bridge_nsec`) needs to be added as a contact there first - printed
 as `npub1...` on every startup so there's no need to derive it by hand.
-The
-`[voicemail]` answer-timeout fallback (greeting + recording, sent to
-`target_npub` as a Nostr DM) is implemented but **not yet verified**
-end-to-end — see `docs/voicemail.md`.
+The `[voicemail]` answer-timeout fallback is also verified end-to-end
+against a real SIP trunk: the greeting/tone plays, the caller's audio is
+recorded, encoded to Opus/OGG, and delivered as a NIP-17 DM that a
+receiving client can decrypt and play back — see `docs/voicemail.md`.
 
 Copy `config.example.toml` to `config.toml`, fill in your SIP and Nostr
 credentials, and run:
@@ -248,10 +248,11 @@ keys/relays, WebRTC STUN/TURN) at startup. No runtime UI or admin surface.
       STUN only; TURN/NAT behavior across the open internet is still
       untested (see `docs/propagating-to-nostr.md` blind spots).
 - [x] Fallback behavior: implemented, opt-in (`[voicemail].enabled = false`
-      by default), not yet verified end-to-end — if enabled and the Nostr
-      side doesn't answer within `[voicemail].ring_timeout_seconds`, the
-      call falls back to a local greeting + recording, sent to
-      `target_npub` as a Nostr DM. See `docs/voicemail.md`.
+      by default), verified end-to-end against a real SIP trunk — if
+      enabled and the Nostr side doesn't answer within
+      `[voicemail].ring_timeout_seconds`, the call falls back to a local
+      greeting + recording, sent to `target_npub` as a Nostr DM. See
+      `docs/voicemail.md`.
 - [ ] DoT/DoH support for the configurable resolver (currently plain DNS
       only in the initial design).
 - [ ] Monitor Nostr.Sdk releases for breaking changes given its alpha status.

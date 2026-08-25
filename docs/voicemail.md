@@ -12,10 +12,13 @@ changes. With it turned on, a caller who isn't answered within
 was captured, otherwise a plain-text missed-call notice - never both,
 never neither.
 
-Not yet verified against a real SIP trunk or a real receiving Nostr
-client - implemented from the same sipsorcery/Nostr.Sdk APIs already
-verified working elsewhere in this codebase (see below), but the feature
-itself hasn't been exercised end-to-end yet.
+Verified end-to-end against a real SIP trunk and a real NIP-17 client: a
+call that falls back to voicemail plays the greeting/tone, records the
+caller, encodes it to Opus/OGG, and delivers it as a NIP-17 DM that the
+receiving client decrypts and plays back correctly. The
+`MissedCallNoticeJob` path (recording too short / caller hangs up
+before anything is captured) hasn't specifically been exercised, but
+shares the same delivery code as the verified `VoicemailAudioJob` path.
 
 ## Flow
 
@@ -347,4 +350,3 @@ VoicemailSender then, independently of any particular call:
   startup" logic). For a personal single-line deployment where the
   process runs continuously, this is a minor gap; it would matter more
   under frequent restarts or heavy call volume.
-- **Not yet verified against a real SIP trunk or a real NIP-17 client.**
