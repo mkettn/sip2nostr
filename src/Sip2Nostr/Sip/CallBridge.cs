@@ -244,6 +244,20 @@ public sealed class CallBridge(
         {
             await RunVoicemailAsync(sipMediaSession, selectedAudioFormat, callerNumber, callId, hangupTcs, ct);
         }
+        catch (Exception exception)
+        {
+            // RunVoicemailAsync only enqueues a job on its own success
+            // paths (the early returns and the final recording-finished
+            // path each enqueue exactly one) - if it throws instead (a
+            // bad greeting_sound path, a disk error saving the
+            // recording), none of those run, and nothing gets enqueued
+            // at all. That would silently drop exactly the caller this
+            // notice feature exists for, so send one here instead of
+            // letting the failure propagate to the generic per-call
+            // catch in BridgeService, which only logs.
+            logger.Error(exception, "Voicemail recording failed for call {CallId}; sending a missed-call notice instead.", callId);
+            voicemailSender.Enqueue(new MissedCallNoticeJob(callerNumber, callId));
+        }
         finally
         {
             // Ends the SIP dialog (BYE) and closes the media session -

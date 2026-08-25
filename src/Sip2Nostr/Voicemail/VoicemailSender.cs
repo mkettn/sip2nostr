@@ -213,12 +213,6 @@ public sealed class VoicemailSender : IAsyncDisposable
         return (content, tags, "missed-call notice");
     }
 
-    // Re-encodes to Opus/OGG to keep the inlined base64 payload smaller,
-    // falling back to sending the WAV directly if encoding fails for any
-    // reason - see docs/voicemail.md. Pure managed code (Concentus is a
-    // portable C# port of libopus, Concentus.Oggfile writes the Ogg
-    // container around it) - no external process, no host dependency on
-    // ffmpeg being installed.
     private async Task<(string Content, List<Tag> Tags, string Description)> BuildVoicemailContentAsync(VoicemailAudioJob job)
     {
         var (audioBytes, mimeType) = await LoadAudioAsync(job);
@@ -233,11 +227,18 @@ public sealed class VoicemailSender : IAsyncDisposable
         return (content, tags, $"voicemail ({job.DurationSeconds}s, {audioBytes.Length} bytes, {mimeType})");
     }
 
+    // No WAV fallback: raw 8kHz 16-bit mono WAV runs 16,000 bytes/sec, so
+    // MaxAudioBytes (30,400) only ever fits a 1.0-1.9s WAV, and
+    // recordings under 1.0s are already dropped before this is called
+    // (see CallBridge.RunVoicemailAsync) - a WAV fallback could never
+    // actually succeed for a real voicemail, only fail later inside
+    // SendPrivateMsgTo instead of here. If Opus encoding fails, the
+    // caller's catch logs the WavPath and nothing is sent - the
+    // recording is still safe on disk either way.
     private async Task<(byte[] AudioBytes, string MimeType)> LoadAudioAsync(VoicemailAudioJob job)
     {
         var wavBytes = await File.ReadAllBytesAsync(job.WavPath);
-        var oggBytes = TryEncodeOpusOgg(wavBytes, job.SampleRate);
-        var (audioBytes, mimeType) = oggBytes is not null ? (oggBytes, "audio/ogg") : (wavBytes, "audio/wav");
+        var audioBytes = EncodeOpusOgg(wavBytes, job.SampleRate);
 
         // MaxRecordingSeconds is only a heuristic ceiling on the
         // *configured* recording length (see VoicemailBudget) - this is
@@ -252,49 +253,45 @@ public sealed class VoicemailSender : IAsyncDisposable
                 $"Encoded voicemail is {audioBytes.Length} bytes, over the {VoicemailBudget.MaxAudioBytes}-byte NIP-17 budget; sending it would fail.");
         }
 
-        return (audioBytes, mimeType);
+        return (audioBytes, "audio/ogg");
     }
 
-    private byte[]? TryEncodeOpusOgg(byte[] wavBytes, int sampleRate)
+    // Re-encodes to Opus/OGG entirely in-process via Concentus (a pure
+    // C# port of libopus) and Concentus.Oggfile (writes the Ogg
+    // container around the encoded packets) - no external process, no
+    // host dependency on ffmpeg being installed.
+    private byte[] EncodeOpusOgg(byte[] wavBytes, int sampleRate)
     {
-        try
-        {
-            var samples = WavEncoder.Decode(wavBytes);
+        var samples = WavEncoder.Decode(wavBytes);
 
-            using var encoder = OpusCodecFactory.CreateEncoder(sampleRate, 1, OpusApplication.OPUS_APPLICATION_VOIP);
-            encoder.Bitrate = VoicemailBudget.OpusBitrateBps;
+        using var encoder = OpusCodecFactory.CreateEncoder(sampleRate, 1, OpusApplication.OPUS_APPLICATION_VOIP);
+        encoder.Bitrate = VoicemailBudget.OpusBitrateBps;
 
-            // Without this, Concentus (like libopus) defaults to VBR,
-            // where Bitrate is a target the encoder can exceed on
-            // complex input - which would make it a false floor for the
-            // size budget below. CBR bounds the encoded size close to
-            // Bitrate regardless of content (verified empirically: see
-            // VoicemailBudget's derivation of MaxRecordingSeconds).
-            encoder.UseVBR = false;
+        // Without this, Concentus (like libopus) defaults to VBR,
+        // where Bitrate is a target the encoder can exceed on
+        // complex input - which would make it a false floor for the
+        // size budget below. CBR bounds the encoded size close to
+        // Bitrate regardless of content (verified empirically: see
+        // VoicemailBudget's derivation of MaxRecordingSeconds).
+        encoder.UseVBR = false;
 
-            // DTX deliberately not enabled - see docs/voicemail.md blind
-            // spots for why.
+        // DTX deliberately not enabled - see docs/voicemail.md blind
+        // spots for why.
 
-            using var outputStream = new MemoryStream();
+        using var outputStream = new MemoryStream();
 
-            // OpusOggWriteStream deliberately isn't IDisposable - Finish()
-            // (below) is what pads the trailing frame, writes the
-            // end-of-stream page, and flushes; leaveOpen keeps
-            // outputStream open afterwards so ToArray() below can still
-            // read it.
-            var oggWriter = new OpusOggWriteStream(encoder, outputStream, new OpusTags(), sampleRate, OpusResamplerQuality, leaveOpen: true);
-            oggWriter.WriteSamples(samples, 0, samples.Length);
-            oggWriter.Finish();
+        // OpusOggWriteStream deliberately isn't IDisposable - Finish()
+        // (below) is what pads the trailing frame, writes the
+        // end-of-stream page, and flushes; leaveOpen keeps
+        // outputStream open afterwards so ToArray() below can still
+        // read it.
+        var oggWriter = new OpusOggWriteStream(encoder, outputStream, new OpusTags(), sampleRate, OpusResamplerQuality, leaveOpen: true);
+        oggWriter.WriteSamples(samples, 0, samples.Length);
+        oggWriter.Finish();
 
-            var oggBytes = outputStream.ToArray();
-            _logger.Information("Encoded voicemail as Opus/OGG ({AudioBytes} bytes).", oggBytes.Length);
-            return oggBytes;
-        }
-        catch (Exception exception)
-        {
-            _logger.Warning(exception, "Could not encode the voicemail as Opus/OGG; sending WAV instead.");
-            return null;
-        }
+        var oggBytes = outputStream.ToArray();
+        _logger.Information("Encoded voicemail as Opus/OGG ({AudioBytes} bytes).", oggBytes.Length);
+        return oggBytes;
     }
 
     public async ValueTask DisposeAsync()

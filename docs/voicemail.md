@@ -58,13 +58,21 @@ itself hasn't been exercised end-to-end yet.
               critical path, in a separate background worker. Otherwise
               (too short), log it and enqueue a MissedCallNoticeJob
               instead - the same "exactly one job" rule as step 3.
+           8. If RunVoicemailAsync throws instead of reaching step 7 (a
+              bad greeting_sound path, a disk error saving the
+              recording), HandleIncomingCallAsync's own catch around the
+              call enqueues a MissedCallNoticeJob - so a misconfiguration
+              still notifies target_npub instead of silently dropping
+              the caller with nothing to show for it anywhere but a log
+              line.
 ```
 
-`RunVoicemailAsync` enqueues at most one job per call - a
-`MissedCallNoticeJob` at whichever point recording didn't produce
-anything worth sending, or a `VoicemailAudioJob` if it did. The two are
-mutually exclusive, so `target_npub` never gets both a notice and a
-voicemail for the same call.
+Exactly one job is enqueued per call that reaches the voicemail
+fallback: a `MissedCallNoticeJob` wherever recording didn't produce
+anything worth sending (including `RunVoicemailAsync` throwing), or a
+`VoicemailAudioJob` if it did. The two are mutually exclusive, so
+`target_npub` never gets both a notice and a voicemail for the same
+call - and never neither.
 
 VoicemailSender then, independently of any particular call:
 
@@ -84,11 +92,12 @@ VoicemailSender then, independently of any particular call:
       │
       └─ for each job: MissedCallNoticeJob → plain-text content;
          VoicemailAudioJob → re-encode as Opus/OGG in-process via
-         Concentus (pure C#, no external program - falls back to
-         sending the WAV directly if encoding fails for any reason).
-         Either way, send as a NIP-17 private direct message. A relay
-         rejecting the event (e.g. too large) is detected and logged
-         as a failure, not reported as sent.
+         Concentus (pure C#, no external program) - if encoding fails,
+         nothing is sent (see Blind spots: there's no WAV fallback,
+         since raw WAV can never fit the budget anyway). Either way,
+         send as a NIP-17 private direct message. A relay rejecting the
+         event (e.g. too large) is detected and logged as a failure,
+         not reported as sent.
       │
       ▼
  Disconnect, go back to idle
@@ -170,22 +179,24 @@ VoicemailSender then, independently of any particular call:
   - Per `VoicemailAudioJob`: re-encodes to Opus/OGG entirely in-process via
     `Concentus` (a pure C# port of libopus) and `Concentus.Oggfile`
     (writes the Ogg container - `OpusOggWriteStream` - around the
-    encoded packets), falling back to sending the WAV directly if
-    encoding fails for any reason. The encoder runs with `UseVBR =
-    false`: Concentus (like libopus) defaults to VBR, where `Bitrate` is
-    only a target the encoder can exceed on complex input, which would
-    undermine the size budget below. `WavEncoder`'s header is a fixed,
-    known 44 bytes, exposed as `WavEncoder.HeaderLength` and consumed by
-    a matching `WavEncoder.Decode`, so the PCM samples are read back
-    through a tested round-trip rather than a magic-number reinterpret.
+    encoded packets) - no WAV fallback if encoding fails (see Blind
+    spots: raw WAV can never fit the budget, so a fallback could only
+    ever fail later instead of failing here with a clear reason). The
+    encoder runs with `UseVBR = false`: Concentus (like libopus)
+    defaults to VBR, where `Bitrate` is only a target the encoder can
+    exceed on complex input, which would undermine the size budget
+    below. `WavEncoder`'s header is a fixed, known 44 bytes, exposed as
+    `WavEncoder.HeaderLength` and consumed by a matching
+    `WavEncoder.Decode`, so the PCM samples are read back through a
+    tested round-trip rather than a magic-number reinterpret.
     Deliberately not `ffmpeg`/any external process - this keeps the
     whole feature working in a self-contained single-file binary with
     nothing to install on the host, and there's no intermediate `.ogg`
     file on disk at all (`OpusOggWriteStream` writes straight into a
-    `MemoryStream`). Whichever format is produced, its size is checked
-    against `VoicemailBudget.MaxAudioBytes` before anything is sent -
-    see Blind spots below - throwing rather than attempting a send that
-    can only fail deep inside NIP-44 encryption or at the relay. Then
+    `MemoryStream`). The encoded size is checked against
+    `VoicemailBudget.MaxAudioBytes` before anything is sent - see Blind
+    spots below - throwing rather than attempting a send that can only
+    fail deep inside NIP-44 encryption or at the relay. Then
     calls `Client.SendPrivateMsgTo(relayUrls, ...)` - NIP-17: rumor,
     seal, gift wrap, and publish all handled by `Nostr.Sdk` - targeting
     exactly the relay set (`[voicemail].dm_relays`, or `[nostr].relays`
@@ -257,18 +268,28 @@ VoicemailSender then, independently of any particular call:
     upload path (data URI → uploaded file + `imeta`/`url` tag) to remove
     the cap entirely - the latter is the actual fix; this budget is a
     ceiling this architecture can't grow past.
+- **No WAV fallback if Opus encoding fails.** An earlier version fell
+  back to sending the raw WAV when `EncodeOpusOgg` threw, but that
+  fallback could never actually succeed for a real voicemail: 8kHz
+  16-bit mono WAV runs 16,000 bytes/sec, so `MaxAudioBytes` (30,400)
+  only fits a 1.0-1.9s WAV, and recordings under 1.0s are already
+  dropped before encoding is ever attempted (`CallBridge.RunVoicemailAsync`).
+  The fallback was therefore dead weight that just moved the failure
+  later (an opaque error inside `SendPrivateMsgTo`) instead of avoiding
+  it. `LoadAudioAsync` now throws directly on an encoding failure - the
+  recording stays on disk, undelivered, same as any other send failure.
 - **DTX (encoder silence-dropping) is not available, so the size problem
   above can't currently be helped by compressing the silence out of a
   recording.** `Concentus.Oggfile`'s `OpusOggWriteStream` - the Ogg
   container writer `VoicemailSender` uses - unconditionally rejects a
   DTX-enabled encoder at construction (`ArgumentException("DTX is not
   currently supported in Ogg streams")`, confirmed by reading its
-  source). Enabling `IOpusEncoder.UseDTX` would make every encode throw
-  and fall back to sending the far larger raw WAV - the opposite of the
-  goal - so it's deliberately left off (see the comment in
-  `VoicemailSender.TryEncodeOpusOgg`). Revisiting this needs either a
-  different (DTX-aware) Ogg writer or hand-rolling the Ogg container
-  framing to tolerate the granule-position gaps DTX produces.
+  source). Enabling `IOpusEncoder.UseDTX` would make every encode throw,
+  and with no WAV fallback (see above) that means nothing gets sent at
+  all - the opposite of the goal - so it's deliberately left off (see
+  the comment in `VoicemailSender.EncodeOpusOgg`). Revisiting this needs
+  either a different (DTX-aware) Ogg writer or hand-rolling the Ogg
+  container framing to tolerate the granule-position gaps DTX produces.
 - **No silence/VAD trimming or beep tone.** Recording starts immediately
   after the greeting/tone finishes and runs for the full
   `max_recording_seconds` (or until hangup) regardless of whether the
