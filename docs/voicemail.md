@@ -12,10 +12,12 @@ changes. With it turned on, a caller who isn't answered within
 was captured, otherwise a plain-text missed-call notice - never both,
 never neither.
 
-Verified end-to-end against a real SIP trunk and a real NIP-17 client: a
-call that falls back to voicemail plays the greeting/tone, records the
-caller, encodes it to Opus/OGG, and delivers it as a NIP-17 DM that the
-receiving client decrypts and plays back correctly. The
+Verified end-to-end against a real SIP trunk and a real NIP-17 client,
+for both delivery backends: a call that falls back to voicemail plays
+the greeting/tone and records the caller, then either encodes it to
+Opus/OGG and delivers it as a NIP-17 DM that the receiving client
+decrypts and plays back correctly (`delivery = "audio"`), or transcribes
+it and delivers the transcript as DM text (`delivery = "text"`). The
 `MissedCallNoticeJob` path (recording too short / caller hangs up
 before anything is captured) hasn't specifically been exercised, but
 shares the same delivery code as the verified `VoicemailAudioJob` path.
@@ -427,9 +429,6 @@ string?`, `null` meaning nothing could be transcribed), selected by
   startup" logic). For a personal single-line deployment where the
   process runs continuously, this is a minor gap; it would matter more
   under frequent restarts or heavy call volume.
-- **`delivery = "text"` hasn't been verified end-to-end** against a real
-  call - only the `"audio"` path has the verification claimed at the top
-  of this document.
 - **No accuracy floor on transcription.** Whisper (like any STT model)
   can mishear words, especially on noisy phone audio, and there's no
   confidence-threshold gating - a bad transcription is sent as if it
