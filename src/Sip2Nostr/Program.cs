@@ -2,6 +2,7 @@ using Nostr.Sdk;
 using Serilog;
 using Sip2Nostr.Config;
 using Sip2Nostr.Hub;
+using Sip2Nostr.Modem;
 using Sip2Nostr.Signaling;
 using Sip2Nostr.Sinks;
 using Sip2Nostr.Sip;
@@ -151,6 +152,31 @@ try
     await using var source = new SipCallSource(config, Log.Logger.ForContext<SipCallSource>());
     hub.Attach(source, cts.Token);
     await source.StartAsync(cts.Token);
+
+    // Optional second, independent call source (see docs/receiving-modem-calls.md):
+    // a phone/modem device attached directly to this machine, controlled via
+    // ModemManager over the system D-Bus instead of a SIP trunk. Feeds the
+    // same CallHub/sink chain as the SIP source above.
+    var modemSource = config.Modem is { Enabled: true } modemConfig
+        ? new ModemCallSource(config, modemConfig, Log.Logger.ForContext<ModemCallSource>())
+        : null;
+    await using var modemSourceDisposal = modemSource;
+    if (modemSource is not null)
+    {
+        hub.Attach(modemSource, cts.Token);
+        try
+        {
+            await modemSource.StartAsync(cts.Token);
+        }
+        catch (Exception exception)
+        {
+            // [modem] is an opt-in secondary source; an unreachable system
+            // bus or absent ModemManager shouldn't take down an otherwise
+            // healthy SIP source, so this is logged rather than left to
+            // propagate to the top-level catch (which exits the process).
+            Log.Error(exception, "Modem call source failed to start; continuing SIP-only.");
+        }
+    }
 
     Log.Information("sip2nostr running. Press Ctrl+C to exit.");
 

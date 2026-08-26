@@ -5,11 +5,12 @@ with it" into three pieces: a source that produces calls, a hub that
 routes them, and a chain of sinks that decide what happens to each one.
 This keeps the call-handling logic (ring over Nostr, fall back to
 voicemail, play local test audio) independent of any particular
-transport, so a future call source - a modem attached over D-Bus, say -
-can reuse the same sinks without reimplementing that logic.
+transport, so a second call source - a modem attached over D-Bus - reuses
+the same sinks without reimplementing that logic (see
+`docs/receiving-modem-calls.md`).
 
 ```
- ICallSource            produces Calls (SipCallSource today)
+ ICallSource, ICallSource   produce Calls (SipCallSource, ModemCallSource)
       │  OnIncomingCall(Call)
       ▼
  CallHub                routes every Call through the same sink chain
@@ -20,10 +21,12 @@ can reuse the same sinks without reimplementing that logic.
 ```
 
 - **`ICallSource`** (`Hub/ICallSource.cs`) is anything that can produce an
-  already-answered `Call` - today, `Sip/SipCallSource.cs`, which owns SIP
-  registration, transport, and answering the INVITE. A future source (a
-  modem's ALSA/D-Bus line, say) implements the same interface and needs no
-  changes anywhere else.
+  already-answered `Call`: `Sip/SipCallSource.cs`, which owns SIP
+  registration, transport, and answering the INVITE, and
+  `Modem/ModemCallSource.cs`, which talks to ModemManager over the system
+  D-Bus to answer a call on a directly attached phone/modem device instead
+  (see `docs/receiving-modem-calls.md`). Both attach to the same `CallHub`
+  and need no changes anywhere else in the sink chain.
 - **`Call`** (`Hub/Call.cs`) is the source-agnostic handle a sink works
   with: a call-id, the caller's number, the source's own line label (for
   per-line sink behavior, e.g. `LocalTestAudioSink`'s test sound), an
@@ -83,28 +86,33 @@ sink is even in the chain already encodes that.
 
 `ICallAudio` relays `RtpAudioFrame`s - RTP payload bytes plus enough
 header (timestamp, marker bit, payload type) to resend unchanged - rather
-than decoded PCM samples. Every source and sink today is RTP-shaped
+than decoded PCM samples. The SIP leg and WebRTC leg are both RTP-shaped
 underneath (SIP's `RTPSession`, WebRTC's `RTCPeerConnection`, itself an
 `RTPSession` subclass), so relaying RTP frames directly keeps
 `NosCallSink`'s SIP↔WebRTC bridge a zero-cost raw relay: both legs are
 restricted to the same negotiated codec (`Call.AudioFormat`), so payloads
 forward byte-for-byte with no decode/re-encode step.
 
-A source or sink whose transport isn't RTP-shaped (a modem capturing raw
-PCM off an ALSA device, say) encodes/decodes at its own boundary instead
-of the hub doing it for every pair regardless of need. `VoicemailSink`
-and `LocalTestAudioSink` already work this way: recording decodes each
-frame via `SIPSorcery.Media.AudioEncoder.DecodeAudio` against
-`Call.AudioFormat`, and playback (a greeting, a tone, a looped sound
-file) uses SIPSorcery's own `AudioExtrasSource`, wired into
-`ICallAudio.SendEncodedSample`, so that off-the-shelf player manages RTP
-timestamp/pacing rather than either sink reimplementing it. Recoding is a
-source/sink concern, not something the hub forces onto every pair.
+A source or sink whose transport isn't RTP-shaped encodes/decodes at its
+own boundary instead of the hub doing it for every pair regardless of
+need. `Modem/ModemCallAudio.cs` is the clearest example: it's raw PCM off
+an ALSA device (see `docs/receiving-modem-calls.md` for why), encoded
+to/decoded from G.711 against `Call.AudioFormat` right there in the
+adapter - `CallHub` and every sink still only ever see `RtpAudioFrame`s,
+exactly as if the call had arrived over SIP. `VoicemailSink` and
+`LocalTestAudioSink` work the same way on the sink side: recording
+decodes each frame via
+`SIPSorcery.Media.AudioEncoder.DecodeAudio` against `Call.AudioFormat`,
+and playback (a greeting, a tone, a looped sound file) uses SIPSorcery's
+own `AudioExtrasSource`, wired into `ICallAudio.SendEncodedSample`, so
+that off-the-shelf player manages RTP timestamp/pacing rather than either
+sink reimplementing it. Recoding is a source/sink concern, not something
+the hub forces onto every pair.
 
 ## Forward-compatibility: outbound dialing
 
-sip2nostr is designed to support different sources (SIP today, maybe a
-modem/D-Bus line later) and different sinks (NosCall, voicemail) without
+sip2nostr is designed to support different sources (SIP and a directly
+attached modem/D-Bus line today) and different sinks (NosCall, voicemail) without
 duplicating call-handling logic for each combination. A related goal
 shaped some of the naming choices without being built yet:
 **outbound dialing isn't implemented**, but nothing here should need to
