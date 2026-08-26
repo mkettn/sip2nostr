@@ -1,34 +1,36 @@
 using System.Threading.Channels;
-using Concentus;
-using Concentus.Enums;
-using Concentus.Oggfile;
 using Nostr.Sdk;
 using Serilog;
 using Sip2Nostr.Config;
-using Sip2Nostr.Shared;
 using Sip2Nostr.Signaling;
-using Sip2Nostr.Sip;
 
 namespace Sip2Nostr.Voicemail;
 
 // Background worker that owns delivery of missed-call notices and
-// recorded voicemails - see docs/voicemail.md for the full flow.
+// recorded voicemails - see docs/voicemail.md for the full flow. How a
+// VoicemailAudioJob turns into DM content (audio vs. transcript) is
+// delegated to the configured IVoicemailDeliveryBackend.
 public sealed class VoicemailSender : IAsyncDisposable
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
-    private const int OpusResamplerQuality = 5;
 
     private readonly NostrConfig _nostrConfig;
     private readonly VoicemailConfig _voicemailConfig;
+    private readonly IVoicemailDeliveryBackend _deliveryBackend;
     private readonly ILogger _logger;
     private readonly Channel<SendJob> _queue = Channel.CreateUnbounded<SendJob>();
     private readonly CancellationTokenSource _stopCts = new();
     private readonly Task _worker;
 
-    public VoicemailSender(NostrConfig nostrConfig, VoicemailConfig voicemailConfig, ILogger logger)
+    public VoicemailSender(
+        NostrConfig nostrConfig,
+        VoicemailConfig voicemailConfig,
+        IVoicemailDeliveryBackend deliveryBackend,
+        ILogger logger)
     {
         _nostrConfig = nostrConfig;
         _voicemailConfig = voicemailConfig;
+        _deliveryBackend = deliveryBackend;
         _logger = logger;
         _worker = Task.Run(() => RunAsync(_stopCts.Token));
     }
@@ -97,15 +99,42 @@ public sealed class VoicemailSender : IAsyncDisposable
         }
     }
 
+    private sealed record PreparedJob(SendJob Job, string Content, List<Tag> Tags, string Description);
+
     private async Task SendBatchAsync(List<SendJob> batch, CancellationToken ct)
     {
+        // Content is built for every job - including transcription, which
+        // can take seconds to minutes - before any relay connection opens.
+        // Holding a connection open (and idle) for that whole time risks
+        // the relay dropping it, and blocks whatever else is queued behind
+        // a slow job. See docs/voicemail.md.
+        var preparedJobs = new List<PreparedJob>();
+        foreach (var job in batch)
+        {
+            if (ct.IsCancellationRequested)
+            {
+                break;
+            }
+
+            var prepared = await PrepareJobSafeAsync(job, ct).ConfigureAwait(false);
+            if (prepared is not null)
+            {
+                preparedJobs.Add(prepared);
+            }
+        }
+
+        if (preparedJobs.Count == 0)
+        {
+            return;
+        }
+
         var bridgeKeys = Keys.Parse(_nostrConfig.BridgeNsec);
         var targetPubkey = PublicKey.Parse(_nostrConfig.TargetNpub);
         var relayUrls = (_voicemailConfig.DmRelays.Count > 0 ? _voicemailConfig.DmRelays : _nostrConfig.Relays)
             .Select(RelayUrl.Parse)
             .ToList();
 
-        _logger.Information("Connecting to send {Count} queued job(s).", batch.Count);
+        _logger.Information("Connecting to send {Count} prepared job(s).", preparedJobs.Count);
         var client = new ClientBuilder().Signer(NostrSigner.Keys(bridgeKeys)).Build();
         try
         {
@@ -115,18 +144,18 @@ public sealed class VoicemailSender : IAsyncDisposable
                 _logger.Error(
                     "None of the {TotalCount} configured voicemail relay(s) are reachable; {Count} job(s) undelivered.",
                     relayUrls.Count,
-                    batch.Count);
+                    preparedJobs.Count);
                 return;
             }
 
-            foreach (var job in batch)
+            foreach (var prepared in preparedJobs)
             {
                 if (ct.IsCancellationRequested)
                 {
                     break;
                 }
 
-                await SendOneSafeAsync(client, targetPubkey, connectedRelays, job).ConfigureAwait(false);
+                await SendPreparedJobSafeAsync(client, targetPubkey, connectedRelays, prepared).ConfigureAwait(false);
             }
         }
         finally
@@ -136,23 +165,48 @@ public sealed class VoicemailSender : IAsyncDisposable
         }
     }
 
-    private async Task SendOneSafeAsync(Client client, PublicKey targetPubkey, List<RelayUrl> connectedRelays, SendJob job)
+    private async Task<PreparedJob?> PrepareJobSafeAsync(SendJob job, CancellationToken ct)
     {
         try
         {
             var (content, tags, description) = job switch
             {
                 MissedCallNoticeJob notice => BuildMissedCallNoticeContent(notice),
-                VoicemailAudioJob audio => await BuildVoicemailContentAsync(audio),
+                VoicemailAudioJob audio => await _deliveryBackend.BuildContentAsync(audio, ct),
                 _ => throw new NotSupportedException($"Unknown send job type {job.GetType()}."),
             };
 
-            var output = await client.SendPrivateMsgTo(connectedRelays, targetPubkey, content, tags);
-            PublishOutcome.ThrowIfFailed(_logger, description, output);
-
-            _logger.Information("Sent {Description} for call {CallId} to target_npub over Nostr.", description, job.CallId);
+            return new PreparedJob(job, content, tags, description);
         }
         catch (Exception exception) when (job is VoicemailAudioJob audioJob)
+        {
+            _logger.Error(
+                exception,
+                "Failed to prepare voicemail for call {CallId} for sending; the recording is still saved at {WavPath}.",
+                audioJob.CallId,
+                audioJob.WavPath);
+            return null;
+        }
+        catch (Exception exception)
+        {
+            _logger.Error(exception, "Failed to prepare missed-call notice for call {CallId} for sending.", job.CallId);
+            return null;
+        }
+    }
+
+    private async Task SendPreparedJobSafeAsync(Client client, PublicKey targetPubkey, List<RelayUrl> connectedRelays, PreparedJob prepared)
+    {
+        try
+        {
+            var output = await client.SendPrivateMsgTo(connectedRelays, targetPubkey, prepared.Content, prepared.Tags);
+            PublishOutcome.ThrowIfFailed(_logger, prepared.Description, output);
+
+            _logger.Information(
+                "Sent {Description} for call {CallId} to target_npub over Nostr.",
+                prepared.Description,
+                prepared.Job.CallId);
+        }
+        catch (Exception exception) when (prepared.Job is VoicemailAudioJob audioJob)
         {
             _logger.Error(
                 exception,
@@ -162,7 +216,7 @@ public sealed class VoicemailSender : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            _logger.Error(exception, "Failed to send missed-call notice for call {CallId} over Nostr.", job.CallId);
+            _logger.Error(exception, "Failed to send missed-call notice for call {CallId} over Nostr.", prepared.Job.CallId);
         }
     }
 
@@ -171,61 +225,6 @@ public sealed class VoicemailSender : IAsyncDisposable
         var content = $"📞 Missed call from {notice.CallerNumber} - not answered.";
         var tags = new List<Tag> { Tag.Parse(["alt", "sip2nostr missed call"]) };
         return (content, tags, "missed-call notice");
-    }
-
-    private async Task<(string Content, List<Tag> Tags, string Description)> BuildVoicemailContentAsync(VoicemailAudioJob job)
-    {
-        var (audioBytes, mimeType) = await LoadAudioAsync(job);
-        var dataUri = $"data:{mimeType};base64,{Convert.ToBase64String(audioBytes)}";
-        var content =
-            $"🎤 Voicemail from {job.CallerNumber} ({job.DurationSeconds}s) - the call wasn't answered.\n\n{dataUri}";
-        var tags = new List<Tag>
-        {
-            Tag.Parse(["alt", "sip2nostr voicemail"]),
-            Tag.Parse(["duration", job.DurationSeconds.ToString()]),
-        };
-        return (content, tags, $"voicemail ({job.DurationSeconds}s, {audioBytes.Length} bytes, {mimeType})");
-    }
-
-    // No WAV fallback if Opus encoding fails - see docs/voicemail.md.
-    private async Task<(byte[] AudioBytes, string MimeType)> LoadAudioAsync(VoicemailAudioJob job)
-    {
-        var wavBytes = await File.ReadAllBytesAsync(job.WavPath);
-        var audioBytes = EncodeOpusOgg(wavBytes, job.SampleRate);
-
-        // The real enforcement against encoded size - MaxRecordingSeconds
-        // is only a heuristic ceiling on the configured value.
-        if (audioBytes.Length > VoicemailBudget.MaxAudioBytes)
-        {
-            throw new InvalidOperationException(
-                $"Encoded voicemail is {audioBytes.Length} bytes, over the {VoicemailBudget.MaxAudioBytes}-byte NIP-17 budget; sending it would fail.");
-        }
-
-        return (audioBytes, "audio/ogg");
-    }
-
-    private byte[] EncodeOpusOgg(byte[] wavBytes, int sampleRate)
-    {
-        var samples = WavEncoder.Decode(wavBytes);
-
-        using var encoder = OpusCodecFactory.CreateEncoder(sampleRate, 1, OpusApplication.OPUS_APPLICATION_VOIP);
-        encoder.Bitrate = VoicemailBudget.OpusBitrateBps;
-
-        // CBR, not VBR (the Concentus/libopus default) - see docs/voicemail.md.
-        encoder.UseVBR = false;
-
-        // DTX deliberately not enabled - see docs/voicemail.md.
-
-        using var outputStream = new MemoryStream();
-
-        // No using: OpusOggWriteStream isn't IDisposable - see docs/voicemail.md.
-        var oggWriter = new OpusOggWriteStream(encoder, outputStream, new OpusTags(), sampleRate, OpusResamplerQuality, leaveOpen: true);
-        oggWriter.WriteSamples(samples, 0, samples.Length);
-        oggWriter.Finish();
-
-        var oggBytes = outputStream.ToArray();
-        _logger.Information("Encoded voicemail as Opus/OGG ({AudioBytes} bytes).", oggBytes.Length);
-        return oggBytes;
     }
 
     public async ValueTask DisposeAsync()
@@ -243,5 +242,7 @@ public sealed class VoicemailSender : IAsyncDisposable
         {
             _stopCts.Dispose();
         }
+
+        await _deliveryBackend.DisposeAsync();
     }
 }

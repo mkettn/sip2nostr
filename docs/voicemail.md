@@ -12,10 +12,12 @@ changes. With it turned on, a caller who isn't answered within
 was captured, otherwise a plain-text missed-call notice - never both,
 never neither.
 
-Verified end-to-end against a real SIP trunk and a real NIP-17 client: a
-call that falls back to voicemail plays the greeting/tone, records the
-caller, encodes it to Opus/OGG, and delivers it as a NIP-17 DM that the
-receiving client decrypts and plays back correctly. The
+Verified end-to-end against a real SIP trunk and a real NIP-17 client,
+for both delivery backends: a call that falls back to voicemail plays
+the greeting/tone and records the caller, then either encodes it to
+Opus/OGG and delivers it as a NIP-17 DM that the receiving client
+decrypts and plays back correctly (`delivery = "audio"`), or transcribes
+it and delivers the transcript as DM text (`delivery = "text"`). The
 `MissedCallNoticeJob` path (recording too short / caller hangs up
 before anything is captured) hasn't specifically been exercised, but
 shares the same delivery code as the verified `VoicemailAudioJob` path.
@@ -117,6 +119,59 @@ VoicemailSender then, independently of any particular call:
       ▼
  Disconnect, go back to idle
 ```
+
+## Delivery backends
+
+How a recorded voicemail becomes DM content is pluggable via
+`[voicemail].delivery`:
+
+- `"audio"` (default) - `Voicemail/AudioInlineDeliveryBackend.cs` encodes
+  the recording to Opus/OGG and inlines it as a base64 `data:` URI in the
+  DM content, subject to the NIP-17 size budget covered above.
+- `"text"` - `Voicemail/TranscribedTextDeliveryBackend.cs` transcribes
+  the recording via a speech-to-text engine and sends the transcript as
+  plain text instead. This path isn't bound by the Opus/NIP-17 budget
+  above, so it has its own two checks: `max_recording_seconds` is capped
+  at `VoicemailBudget.MaxTextRecordingSeconds` (600s) instead of
+  `VoicemailBudget.MaxRecordingSeconds` (see `Config/ConfigLoader.cs`) -
+  a sanity ceiling on how much PCM `VoicemailSink` buffers in memory
+  while recording, not a size budget - and the transcript itself is
+  checked against `VoicemailBudget.MaxTranscriptBytes` (40,000 bytes) at
+  send time, mirroring `AudioInlineDeliveryBackend`'s `MaxAudioBytes`
+  check. A transcript is normally tiny compared to that budget, but
+  whisper.cpp can fall into a repetition loop on silence or noise and
+  produce far more text than any real voicemail would, so the check
+  guards against that rather than being trusted to never trigger. If
+  nothing could be transcribed (silence, an engine failure), the backend
+  sends a plain-text notice instead of an empty message.
+
+Both implement `Voicemail/IVoicemailDeliveryBackend.cs`
+(`BuildContentAsync(VoicemailAudioJob, CancellationToken) -> (Content,
+Tags, Description)`) - the only thing `VoicemailSender` depends on; it
+doesn't know or care which backend it's holding, and owns disposing it
+alongside its own worker.
+
+### Speech-to-text engine
+
+The `"text"` backend's actual transcription sits behind a second,
+independently swappable interface, `Voicemail/IVoicemailTranscriber.cs`
+(`TranscribeAsync(short[] samples, int sampleRate, CancellationToken) ->
+string?`, `null` meaning nothing could be transcribed), selected by
+`[voicemail.transcription].engine`:
+
+- `"whisper"` (the only engine today) - `Voicemail/WhisperNetTranscriber.cs`
+  runs [Whisper.net](https://github.com/sandrohanea/whisper.net) (a
+  whisper.cpp binding) fully offline: no network access and no API key
+  at transcription time, just a local GGML model file
+  (`[voicemail.transcription].model_path`, required when
+  `delivery = "text"` - `ConfigLoader` checks the file exists at
+  startup). whisper.cpp expects 16 kHz mono float samples in `[-1, 1]`;
+  voicemail recordings are 8 kHz PCM (G.711's rate), so
+  `WhisperNetTranscriber` resamples via `SIPSorcery.Media.PcmResampler`
+  (already a project dependency, so no new one is needed just for that)
+  and converts to `float` before handing samples to Whisper.
+  `[voicemail.transcription].language` pins the spoken language (e.g.
+  `"en"`); left unset, Whisper auto-detects it per recording.
 
 ## Implementation
 
@@ -374,3 +429,33 @@ VoicemailSender then, independently of any particular call:
   startup" logic). For a personal single-line deployment where the
   process runs continuously, this is a minor gap; it would matter more
   under frequent restarts or heavy call volume.
+- **No accuracy floor on transcription.** Whisper (like any STT model)
+  can mishear words, especially on noisy phone audio, and there's no
+  confidence-threshold gating - a bad transcription is sent as if it
+  were correct. `MaxTranscriptBytes` catches a transcript that's grown
+  implausibly large (e.g. whisper.cpp's repetition-loop failure mode on
+  silence or noise), but it's a size check, not an accuracy one - a
+  wrong-but-plausibly-sized transcription still goes out silently.
+- **GGML model files for `WhisperNetTranscriber` aren't bundled or
+  auto-downloaded.** Unlike the self-contained Opus encoding path,
+  `delivery = "text"` requires manually obtaining a model file and
+  pointing `model_path` at it - nothing wires up
+  `Whisper.net.Ggml.WhisperGgmlDownloader` to fetch one automatically.
+- **CPU/memory cost on constrained hardware is unmeasured.** Whisper
+  transcription is CPU-bound and model-size-dependent; how it performs
+  on something like a Raspberry Pi (the README's arm64 release target)
+  hasn't been measured for any model size.
+- **`Whisper.net.Runtime` is a heavier dependency than the rest of this
+  project's stack, and bundles every platform's native binaries
+  regardless of target RID.** Unlike Concentus (pure C#), it ships
+  prebuilt whisper.cpp libraries; confirmed via `dotnet publish -r
+  linux-x64 --self-contained true` that the output still includes
+  `runtimes/win-x64`, `runtimes/macos-arm64`, etc. alongside
+  `runtimes/linux-x64` (~103 MB total for that one RID) - `dotnet
+  publish -r` doesn't trim it down to just the target platform the way
+  it does for packages using the standard `runtimes/{rid}/native/`
+  convention. This directly bloats the linux-x64/linux-arm64 release
+  artifacts built by `.github/workflows/release.yml`. Worth fixing
+  (either pruning the unused `runtimes/*` folders as a post-publish
+  build step, or finding whether a newer `Whisper.net.Runtime` version
+  fixes the packaging) before shipping this in a release build.

@@ -35,12 +35,52 @@ public static class ConfigLoader
                 $"[voicemail].max_recording_seconds must be greater than 0, got {config.Voicemail.MaxRecordingSeconds}.");
         }
 
-        if (config.Voicemail.MaxRecordingSeconds > VoicemailBudget.MaxRecordingSeconds)
+        if (config.Voicemail.Delivery is not ("audio" or "text"))
         {
             throw new InvalidDataException(
-                $"[voicemail].max_recording_seconds is {config.Voicemail.MaxRecordingSeconds}, but a recording that " +
-                $"long can never fit in a single NIP-17 DM at the current Opus encoding - the maximum that reliably " +
-                $"fits is {VoicemailBudget.MaxRecordingSeconds}s. See docs/voicemail.md.");
+                $"[voicemail].delivery must be \"audio\" or \"text\", got \"{config.Voicemail.Delivery}\".");
+        }
+
+        // The ceiling depends on which backend is actually recording-length
+        // sensitive: "audio" is bound by the Opus/NIP-17 size budget below;
+        // "text" isn't (a transcript stays small regardless - the real
+        // enforcement there is MaxTranscriptBytes, checked against the
+        // actual output at send time), but recording length still needs
+        // *some* sanity ceiling so VoicemailSink's in-memory PCM buffer
+        // can't grow unbounded. See docs/voicemail.md.
+        var maxRecordingSecondsCeiling = config.Voicemail.Delivery == "text"
+            ? VoicemailBudget.MaxTextRecordingSeconds
+            : VoicemailBudget.MaxRecordingSeconds;
+        if (config.Voicemail.MaxRecordingSeconds > maxRecordingSecondsCeiling)
+        {
+            throw new InvalidDataException(
+                $"[voicemail].max_recording_seconds is {config.Voicemail.MaxRecordingSeconds}, but the maximum for " +
+                $"[voicemail].delivery = \"{config.Voicemail.Delivery}\" is {maxRecordingSecondsCeiling}s. See docs/voicemail.md.");
+        }
+
+        if (config.Voicemail.Delivery == "text")
+        {
+            if (config.Voicemail.Transcription.Engine != "whisper")
+            {
+                throw new InvalidDataException(
+                    $"[voicemail.transcription].engine \"{config.Voicemail.Transcription.Engine}\" is not supported - only \"whisper\" is available today.");
+            }
+
+            if (string.IsNullOrWhiteSpace(config.Voicemail.Transcription.ModelPath))
+            {
+                throw new InvalidDataException(
+                    "[voicemail.transcription].model_path is required when [voicemail].delivery = \"text\".");
+            }
+
+            var resolvedModelPath = Path.IsPathRooted(config.Voicemail.Transcription.ModelPath)
+                ? config.Voicemail.Transcription.ModelPath
+                : Path.GetFullPath(Path.Combine(config.ConfigDirectory, config.Voicemail.Transcription.ModelPath));
+            if (!File.Exists(resolvedModelPath))
+            {
+                throw new InvalidDataException(
+                    $"[voicemail.transcription].model_path \"{config.Voicemail.Transcription.ModelPath}\" resolved to " +
+                    $"\"{resolvedModelPath}\", but no file exists there.");
+            }
         }
     }
 }
