@@ -35,10 +35,11 @@ public static class ConfigLoader
                 $"[voicemail].max_recording_seconds must be greater than 0, got {config.Voicemail.MaxRecordingSeconds}.");
         }
 
-        if (config.Voicemail.MaxTextRecordingSeconds <= 0)
+        if (config.Voicemail.MaxTextRecordingSeconds is <= 0 or > VoicemailBudget.MaxTextRecordingSecondsCeiling)
         {
             throw new InvalidDataException(
-                $"[voicemail].max_text_recording_seconds must be greater than 0, got {config.Voicemail.MaxTextRecordingSeconds}.");
+                "[voicemail].max_text_recording_seconds must be greater than 0 and at most " +
+                $"{VoicemailBudget.MaxTextRecordingSecondsCeiling}, got {config.Voicemail.MaxTextRecordingSeconds}.");
         }
 
         if (config.Voicemail.OpusResamplerQuality is < 0 or > 10)
@@ -66,6 +67,25 @@ public static class ConfigLoader
             throw new InvalidDataException(
                 "[voicemail].recording_filename must include {timestamp} or {call_id}, so recordings from " +
                 $"different calls can't overwrite each other. Got \"{config.Voicemail.RecordingFilename}\".");
+        }
+
+        // VoicemailSink.SaveRecordingAsync joins this straight onto
+        // recordings_dir - a rooted template would silently discard
+        // recordings_dir entirely (Path.Combine's documented behavior),
+        // and a ".." segment could escape it, so both are rejected here
+        // rather than only ever naming something under recordings_dir.
+        if (Path.IsPathRooted(config.Voicemail.RecordingFilename))
+        {
+            throw new InvalidDataException(
+                "[voicemail].recording_filename must be a relative path, resolved under recordings_dir - " +
+                $"got \"{config.Voicemail.RecordingFilename}\".");
+        }
+
+        if (config.Voicemail.RecordingFilename.Split('/', '\\').Any(segment => segment == ".."))
+        {
+            throw new InvalidDataException(
+                "[voicemail].recording_filename must not contain \"..\" path segments - " +
+                $"got \"{config.Voicemail.RecordingFilename}\".");
         }
 
         // The ceiling depends on which backend is actually recording-length

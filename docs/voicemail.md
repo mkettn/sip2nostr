@@ -276,12 +276,14 @@ string?`, `null` meaning nothing could be transcribed), selected by
     phone number, but useful if you'd rather the caller's number not
     appear in filenames). A template that includes neither `{timestamp}`
     nor `{call_id}` would let concurrent calls silently overwrite each
-    other's recording, so `Config/ConfigLoader.cs` rejects one at
-    startup (see below). `SaveRecordingAsync` resolves the full path
-    (`recordings_dir` + the templated filename) before creating its
-    directory, so a template with a path separator in it (e.g.
-    `{caller}/{timestamp}.ogg`, to group recordings per caller) works
-    too.
+    other's recording, and a rooted template or one containing a `..`
+    segment could write outside `recordings_dir` entirely, so
+    `Config/ConfigLoader.cs` rejects all three at startup (see below).
+    `SaveRecordingAsync` resolves the full path (`recordings_dir` + the
+    templated filename) before creating its directory, so a template
+    with a path separator in it (e.g. `{caller}/{timestamp}.ogg`, to
+    group recordings per caller) still works - it's only a rooted path
+    or a `..` segment that's rejected, not subdirectories in general.
   - `TryHandleAsync` always returns `true`: `CallHub`'s own `finally`
     calls `Call.HangupAsync` unconditionally once a sink is done, so this
     sink doesn't hang up the SIP call itself and doesn't need a `finally`
@@ -301,7 +303,9 @@ string?`, `null` meaning nothing could be transcribed), selected by
     `MaxRecordingSeconds` for `"audio"` - a fixed value, not configurable,
     that reliably fits a NIP-17 DM with headroom to spare (see Blind spots
     below) - or the configured `max_text_recording_seconds` (default
-    `VoicemailBudget.MaxTextRecordingSeconds`, 600s) for `"text"` - so a
+    `VoicemailBudget.MaxTextRecordingSeconds`, 600s; itself capped at
+    `VoicemailBudget.MaxTextRecordingSecondsCeiling`, 3600s, so raising
+    this sanity limit can't itself become unbounded) for `"text"` - so a
     value that can never be delivered, or one that would let
     `VoicemailSink` buffer more PCM in memory than intended, fails at
     startup rather than only after a caller has already left a message.
@@ -313,11 +317,14 @@ string?`, `null` meaning nothing could be transcribed), selected by
     `VoicemailBudget.OpusResamplerQuality`, 5) is validated against the
     `0`-`10` range Concentus itself enforces (see the `VoicemailSink.cs`
     bullet above) - checking it here means a bad value fails at startup,
-    not on the first voicemail encoded. `[voicemail].recording_filename` is validated
-    the same way: non-empty, and containing `{timestamp}` or `{call_id}`
-    (case-insensitively) - the one structural property that matters at
-    startup, since anything else about the template only affects where
-    on disk a recording ends up, not whether the process can run.
+    not on the first voicemail encoded. `[voicemail].recording_filename`
+    is validated as: non-empty; containing `{timestamp}` or `{call_id}`
+    (case-insensitively); not rooted; and containing no `..` path
+    segment - the latter two because `SaveRecordingAsync` joins the
+    resolved filename straight onto `recordings_dir`, and a rooted value
+    would silently discard `recordings_dir` entirely (`Path.Combine`'s
+    documented behavior) while a `..` segment could escape it, so a
+    template can only ever name something under `recordings_dir`.
 - `Voicemail/VoicemailSender.cs`: one instance, constructed once in
   `Program.cs` and shared across every call for the life of the process -
   unlike `NostrSignalingClient`, which is scoped to a single call.
@@ -325,8 +332,11 @@ string?`, `null` meaning nothing could be transcribed), selected by
     (`CallerNumber`, `CallId`, no audio) or a `VoicemailAudioJob` (adds
     `OggPath`, `Samples`, `SampleRate`, `DurationSeconds` - both the saved
     Opus/OGG file and the original recorded PCM, so each delivery backend
-    reads whichever it actually needs) - and writes it to an
-    unbounded `System.Threading.Channels.Channel<SendJob>`, returning
+    reads whichever it actually needs; `VoicemailSink` only populates
+    `Samples` when `delivery = "text"` - `AudioInlineDeliveryBackend`
+    never reads it, so carrying the full recording in memory for every
+    "audio" job too would just sit unread in this queue) - and writes it
+    to an unbounded `System.Threading.Channels.Channel<SendJob>`, returning
     immediately. It's a plain in-memory queue (multiple calls can enqueue
     concurrently - `Channel` is built for that), not a persistent one, so
     anything still queued at process shutdown is logged as undelivered;
@@ -442,23 +452,15 @@ string?`, `null` meaning nothing could be transcribed), selected by
     the cap entirely - the latter is the actual fix; this budget is a
     ceiling this architecture can't grow past.
 - **No fallback if Opus encoding fails when a recording is saved.**
-  Since the recording is encoded to Opus/OGG at record time
-  (`VoicemailSink.SaveRecordingAsync`, via `Sip/OggOpusCodec.Encode`),
+  The recording is encoded to Opus/OGG at record time
+  (`VoicemailSink.SaveRecordingAsync`, via `Sip/OggOpusCodec.Encode`), so
   an encoding failure there means nothing is saved to disk at all, not
   just undelivered - `RunVoicemailAsync` throws, and
   `VoicemailSink.TryHandleAsync`'s own catch sends a `MissedCallNoticeJob`
-  instead (see Flow step 8). An earlier version encoded at delivery time
-  instead and fell back to sending the raw WAV recording when encoding
-  failed there, but that fallback could never actually succeed for a
-  real voicemail: 8kHz 16-bit mono WAV runs 16,000 bytes/sec, so
-  `MaxAudioBytes` (30,400) only fits a 1.0-1.9s WAV, and recordings under
-  1.0s are already dropped before encoding is ever attempted - so the
-  fallback was dead weight that just moved the failure later (an opaque
-  error inside `SendPrivateMsgTo`) instead of avoiding it. A genuine
-  encoding failure is not expected in normal operation (no I/O, no
-  external process - see DTX below for the one known throw path, which
-  is deliberately never triggered), but unlike the delivery-time failure
-  this one costs the recording itself, not just the send.
+  instead (see Flow step 8). A genuine encoding failure is not expected
+  in normal operation (no I/O, no external process - see DTX below for
+  the one known throw path, which is deliberately never triggered), but
+  when it happens it costs the recording itself, not just the send.
 - **DTX (encoder silence-dropping) is not available, so the size problem
   above can't currently be helped by compressing the silence out of a
   recording.** `Concentus.Oggfile`'s `OpusOggWriteStream` - the Ogg

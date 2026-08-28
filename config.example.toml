@@ -73,7 +73,9 @@ max_recording_seconds = 27
 # Not derived from anything - just a sanity limit on how much PCM is
 # buffered in memory while recording, so raise it only as far as this
 # host's available RAM comfortably allows for the busiest realistic case
-# (one recording per line, worst case all lines at once).
+# (one recording per line, worst case all lines at once). ConfigLoader
+# rejects anything above 3600 (1 hour) at startup, so this can't itself
+# become unbounded.
 max_text_recording_seconds = 600
 # Passed to Concentus' Ogg writer when encoding a recording. Only takes
 # effect if the writer's input and output sample rates ever differ -
@@ -94,8 +96,11 @@ recordings_dir = "voicemail"
 # caller number), {call_id} (a per-call unique id, not a phone number -
 # useful if you'd rather not have the caller's number in filenames).
 # Must include {timestamp} or {call_id} so recordings from different
-# calls can't overwrite each other - ConfigLoader rejects one that
-# doesn't at startup.
+# calls can't overwrite each other, must be a relative path (joined onto
+# recordings_dir above - a rooted value would silently discard it), and
+# must not contain a ".." segment - ConfigLoader rejects a value
+# violating any of these at startup. A path separator is fine otherwise,
+# e.g. "{caller}/{timestamp}.ogg" to group recordings per caller.
 recording_filename = "{timestamp}-{caller}.ogg"
 # Optional. Relays to publish the voicemail DM to, if different from
 # [nostr].relays above - e.g. target_npub advertises a separate NIP-17

@@ -33,6 +33,17 @@ public static class VoicemailBudget
     // See docs/voicemail.md.
     public const int MaxTextRecordingSeconds = 600;
 
+    // Hard ceiling ConfigLoader enforces on the configurable
+    // max_text_recording_seconds, so raising that sanity limit can't
+    // itself become unbounded. Picked as an order-of-magnitude memory
+    // budget, not a precise derivation: at 8 kHz mono 16-bit PCM
+    // (16,000 bytes/sec), 3,600s of buffered audio is ~57.6 MB in
+    // VoicemailSink's List<short> alone, before List growth/ToArray()
+    // transients or VoicemailAudioJob.Samples keeping a copy alive in
+    // the send queue - comfortably bounded even accounting for those,
+    // but well past any real voicemail's length.
+    public const int MaxTextRecordingSecondsCeiling = 3600;
+
     // The rumor's JSON has ~40,960 bytes of padded-length budget after the
     // seal layer's own NIP-44 plaintext cap and overhead - see
     // MaxAudioBytes' derivation in docs/voicemail.md, which covers that

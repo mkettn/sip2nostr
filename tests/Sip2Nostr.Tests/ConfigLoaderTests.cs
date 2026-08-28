@@ -204,7 +204,8 @@ public class ConfigLoaderTests
     [InlineData("max_recording_seconds = -1", "max_recording_seconds")]
     [InlineData("max_text_recording_seconds = 0", "max_text_recording_seconds")]
     [InlineData("max_text_recording_seconds = -5", "max_text_recording_seconds")]
-    public void Load_NonPositiveVoicemailTimeout_Throws(string voicemailOverride, string expectedKeyInMessage)
+    [InlineData("max_text_recording_seconds = 3601", "max_text_recording_seconds")]
+    public void Load_InvalidVoicemailTimeout_Throws(string voicemailOverride, string expectedKeyInMessage)
     {
         var toml = $"{MinimalValidToml}\n\n[voicemail]\n{voicemailOverride}\n";
         var path = WriteTempConfig(toml);
@@ -212,6 +213,41 @@ public class ConfigLoaderTests
         {
             var exception = Assert.Throws<InvalidDataException>(() => ConfigLoader.Load(path));
             Assert.Contains(expectedKeyInMessage, exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_MaxTextRecordingSecondsAtCeiling_Succeeds()
+    {
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nmax_text_recording_seconds = {VoicemailBudget.MaxTextRecordingSecondsCeiling}\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal(VoicemailBudget.MaxTextRecordingSecondsCeiling, config.Voicemail.MaxTextRecordingSeconds);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("/tmp/{call_id}.ogg")]
+    [InlineData("../{call_id}.ogg")]
+    [InlineData("{caller}/../../etc/{call_id}.ogg")]
+    public void Load_RecordingFilenameEscapingRecordingsDir_Throws(string recordingFilename)
+    {
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nrecording_filename = \"{EscapeTomlString(recordingFilename)}\"\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<InvalidDataException>(() => ConfigLoader.Load(path));
+            Assert.Contains("recording_filename", exception.Message);
         }
         finally
         {

@@ -141,8 +141,9 @@ public sealed class VoicemailConfig
     // unlike delivery = "audio"'s ceiling (VoicemailBudget.MaxRecordingSeconds,
     // derived from the NIP-17/Opus size budget and not configurable), this
     // is just a sanity limit on how much PCM VoicemailSink buffers in
-    // memory while recording, not derived from anything else. See
-    // docs/voicemail.md.
+    // memory while recording, not derived from anything else. ConfigLoader
+    // caps it at VoicemailBudget.MaxTextRecordingSecondsCeiling so it can't
+    // itself become unbounded. See docs/voicemail.md.
     [property: TomlPropertyName("max_text_recording_seconds")]
     public int MaxTextRecordingSeconds { get; init; } = Sip2Nostr.Shared.VoicemailBudget.MaxTextRecordingSeconds;
 
@@ -162,12 +163,15 @@ public sealed class VoicemailConfig
     [property: TomlPropertyName("recordings_dir")]
     public string RecordingsDir { get; init; } = "voicemail";
 
-    // Filename for a saved recording, relative to recordings_dir.
-    // Placeholders: {timestamp} (yyyyMMdd-HHmmss), {caller} (the
-    // normalized caller number), {call_id} (a per-call unique id, not a
-    // phone number). Must include {timestamp} or {call_id} - checked by
-    // ConfigLoader - so recordings from different calls can't silently
-    // overwrite each other.
+    // Filename for a saved recording, relative to recordings_dir - joined
+    // straight onto it, so must be a relative path with no ".." segment
+    // (checked by ConfigLoader; a rooted value would otherwise silently
+    // discard recordings_dir entirely via Path.Combine). Placeholders:
+    // {timestamp} (yyyyMMdd-HHmmss), {caller} (the normalized caller
+    // number), {call_id} (a per-call unique id, not a phone number). Must
+    // include {timestamp} or {call_id} - also checked by ConfigLoader -
+    // so recordings from different calls can't silently overwrite each
+    // other.
     [property: TomlPropertyName("recording_filename")]
     public string RecordingFilename { get; init; } = "{timestamp}-{caller}.ogg";
 

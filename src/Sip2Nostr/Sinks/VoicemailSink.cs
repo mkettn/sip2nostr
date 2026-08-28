@@ -145,7 +145,13 @@ public sealed class VoicemailSink(
             recordedSeconds);
         var durationSeconds = (int)Math.Round(recordedSeconds);
         var oggPath = await SaveRecordingAsync(samples, sampleRate, call.CallId, call.CallerNumber);
-        voicemailSender.Enqueue(new VoicemailAudioJob(oggPath, samples, sampleRate, durationSeconds, call.CallerNumber, call.CallId));
+
+        // Only "text" delivery ever reads VoicemailAudioJob.Samples
+        // (TranscribedTextDeliveryBackend, for whisper.cpp); carrying the
+        // full recording in memory for "audio" jobs too would just sit
+        // unread in the send queue until the worker drains it.
+        var jobSamples = voicemailConfig.Delivery == "text" ? samples : [];
+        voicemailSender.Enqueue(new VoicemailAudioJob(oggPath, jobSamples, sampleRate, durationSeconds, call.CallerNumber, call.CallId));
     }
 
     private async Task<string> SaveRecordingAsync(short[] samples, int sampleRate, string callId, string callerNumber)
