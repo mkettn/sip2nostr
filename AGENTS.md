@@ -6,10 +6,11 @@ tested, the architecture invariants that are easy to undo by accident, and
 the conventions this codebase actually follows. The coding-agent defaults
 below are here too, since implementing a change is the common case.
 
-Rules for reviewing changes live in `.claude/skills/review/SKILL.md`, which
-loads only when the task is a review. Keeping them out of this file means a
-reviewer's defaults - which pull the opposite way from a coding agent's -
-never sit in the same context as the rules they'd contradict.
+Rules for reviewing changes live in `agents/reviewing.md`, so any tool can
+read them; `.claude/skills/review/SKILL.md` is a pointer that makes Claude
+Code load them only when the task is a review. Keeping them out of this file
+means a reviewer's defaults - which pull the opposite way from a coding
+agent's - never sit in the same context as the rules they'd contradict.
 
 ## Coding agent
 
