@@ -3,16 +3,26 @@
 This file is loaded into every agent session on this repo, so it holds what
 any agent needs regardless of what it's doing: how the code is built and
 tested, the architecture invariants that are easy to undo by accident, and
-the conventions this codebase actually follows. The coding-agent defaults
-below are here too, since implementing a change is the common case.
+the conventions this codebase actually follows. Most of it applies equally
+to reviewing a change, not just making one; the sections below are written
+implementation-first only because implementing is the common case for a
+session with no stated role.
 
-Rules for reviewing changes live in `agents/reviewing.md`, so any tool can
-read them; `.claude/skills/review/SKILL.md` is a pointer that makes Claude
-Code load them only when the task is a review. Keeping them out of this file
-means a reviewer's defaults - which pull the opposite way from a coding
-agent's - never sit in the same context as the rules they'd contradict.
+A few review-specific behaviors (verify library claims before trusting
+them, don't restate what's already fine, check whether CI actually ran)
+would be noise or worse in a coding session, so those live separately in
+`agents/reviewing.md` where any tool can read them; `.claude/skills/review/SKILL.md`
+is a pointer that makes Claude Code load them only when the task is a
+review.
 
-## Coding agent
+If this file grows past ~200 lines, split it by subject
+(`agents/architecture.md`, `agents/conventions.md`, ...) with `AGENTS.md`
+reduced to a brief plus pointers - not by persona. Persona was tried once
+(a `## Review agent` section here) and reverted: too much of what's below
+is facts and conventions a reviewer needs just as much as a coding agent
+does.
+
+## Working in this repo
 
 ### Stay inside the scope you were given
 
