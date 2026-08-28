@@ -115,6 +115,16 @@ behavior / why it's out of scope here). Keep PRs reviewable and scoped
 to what they claim to do; let the issue tracker hold the backlog, but
 only with the user's say-so on what goes there.
 
+### Keep a PR's diff to a reviewable size
+
+Aim for at most ~1,200 changed/added lines per PR. Above ~3,000, the PR
+is probably too big - split it into smaller PRs that land independently,
+or check with the user before pushing on. The one exception is a big new
+feature whose size is mostly necessary boilerplate (generated bindings,
+a new project's scaffolding, a large but mechanical rename) rather than
+logic a reviewer actually has to reason about line by line - call that
+out explicitly rather than assuming it's self-evident.
+
 ## Review agent
 
 *(Rules for the review persona go here - maintained by a separate
