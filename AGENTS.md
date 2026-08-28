@@ -27,7 +27,7 @@ revert an unwanted edit later.
 Documentation in `docs/*.md` and `README.md` describes how the software
 works *now* (and, where relevant, what's planned next). It does not
 narrate what a previous design decision was, what got reverted, or what
-didn't work before "since the refactor," "previously this used X," "we
+didn't work before. "Since the refactor," "previously this used X," "we
 used to do Y" have no place here outside of a rare, explicitly-requested
 migration note. Read the surrounding doc for its existing voice before
 adding to it; match it rather than introducing a different register.
@@ -39,9 +39,13 @@ the code itself - a hidden constraint, a subtle invariant, a workaround
 for a specific upstream bug, a non-obvious ordering requirement. Never
 add a comment that just restates what the next line does, references the
 current task/issue/PR number, or explains what a well-named
-type/method already makes clear. See `docs/hub-architecture.md` and
-`Shared/VoicemailBudget.cs` for the level of comment density this
-codebase aims for: sparse, but load-bearing where present.
+type/method already makes clear. Most of the codebase is sparse on
+comments by default - that's the target density everywhere else.
+`src/Sip2Nostr/Shared/VoicemailBudget.cs` is the exception, not the
+example to match generally: its constants encode a real NIP-44 byte-
+budget derivation that has to be written down somewhere, so it's
+deliberately comment-heavy. Match its density only when you're
+documenting a similarly non-obvious derivation, not as a general target.
 
 ### Respect the hub/source/sink architecture's invariants
 
@@ -56,7 +60,8 @@ undo while "improving" something nearby:
   `ICallAudio` itself does. Don't reintroduce a PCM decode/re-encode step
   in the relay path to make some other piece of code more convenient.
 - **A `Call` handed to a sink is always already answered**, with audio
-  flowing (`Call.cs`'s doc comment states this explicitly). Sinks must
+  flowing (`src/Sip2Nostr/Hub/Call.cs`'s doc comment states this
+  explicitly). Sinks must
   not assume they get to decide *whether* to answer - only what to do
   once a call is live. (This invariant is the reason issue #18 - ringback
   before answer - is a real architecture change and not a one-line fix;
@@ -70,15 +75,17 @@ startup - not lazily the first time the value is used. Follow the
 existing style: check cheap/structural things first (enum-like string
 values, required-when-X fields) before anything that depends on them
 (e.g. validate `delivery` is a known value *before* using it to pick a
-size ceiling - see `ConfigLoader.cs`). A new default should preserve
-today's behavior unless the user explicitly opts in to something else.
+size ceiling - see `src/Sip2Nostr/Config/ConfigLoader.cs`). A new
+default should preserve today's behavior unless the user explicitly
+opts in to something else.
 
 ### Never trust a duration/count heuristic for an output-size budget
 
 Any time an encoded/transcribed/generated output has to fit a real
 external size limit (the NIP-17 DM budget in this codebase, see
-`VoicemailBudget.cs`), check the *actual* output's size against the
-budget and fail loudly and specifically if it doesn't fit. Don't assume
+`src/Sip2Nostr/Shared/VoicemailBudget.cs`), check the *actual* output's
+size against the budget and fail loudly and specifically if it doesn't
+fit. Don't assume
 a duration or input-size cap keeps the output small - encoders and
 transcription engines have failure modes (repetition loops, worst-case
 expansion) that break that assumption. This was learned the hard way once
@@ -117,13 +124,20 @@ only with the user's say-so on what goes there.
 
 ### Keep a PR's diff to a reviewable size
 
-Aim for at most ~1,200 changed/added lines per PR. Above ~3,000, the PR
-is probably too big - split it into smaller PRs that land independently,
-or check with the user before pushing on. The one exception is a big new
-feature whose size is mostly necessary boilerplate (generated bindings,
-a new project's scaffolding, a large but mechanical rename) rather than
-logic a reviewer actually has to reason about line by line - call that
-out explicitly rather than assuming it's self-evident.
+Measure size the way GitHub's diff stat does: additions plus deletions
+combined (a PR at "+1,200 -0" and one at "+700 -500" are both ~1,200 by
+this measure). Aim for at most ~1,200 by default. Above that, it should
+still be one coherent, reviewable change and not a grab-bag - a bigger
+number is fine when the PR is doing one real thing that doesn't split
+cleanly, such as a refactor whose intermediate states would leave the
+build or tests broken (the hub-architecture rework in #16 landed at
+~2,146 for exactly this reason). Above ~3,000, or if you're unsure
+whether the size is still justified, say so and check with the user
+before pushing on rather than deciding alone. The "boilerplate" exception
+(generated bindings, a new project's scaffolding, a large but mechanical
+rename) is separate from the "can't be split" exception above - either
+one is a reason to go over ~1,200, but call out explicitly which one
+applies rather than assuming it's self-evident.
 
 ## Review agent
 
