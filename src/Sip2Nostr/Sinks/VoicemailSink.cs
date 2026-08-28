@@ -20,6 +20,7 @@ namespace Sip2Nostr.Sinks;
 public sealed class VoicemailSink(
     VoicemailConfig voicemailConfig,
     VoicemailSender voicemailSender,
+    bool deliveryRequiresPcm,
     string configDirectory,
     ILogger logger) : ICallSink
 {
@@ -146,11 +147,13 @@ public sealed class VoicemailSink(
         var durationSeconds = (int)Math.Round(recordedSeconds);
         var oggPath = await SaveRecordingAsync(samples, sampleRate, call.CallId, call.CallerNumber);
 
-        // Only "text" delivery ever reads VoicemailAudioJob.Samples
-        // (TranscribedTextDeliveryBackend, for whisper.cpp); carrying the
-        // full recording in memory for "audio" jobs too would just sit
-        // unread in the send queue until the worker drains it.
-        var jobSamples = voicemailConfig.Delivery == "text" ? samples : [];
+        // Only a backend that actually reads VoicemailAudioJob.Samples
+        // (TranscribedTextDeliveryBackend, for whisper.cpp) needs PCM
+        // carried in the job; asking the backend itself (rather than
+        // re-deriving the same answer from [voicemail].delivery here)
+        // keeps this correct if a future backend's PCM needs don't line
+        // up with today's two-mode delivery split.
+        var jobSamples = deliveryRequiresPcm ? samples : [];
         voicemailSender.Enqueue(new VoicemailAudioJob(oggPath, jobSamples, sampleRate, durationSeconds, call.CallerNumber, call.CallId));
     }
 

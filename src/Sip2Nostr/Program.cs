@@ -136,7 +136,12 @@ try
 
         if (config.Voicemail.Enabled)
         {
-            sinks.Add(new VoicemailSink(config.Voicemail, voicemailSender, config.ConfigDirectory, Log.Logger.ForContext<VoicemailSink>()));
+            sinks.Add(new VoicemailSink(
+                config.Voicemail,
+                voicemailSender,
+                voicemailDeliveryBackend.RequiresPcm,
+                config.ConfigDirectory,
+                Log.Logger.ForContext<VoicemailSink>()));
         }
 
         _ = CheckNostrConnectivitySafeAsync(config.Nostr, Log.Logger);

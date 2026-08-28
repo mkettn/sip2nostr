@@ -9,6 +9,8 @@ namespace Sip2Nostr.Voicemail;
 // fits inside.
 public sealed class AudioInlineDeliveryBackend : IVoicemailDeliveryBackend
 {
+    public bool RequiresPcm => false;
+
     public async Task<(string Content, List<Tag> Tags, string Description)> BuildContentAsync(VoicemailAudioJob job, CancellationToken ct)
     {
         var audioBytes = await File.ReadAllBytesAsync(job.OggPath, ct);

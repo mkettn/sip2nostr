@@ -18,6 +18,8 @@ namespace Sip2Nostr.Voicemail;
 // See docs/voicemail.md.
 public sealed class TranscribedTextDeliveryBackend(IVoicemailTranscriber transcriber, ILogger logger) : IVoicemailDeliveryBackend
 {
+    public bool RequiresPcm => true;
+
     public async Task<(string Content, List<Tag> Tags, string Description)> BuildContentAsync(VoicemailAudioJob job, CancellationToken ct)
     {
         var text = await transcriber.TranscribeAsync(job.Samples, job.SampleRate, ct);

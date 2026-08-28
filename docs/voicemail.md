@@ -155,9 +155,17 @@ How a recorded voicemail becomes DM content is pluggable via
 
 Both implement `Voicemail/IVoicemailDeliveryBackend.cs`
 (`BuildContentAsync(VoicemailAudioJob, CancellationToken) -> (Content,
-Tags, Description)`) - the only thing `VoicemailSender` depends on; it
-doesn't know or care which backend it's holding, and owns disposing it
-alongside its own worker.
+Tags, Description)`, plus a `RequiresPcm` property - `false` for
+`AudioInlineDeliveryBackend`, `true` for `TranscribedTextDeliveryBackend`
+- that `VoicemailSink` reads to decide whether to populate
+`VoicemailAudioJob.Samples`, so that decision lives with the backend
+that actually knows its own needs rather than being re-derived from
+`[voicemail].delivery` at the recording site) - the only thing
+`VoicemailSender` depends on; it doesn't know or care which backend it's
+holding, and owns disposing it alongside its own worker. `Program.cs`
+passes the same backend instance's `RequiresPcm` to `VoicemailSink`
+separately, since the sink itself only calls `VoicemailSender.Enqueue`
+and never touches the backend directly.
 
 ### Speech-to-text engine
 
@@ -228,12 +236,8 @@ string?`, `null` meaning nothing could be transcribed), selected by
     sipMediaSession.SendAudio` - same off-the-shelf player, same signature
     (`ICallAudio.SendEncodedSample` exists specifically to match it), just
     retargeted at the hub's `ICallAudio` instead of a concrete
-    `RTPSession`. An earlier version of this sink hand-rolled its own PCM
-    pacing/RTP-framing loop instead; that reimplemented exactly what
-    `AudioExtrasSource` already does correctly (a monotonic timestamp, a
-    real-time-paced send loop, marker bits) and got two of the three
-    wrong - see the PR review that caught it. `AudioExtrasSource` needs a
-    real file to stream from, so the sound-file path from
+    `RTPSession`. `AudioExtrasSource` needs a real file to stream from,
+    so the sound-file path from
     `SoundFileResolver.Resolve` is opened directly (`File.OpenRead` +
     `SendAudioFromStream`) rather than loaded into a `short[]` first, and
     the no-greeting-configured case now uses `SetSource(SineWave)` instead
@@ -333,10 +337,11 @@ string?`, `null` meaning nothing could be transcribed), selected by
     `OggPath`, `Samples`, `SampleRate`, `DurationSeconds` - both the saved
     Opus/OGG file and the original recorded PCM, so each delivery backend
     reads whichever it actually needs; `VoicemailSink` only populates
-    `Samples` when `delivery = "text"` - `AudioInlineDeliveryBackend`
-    never reads it, so carrying the full recording in memory for every
-    "audio" job too would just sit unread in this queue) - and writes it
-    to an unbounded `System.Threading.Channels.Channel<SendJob>`, returning
+    `Samples` when the configured backend's `IVoicemailDeliveryBackend.RequiresPcm`
+    says so (`true` for `TranscribedTextDeliveryBackend`, `false` for
+    `AudioInlineDeliveryBackend`, which never reads it and would
+    otherwise carry the full recording in memory for every "audio" job
+    unread) - and writes it to an unbounded `System.Threading.Channels.Channel<SendJob>`, returning
     immediately. It's a plain in-memory queue (multiple calls can enqueue
     concurrently - `Channel` is built for that), not a persistent one, so
     anything still queued at process shutdown is logged as undelivered;
