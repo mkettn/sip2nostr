@@ -54,7 +54,7 @@ static IVoicemailDeliveryBackend CreateVoicemailDeliveryBackend(AppConfig config
 {
     if (!config.Voicemail.Enabled || config.Voicemail.Delivery != "text")
     {
-        return new AudioInlineDeliveryBackend(logger.ForContext<AudioInlineDeliveryBackend>());
+        return new AudioInlineDeliveryBackend();
     }
 
     var transcriber = CreateTranscriber(config.Voicemail.Transcription, config.ConfigDirectory, logger);

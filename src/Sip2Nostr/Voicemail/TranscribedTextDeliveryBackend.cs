@@ -18,8 +18,8 @@ public sealed class TranscribedTextDeliveryBackend(IVoicemailTranscriber transcr
 {
     public async Task<(string Content, List<Tag> Tags, string Description)> BuildContentAsync(VoicemailAudioJob job, CancellationToken ct)
     {
-        var wavBytes = await File.ReadAllBytesAsync(job.WavPath, ct);
-        var samples = WavEncoder.Decode(wavBytes);
+        var oggBytes = await File.ReadAllBytesAsync(job.OggPath, ct);
+        var samples = OggOpusCodec.Decode(oggBytes, job.SampleRate);
         var text = await transcriber.TranscribeAsync(samples, job.SampleRate, ct);
 
         if (string.IsNullOrWhiteSpace(text))

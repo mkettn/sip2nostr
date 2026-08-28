@@ -136,8 +136,8 @@ public sealed class VoicemailConfig
     public int MaxRecordingSeconds { get; init; } = Sip2Nostr.Shared.VoicemailBudget.MaxRecordingSeconds;
 
     // Optional. Same format rules as [[lines]].sound: raw 8 kHz 16-bit PCM
-    // works directly, other formats require ffmpeg. Falls back to a short
-    // tone if unset.
+    // works directly, mono Ogg/Opus (.ogg/.opus) is decoded in-process.
+    // Falls back to a short tone if unset.
     [property: TomlPropertyName("greeting_sound")]
     public string? GreetingSound { get; init; }
 

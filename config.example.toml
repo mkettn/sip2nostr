@@ -26,7 +26,7 @@ uri = "sip:+4989123456@sip.your-provider.de"
 label = "main"
 # Optional: when [nostr].enabled is false, answer calls on this line and
 # play this file on loop to test SIP audio. Raw 8 kHz 16-bit PCM works
-# directly; other formats require ffmpeg to be installed for conversion.
+# directly; mono Ogg/Opus (.ogg/.opus) is decoded in-process.
 # sound = "sounds/test.opus"
 
 [[lines]]
@@ -69,11 +69,11 @@ ring_timeout_seconds = 20
 # isn't bound by the same DM size budget. See docs/voicemail.md.
 max_recording_seconds = 27
 # Optional. Same format rules as [[lines]].sound: raw 8 kHz 16-bit PCM
-# works directly, other formats require ffmpeg. Falls back to a short
-# tone if unset.
+# works directly, mono Ogg/Opus (.ogg/.opus) is decoded in-process. Falls
+# back to a short tone if unset.
 # greeting_sound = "sounds/greeting.opus"
-# Where recordings are saved (as WAV), relative to this config file unless
-# rooted. Always written, regardless of whether the Nostr send succeeds.
+# Where recordings are saved (as Ogg/Opus), relative to this config file
+# unless rooted. Always written, regardless of whether the Nostr send succeeds.
 recordings_dir = "voicemail"
 # Optional. Relays to publish the voicemail DM to, if different from
 # [nostr].relays above - e.g. target_npub advertises a separate NIP-17

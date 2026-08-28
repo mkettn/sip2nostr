@@ -1,11 +1,18 @@
 namespace Sip2Nostr.Shared;
 
-// Shared by VoicemailSender/its delivery backends (encode/check against
-// these) and ConfigLoader (validates max_recording_seconds against them
-// at startup). See docs/voicemail.md for the full derivation.
+// Shared by VoicemailSink (encodes against these), the voicemail delivery
+// backends (check against these), and ConfigLoader (validates
+// max_recording_seconds against them at startup). See docs/voicemail.md
+// for the full derivation.
 public static class VoicemailBudget
 {
     public const int OpusBitrateBps = 8000;
+
+    // Passed to Concentus.Oggfile.OpusOggWriteStream's own resamplerQuality
+    // parameter when encoding a recording (Sinks/VoicemailSink.cs) -
+    // unrelated to the sample-rate conversion Sip/OggOpusCodec.Decode does.
+    public const int OpusResamplerQuality = 5;
+
     public const int MaxAudioBytes = 30_400;
 
     private const int ReservedAudioBytes = MaxAudioBytes * 9 / 10;
@@ -15,8 +22,8 @@ public static class VoicemailBudget
     // decoupled from the Opus/NIP-17 budget above - text delivery's real
     // enforcement is MaxTranscriptBytes, checked against the actual
     // transcript at send time. This just bounds how much PCM VoicemailSink
-    // buffers in memory (and how large the WAV file gets) while recording,
-    // regardless of what the transcript ends up being. See docs/voicemail.md.
+    // buffers in memory while recording, regardless of what the transcript
+    // ends up being. See docs/voicemail.md.
     public const int MaxTextRecordingSeconds = 600;
 
     // The rumor's JSON has ~40,960 bytes of padded-length budget after the

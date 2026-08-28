@@ -144,21 +144,21 @@ public sealed class VoicemailSink(
             call.CallerNumber,
             recordedSeconds);
         var durationSeconds = (int)Math.Round(recordedSeconds);
-        var wavPath = await SaveRecordingAsync(samples, sampleRate, call.CallId);
-        voicemailSender.Enqueue(new VoicemailAudioJob(wavPath, sampleRate, durationSeconds, call.CallerNumber, call.CallId));
+        var oggPath = await SaveRecordingAsync(samples, sampleRate, call.CallId);
+        voicemailSender.Enqueue(new VoicemailAudioJob(oggPath, sampleRate, durationSeconds, call.CallerNumber, call.CallId));
     }
 
     private async Task<string> SaveRecordingAsync(short[] samples, int sampleRate, string callId)
     {
-        var wavBytes = WavEncoder.Encode(samples, sampleRate);
+        var oggBytes = OggOpusCodec.Encode(samples, sampleRate, VoicemailBudget.OpusBitrateBps, VoicemailBudget.OpusResamplerQuality);
         var recordingsDir = Path.IsPathRooted(voicemailConfig.RecordingsDir)
             ? voicemailConfig.RecordingsDir
             : Path.GetFullPath(Path.Combine(configDirectory, voicemailConfig.RecordingsDir));
         Directory.CreateDirectory(recordingsDir);
 
-        var wavPath = Path.Combine(recordingsDir, $"{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}-{callId}.wav");
-        await File.WriteAllBytesAsync(wavPath, wavBytes);
-        logger.Information("Saved voicemail recording to {WavPath}.", wavPath);
-        return wavPath;
+        var oggPath = Path.Combine(recordingsDir, $"{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}-{callId}.ogg");
+        await File.WriteAllBytesAsync(oggPath, oggBytes);
+        logger.Information("Saved voicemail recording to {OggPath}.", oggPath);
+        return oggPath;
     }
 }
