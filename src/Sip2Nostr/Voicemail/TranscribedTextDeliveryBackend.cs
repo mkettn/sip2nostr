@@ -2,25 +2,25 @@ using System.Text;
 using Nostr.Sdk;
 using Serilog;
 using Sip2Nostr.Shared;
-using Sip2Nostr.Sip;
 
 namespace Sip2Nostr.Voicemail;
 
 // Alternative voicemail delivery backend: transcribes the recording via
 // an IVoicemailTranscriber and sends the text instead of inlining audio.
-// A transcript is normally tiny compared to the NIP-17 budget that
-// constrains AudioInlineDeliveryBackend, but it's still checked against
-// the actual output (MaxTranscriptBytes) rather than trusted to stay
-// small just because recordings are duration-capped - whisper.cpp's
-// repetition-loop failure mode on silence/noise can produce far more
-// text than any real voicemail would. See docs/voicemail.md.
+// Transcribes job.Samples - the original recorded PCM - directly, rather
+// than decoding job's saved Opus/OGG file back out, so transcription
+// never runs on lossy-recompressed audio. A transcript is normally tiny
+// compared to the NIP-17 budget that constrains AudioInlineDeliveryBackend,
+// but it's still checked against the actual output (MaxTranscriptBytes)
+// rather than trusted to stay small just because recordings are
+// duration-capped - whisper.cpp's repetition-loop failure mode on
+// silence/noise can produce far more text than any real voicemail would.
+// See docs/voicemail.md.
 public sealed class TranscribedTextDeliveryBackend(IVoicemailTranscriber transcriber, ILogger logger) : IVoicemailDeliveryBackend
 {
     public async Task<(string Content, List<Tag> Tags, string Description)> BuildContentAsync(VoicemailAudioJob job, CancellationToken ct)
     {
-        var oggBytes = await File.ReadAllBytesAsync(job.OggPath, ct);
-        var samples = OggOpusCodec.Decode(oggBytes, job.SampleRate);
-        var text = await transcriber.TranscribeAsync(samples, job.SampleRate, ct);
+        var text = await transcriber.TranscribeAsync(job.Samples, job.SampleRate, ct);
 
         if (string.IsNullOrWhiteSpace(text))
         {

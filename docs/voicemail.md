@@ -130,11 +130,15 @@ How a recorded voicemail becomes DM content is pluggable via
   the recording (already Opus/OGG - `VoicemailSink` encodes it when
   saving, not this backend) and inlines it as a base64 `data:` URI in the
   DM content, subject to the NIP-17 size budget covered above.
-- `"text"` - `Voicemail/TranscribedTextDeliveryBackend.cs` decodes the
-  recording back to PCM via `Sip/OggOpusCodec.Decode` and transcribes it
-  via a speech-to-text engine, sending the transcript as plain text
-  instead. This path isn't bound by the Opus/NIP-17 budget above, so it
-  has its own two checks: `max_recording_seconds` is capped at
+- `"text"` - `Voicemail/TranscribedTextDeliveryBackend.cs` transcribes
+  `VoicemailAudioJob.Samples` - the original recorded PCM, carried on the
+  job alongside `OggPath` rather than decoded back out of the saved
+  Opus/OGG file - via a speech-to-text engine, sending the transcript as
+  plain text instead. Transcribing the original PCM instead of a
+  lossy-recompressed copy avoids feeding whisper.cpp audio that's already
+  been through 8 kbps Opus once. This path isn't bound by the Opus/NIP-17
+  budget above, so it has its own two checks: `max_recording_seconds` is
+  capped at
   `VoicemailBudget.MaxTextRecordingSeconds` (600s) instead of
   `VoicemailBudget.MaxRecordingSeconds` (see `Config/ConfigLoader.cs`) -
   a sanity ceiling on how much PCM `VoicemailSink` buffers in memory
@@ -169,9 +173,9 @@ string?`, `null` meaning nothing could be transcribed), selected by
   (`[voicemail.transcription].model_path`, required when
   `delivery = "text"` - `ConfigLoader` checks the file exists at
   startup). whisper.cpp expects 16 kHz mono float samples in `[-1, 1]`;
-  `TranscribedTextDeliveryBackend` hands over the recording decoded back
-  to 8 kHz PCM (G.711's rate - the rate it was recorded and encoded at),
-  so `WhisperNetTranscriber` resamples via `SIPSorcery.Media.PcmResampler`
+  `TranscribedTextDeliveryBackend` hands over `VoicemailAudioJob.Samples`
+  as recorded - 8 kHz PCM (G.711's rate) - so `WhisperNetTranscriber`
+  resamples via `SIPSorcery.Media.PcmResampler`
   (already a project dependency, so no new one is needed just for that)
   and converts to `float` before handing samples to Whisper.
   `[voicemail.transcription].language` pins the spoken language (e.g.
@@ -280,7 +284,9 @@ string?`, `null` meaning nothing could be transcribed), selected by
   unlike `NostrSignalingClient`, which is scoped to a single call.
   - `Enqueue` takes a `Voicemail/SendJob.cs` - either a `MissedCallNoticeJob`
     (`CallerNumber`, `CallId`, no audio) or a `VoicemailAudioJob` (adds
-    `OggPath`, `SampleRate`, `DurationSeconds`) - and writes it to an
+    `OggPath`, `Samples`, `SampleRate`, `DurationSeconds` - both the saved
+    Opus/OGG file and the original recorded PCM, so each delivery backend
+    reads whichever it actually needs) - and writes it to an
     unbounded `System.Threading.Channels.Channel<SendJob>`, returning
     immediately. It's a plain in-memory queue (multiple calls can enqueue
     concurrently - `Channel` is built for that), not a persistent one, so

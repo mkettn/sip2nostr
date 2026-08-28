@@ -145,7 +145,7 @@ public sealed class VoicemailSink(
             recordedSeconds);
         var durationSeconds = (int)Math.Round(recordedSeconds);
         var oggPath = await SaveRecordingAsync(samples, sampleRate, call.CallId);
-        voicemailSender.Enqueue(new VoicemailAudioJob(oggPath, sampleRate, durationSeconds, call.CallerNumber, call.CallId));
+        voicemailSender.Enqueue(new VoicemailAudioJob(oggPath, samples, sampleRate, durationSeconds, call.CallerNumber, call.CallId));
     }
 
     private async Task<string> SaveRecordingAsync(short[] samples, int sampleRate, string callId)
