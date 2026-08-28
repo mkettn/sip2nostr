@@ -11,16 +11,15 @@ session with no stated role.
 A few review-specific behaviors (verify library claims before trusting
 them, don't restate what's already fine, check whether CI actually ran)
 would be noise or worse in a coding session, so those live separately in
-`agents/reviewing.md` where any tool can read them; `.claude/skills/review/SKILL.md`
-is a pointer that makes Claude Code load them only when the task is a
-review.
+`agents/reviewing.md` where any tool can read them;
+`.claude/skills/review/SKILL.md` is a pointer that makes Claude Code
+load them only when the task is a review.
 
 If this file grows past ~200 lines, split it by subject
 (`agents/architecture.md`, `agents/conventions.md`, ...) with `AGENTS.md`
-reduced to a brief plus pointers - not by persona. Persona was tried once
-(a `## Review agent` section here) and reverted: too much of what's below
-is facts and conventions a reviewer needs just as much as a coding agent
-does.
+reduced to a brief plus pointers - not by persona: too much of what's
+below is facts and conventions a reviewer needs just as much as a coding
+agent does.
 
 ## Working in this repo
 
