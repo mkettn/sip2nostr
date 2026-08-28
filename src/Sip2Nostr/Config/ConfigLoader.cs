@@ -41,6 +41,21 @@ public static class ConfigLoader
                 $"[voicemail].delivery must be \"audio\" or \"text\", got \"{config.Voicemail.Delivery}\".");
         }
 
+        if (string.IsNullOrWhiteSpace(config.Voicemail.RecordingFilename))
+        {
+            throw new InvalidDataException("[voicemail].recording_filename must not be empty.");
+        }
+
+        // Without {timestamp} or {call_id}, every recording would resolve
+        // to the same filename and silently overwrite the last one.
+        if (!config.Voicemail.RecordingFilename.Contains("{timestamp}", StringComparison.OrdinalIgnoreCase) &&
+            !config.Voicemail.RecordingFilename.Contains("{call_id}", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                "[voicemail].recording_filename must include {timestamp} or {call_id}, so recordings from " +
+                $"different calls can't overwrite each other. Got \"{config.Voicemail.RecordingFilename}\".");
+        }
+
         // The ceiling depends on which backend is actually recording-length
         // sensitive: "audio" is bound by the Opus/NIP-17 size budget below;
         // "text" isn't (a transcript stays small regardless - the real

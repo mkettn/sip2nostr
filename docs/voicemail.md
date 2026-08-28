@@ -61,9 +61,10 @@ already-answered `Call`, rather than one function doing both.
            4. Record caller audio for up to `max_recording_seconds`, or
               until they hang up.
            5. Encode the recording to Opus/OGG (in-process via
-              `Sip/OggOpusCodec.cs`) and save it under `recordings_dir`
-              (always - this is the durability point, independent of
-              whatever happens to the send afterward).
+              `Sip/OggOpusCodec.cs`) and save it under `recordings_dir`,
+              named per `recording_filename` (always - this is the
+              durability point, independent of whatever happens to the
+              send afterward).
            6. Return true (handled) - CallHub's own `finally` calls
               `Call.HangupAsync` unconditionally once a sink is done, so
               VoicemailSink doesn't need to hang up the SIP call itself.
@@ -256,6 +257,23 @@ string?`, `null` meaning nothing could be transcribed), selected by
     what pads the trailing frame, writes the end-of-stream page, and
     flushes, and `leaveOpen` keeps the underlying `MemoryStream` readable
     afterwards.
+  - `ResolveRecordingFilename` builds the saved file's name from
+    `[voicemail].recording_filename` (default `{timestamp}-{caller}.ogg`)
+    by substituting `{timestamp}` (`yyyyMMdd-HHmmss`, matching
+    `[logging].run_file`'s own templating convention in `Program.cs`),
+    `{caller}` (`Call.CallerNumber`, already normalized to digits by
+    `PhoneNumberNormalizer` - see `caller-allowlist.md` - so it's always
+    a filesystem-safe path segment even though it's attacker-controlled
+    From-header data), and `{call_id}` (`Call.CallId`, a `Guid` - not a
+    phone number, but useful if you'd rather the caller's number not
+    appear in filenames). A template that includes neither `{timestamp}`
+    nor `{call_id}` would let concurrent calls silently overwrite each
+    other's recording, so `Config/ConfigLoader.cs` rejects one at
+    startup (see below). `SaveRecordingAsync` resolves the full path
+    (`recordings_dir` + the templated filename) before creating its
+    directory, so a template with a path separator in it (e.g.
+    `{caller}/{timestamp}.ogg`, to group recordings per caller) works
+    too.
   - `TryHandleAsync` always returns `true`: `CallHub`'s own `finally`
     calls `Call.HangupAsync` unconditionally once a sink is done, so this
     sink doesn't hang up the SIP call itself and doesn't need a `finally`
@@ -278,7 +296,11 @@ string?`, `null` meaning nothing could be transcribed), selected by
     checks the *actual* encoded size against `VoicemailBudget.MaxAudioBytes`
     before every send, since `MaxRecordingSeconds` is a heuristic ceiling
     on the configured value, not a guarantee about what any given
-    recording encodes to.
+    recording encodes to. `[voicemail].recording_filename` is validated
+    the same way: non-empty, and containing `{timestamp}` or `{call_id}`
+    (case-insensitively) - the one structural property that matters at
+    startup, since anything else about the template only affects where
+    on disk a recording ends up, not whether the process can run.
 - `Voicemail/VoicemailSender.cs`: one instance, constructed once in
   `Program.cs` and shared across every call for the life of the process -
   unlike `NostrSignalingClient`, which is scoped to a single call.

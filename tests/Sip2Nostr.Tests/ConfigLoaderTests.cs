@@ -32,6 +32,7 @@ public class ConfigLoaderTests
             var config = ConfigLoader.Load(path);
             Assert.False(config.Voicemail.Enabled);
             Assert.Equal("audio", config.Voicemail.Delivery);
+            Assert.Equal("{timestamp}-{caller}.ogg", config.Voicemail.RecordingFilename);
         }
         finally
         {
@@ -239,6 +240,44 @@ public class ConfigLoaderTests
         {
             var config = ConfigLoader.Load(path);
             Assert.Equal(VoicemailBudget.MaxRecordingSeconds, config.Voicemail.MaxRecordingSeconds);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("voicemail.ogg")]
+    [InlineData("")]
+    [InlineData("{caller}.ogg")]
+    public void Load_RecordingFilenameWithoutTimestampOrCallId_Throws(string recordingFilename)
+    {
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nrecording_filename = \"{EscapeTomlString(recordingFilename)}\"\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<InvalidDataException>(() => ConfigLoader.Load(path));
+            Assert.Contains("recording_filename", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("{call_id}.ogg")]
+    [InlineData("{caller}/{timestamp}.ogg")]
+    [InlineData("{TIMESTAMP}-{CALLER}.ogg")]
+    public void Load_RecordingFilenameWithTimestampOrCallId_Succeeds(string recordingFilename)
+    {
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nrecording_filename = \"{EscapeTomlString(recordingFilename)}\"\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal(recordingFilename, config.Voicemail.RecordingFilename);
         }
         finally
         {

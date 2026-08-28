@@ -144,21 +144,30 @@ public sealed class VoicemailSink(
             call.CallerNumber,
             recordedSeconds);
         var durationSeconds = (int)Math.Round(recordedSeconds);
-        var oggPath = await SaveRecordingAsync(samples, sampleRate, call.CallId);
+        var oggPath = await SaveRecordingAsync(samples, sampleRate, call.CallId, call.CallerNumber);
         voicemailSender.Enqueue(new VoicemailAudioJob(oggPath, samples, sampleRate, durationSeconds, call.CallerNumber, call.CallId));
     }
 
-    private async Task<string> SaveRecordingAsync(short[] samples, int sampleRate, string callId)
+    private async Task<string> SaveRecordingAsync(short[] samples, int sampleRate, string callId, string callerNumber)
     {
         var oggBytes = OggOpusCodec.Encode(samples, sampleRate, VoicemailBudget.OpusBitrateBps, VoicemailBudget.OpusResamplerQuality);
         var recordingsDir = Path.IsPathRooted(voicemailConfig.RecordingsDir)
             ? voicemailConfig.RecordingsDir
             : Path.GetFullPath(Path.Combine(configDirectory, voicemailConfig.RecordingsDir));
-        Directory.CreateDirectory(recordingsDir);
 
-        var oggPath = Path.Combine(recordingsDir, $"{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}-{callId}.ogg");
+        var oggPath = Path.GetFullPath(Path.Combine(recordingsDir, ResolveRecordingFilename(callId, callerNumber)));
+        Directory.CreateDirectory(Path.GetDirectoryName(oggPath)!);
         await File.WriteAllBytesAsync(oggPath, oggBytes);
         logger.Information("Saved voicemail recording to {OggPath}.", oggPath);
         return oggPath;
+    }
+
+    private string ResolveRecordingFilename(string callId, string callerNumber)
+    {
+        var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss");
+        return voicemailConfig.RecordingFilename
+            .Replace("{timestamp}", timestamp, StringComparison.OrdinalIgnoreCase)
+            .Replace("{caller}", callerNumber, StringComparison.OrdinalIgnoreCase)
+            .Replace("{call_id}", callId, StringComparison.OrdinalIgnoreCase);
     }
 }

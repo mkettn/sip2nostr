@@ -145,6 +145,15 @@ public sealed class VoicemailConfig
     [property: TomlPropertyName("recordings_dir")]
     public string RecordingsDir { get; init; } = "voicemail";
 
+    // Filename for a saved recording, relative to recordings_dir.
+    // Placeholders: {timestamp} (yyyyMMdd-HHmmss), {caller} (the
+    // normalized caller number), {call_id} (a per-call unique id, not a
+    // phone number). Must include {timestamp} or {call_id} - checked by
+    // ConfigLoader - so recordings from different calls can't silently
+    // overwrite each other.
+    [property: TomlPropertyName("recording_filename")]
+    public string RecordingFilename { get; init; } = "{timestamp}-{caller}.ogg";
+
     // Optional. Relays to publish the voicemail NIP-17 DM to, if different
     // from [nostr].relays (e.g. target_npub advertises a separate NIP-17
     // kind:10050 DM inbox relay list). Falls back to Nostr.Sdk's default

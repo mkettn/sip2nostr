@@ -75,6 +75,14 @@ max_recording_seconds = 27
 # Where recordings are saved (as Ogg/Opus), relative to this config file
 # unless rooted. Always written, regardless of whether the Nostr send succeeds.
 recordings_dir = "voicemail"
+# Filename for a saved recording, relative to recordings_dir above.
+# Placeholders: {timestamp} (yyyyMMdd-HHmmss), {caller} (the normalized
+# caller number), {call_id} (a per-call unique id, not a phone number -
+# useful if you'd rather not have the caller's number in filenames).
+# Must include {timestamp} or {call_id} so recordings from different
+# calls can't overwrite each other - ConfigLoader rejects one that
+# doesn't at startup.
+recording_filename = "{timestamp}-{caller}.ogg"
 # Optional. Relays to publish the voicemail DM to, if different from
 # [nostr].relays above - e.g. target_npub advertises a separate NIP-17
 # DM inbox relay list (kind:10050). Falls back to the Nostr SDK's default

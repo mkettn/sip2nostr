@@ -184,8 +184,11 @@ Opt-in (`[voicemail].enabled = false` by default). When enabled, if
 (or a short tone if `greeting_sound` isn't configured) followed by a
 recording of up to `max_recording_seconds`, encoded and saved locally as
 Ogg/Opus (in-process via `Concentus` — pure C#, no external program
-required) under `[voicemail].recordings_dir`, and the SIP call hung up
-immediately — delivery happens off the call's critical path, handed to a
+required) under `[voicemail].recordings_dir`, named per
+`[voicemail].recording_filename` (a template with `{timestamp}`,
+`{caller}`, and `{call_id}` placeholders — defaults to
+`{timestamp}-{caller}.ogg`), and the SIP call hung up immediately —
+delivery happens off the call's critical path, handed to a
 background worker (`Voicemail/VoicemailSender.cs`, one instance shared
 for the process lifetime) that connects to `[voicemail].dm_relays` (or
 `[nostr].relays` as a fallback — a NIP-17 DM inbox, kind:10050, can
