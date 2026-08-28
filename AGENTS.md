@@ -1,12 +1,15 @@
 # Agent instructions
 
-This repo is developed with AI coding agents in two distinct roles:
-**coding agents** that implement changes, and **review agents** that
-review them (on PRs, or standalone). Each role gets its own section below
-because the two personas can pull in opposite directions - a coding agent
-optimizing for "get this merged" and a review agent optimizing for
-"nothing slips through" need different defaults to stay useful rather
-than fight each other.
+This file is loaded into every agent session on this repo, so it holds what
+any agent needs regardless of what it's doing: how the code is built and
+tested, the architecture invariants that are easy to undo by accident, and
+the conventions this codebase actually follows. The coding-agent defaults
+below are here too, since implementing a change is the common case.
+
+Rules for reviewing changes live in `.claude/skills/review/SKILL.md`, which
+loads only when the task is a review. Keeping them out of this file means a
+reviewer's defaults - which pull the opposite way from a coding agent's -
+never sit in the same context as the rules they'd contradict.
 
 ## Coding agent
 
@@ -61,9 +64,8 @@ undo while "improving" something nearby:
   in the relay path to make some other piece of code more convenient.
 - **A `Call` handed to a sink is always already answered**, with audio
   flowing (`src/Sip2Nostr/Hub/Call.cs`'s doc comment states this
-  explicitly). Sinks must
-  not assume they get to decide *whether* to answer - only what to do
-  once a call is live. (This invariant is the reason issue #18 - ringback
+  explicitly). Sinks must not assume they get to decide *whether* to
+  answer - only what to do once a call is live. (This invariant is the reason issue #18 - ringback
   before answer - is a real architecture change and not a one-line fix;
   read that issue before attempting it.)
 
@@ -85,8 +87,8 @@ Any time an encoded/transcribed/generated output has to fit a real
 external size limit (the NIP-17 DM budget in this codebase, see
 `src/Sip2Nostr/Shared/VoicemailBudget.cs`), check the *actual* output's
 size against the budget and fail loudly and specifically if it doesn't
-fit. Don't assume
-a duration or input-size cap keeps the output small - encoders and
+fit. Don't assume a duration or input-size cap keeps the output small -
+encoders and
 transcription engines have failure modes (repetition loops, worst-case
 expansion) that break that assumption. This was learned the hard way once
 on the audio path and had to be relearned for the transcript path; don't
@@ -138,8 +140,3 @@ before pushing on rather than deciding alone. The "boilerplate" exception
 rename) is separate from the "can't be split" exception above - either
 one is a reason to go over ~1,200, but call out explicitly which one
 applies rather than assuming it's self-evident.
-
-## Review agent
-
-*(Rules for the review persona go here - maintained by a separate
-instance operating in that role.)*
