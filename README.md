@@ -196,10 +196,13 @@ legitimately differ from the relays used for call signaling) only when
 something's queued, sends it as a Nostr direct message, then disconnects.
 How the recording turns into DM content is pluggable via
 `[voicemail].delivery`: `"audio"` (default) inlines the already-encoded
-Ogg/Opus recording directly; `"text"` transcribes it offline via
-Whisper.net and sends the transcript instead, no relay-side or
-third-party involvement needed for the transcription itself (just a
-local GGML model file). Exactly one DM
+Ogg/Opus recording directly, so `max_recording_seconds` is capped by
+what reliably fits a NIP-17 DM (27s by default); `"text"` transcribes it
+offline via Whisper.net and sends the transcript instead, no relay-side
+or third-party involvement needed for the transcription itself (just a
+local GGML model file), so it's instead capped by the separately
+configurable `[voicemail].max_text_recording_seconds` (default 600s, a
+memory-use sanity limit rather than a DM size budget). Exactly one DM
 per missed call: the recording, or - if the caller hung up before
 anything worth sending was captured - a plain-text missed-call notice
 naming the caller. Recordings on disk don't depend on delivery

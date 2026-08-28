@@ -139,11 +139,11 @@ How a recorded voicemail becomes DM content is pluggable via
   lossy-recompressed copy avoids feeding whisper.cpp audio that's already
   been through 8 kbps Opus once. This path isn't bound by the Opus/NIP-17
   budget above, so it has its own two checks: `max_recording_seconds` is
-  capped at
-  `VoicemailBudget.MaxTextRecordingSeconds` (600s) instead of
+  capped at `[voicemail].max_text_recording_seconds` (default 600s,
+  `VoicemailBudget.MaxTextRecordingSeconds`) instead of
   `VoicemailBudget.MaxRecordingSeconds` (see `Config/ConfigLoader.cs`) -
-  a sanity ceiling on how much PCM `VoicemailSink` buffers in memory
-  while recording, not a size budget - and the transcript itself is
+  a configurable sanity ceiling on how much PCM `VoicemailSink` buffers
+  in memory while recording, not a size budget - and the transcript itself is
   checked against `VoicemailBudget.MaxTranscriptBytes` (40,000 bytes) at
   send time, mirroring `AudioInlineDeliveryBackend`'s `MaxAudioBytes`
   check. A transcript is normally tiny compared to that budget, but
@@ -256,7 +256,15 @@ string?`, `null` meaning nothing could be transcribed), selected by
     deliberately has no `using` - it isn't `IDisposable`; `Finish()` is
     what pads the trailing frame, writes the end-of-stream page, and
     flushes, and `leaveOpen` keeps the underlying `MemoryStream` readable
-    afterwards.
+    afterwards. `OggOpusCodec.Encode`'s `resamplerQuality` argument is
+    `[voicemail].opus_resampler_quality` (default 5, `VoicemailBudget.
+    OpusResamplerQuality` - Concentus rejects anything outside 0-10, and
+    `ConfigLoader` checks that at startup too); `OpusOggWriteStream` only
+    consults it to build a resampler for when its own input and encoder
+    sample rates differ, which they never do here (`Encode` always passes
+    the same `sampleRate` for both), so today this setting has no
+    observable effect - it's exposed anyway per #21, for whenever that
+    changes.
   - `ResolveRecordingFilename` builds the saved file's name from
     `[voicemail].recording_filename` (default `{timestamp}-{caller}.ogg`)
     by substituting `{timestamp}` (`yyyyMMdd-HHmmss`, matching
@@ -282,21 +290,30 @@ string?`, `null` meaning nothing could be transcribed), selected by
     and calls `VoicemailSender.Enqueue` - it has no Nostr.Sdk dependency
     at all, so nothing in the call-handling path blocks on relay
     connectivity or a publish.
-  - `[voicemail].ring_timeout_seconds` / `max_recording_seconds` are
-    validated (`> 0`) in `Config/ConfigLoader.cs` at startup, alongside
-    the rest of config loading - an unchecked bad value would otherwise
-    surface deep inside `Task.Delay` as every call being silently routed
-    to voicemail with a misleading "signaling failed" log line.
-    `max_recording_seconds` is also rejected there if it exceeds
-    `Shared/VoicemailBudget.cs`'s `MaxRecordingSeconds` - a value that
-    reliably fits a NIP-17 DM with headroom to spare (see Blind spots
-    below) - so a value that can never be delivered fails at startup
-    rather than only after a caller has already left an undeliverable
-    message. `AudioInlineDeliveryBackend.BuildContentAsync` separately
+  - `[voicemail].ring_timeout_seconds` / `max_recording_seconds` /
+    `max_text_recording_seconds` are validated (`> 0`) in
+    `Config/ConfigLoader.cs` at startup, alongside the rest of config
+    loading - an unchecked bad value would otherwise surface deep inside
+    `Task.Delay` as every call being silently routed to voicemail with a
+    misleading "signaling failed" log line.
+    `max_recording_seconds` is also rejected there if it exceeds the
+    ceiling for the configured `delivery` mode: `Shared/VoicemailBudget.cs`'s
+    `MaxRecordingSeconds` for `"audio"` - a fixed value, not configurable,
+    that reliably fits a NIP-17 DM with headroom to spare (see Blind spots
+    below) - or the configured `max_text_recording_seconds` (default
+    `VoicemailBudget.MaxTextRecordingSeconds`, 600s) for `"text"` - so a
+    value that can never be delivered, or one that would let
+    `VoicemailSink` buffer more PCM in memory than intended, fails at
+    startup rather than only after a caller has already left a message.
+    `AudioInlineDeliveryBackend.BuildContentAsync` separately
     checks the *actual* encoded size against `VoicemailBudget.MaxAudioBytes`
     before every send, since `MaxRecordingSeconds` is a heuristic ceiling
     on the configured value, not a guarantee about what any given
-    recording encodes to. `[voicemail].recording_filename` is validated
+    recording encodes to. `[voicemail].opus_resampler_quality` (default
+    `VoicemailBudget.OpusResamplerQuality`, 5) is validated against the
+    `0`-`10` range Concentus itself enforces (see the `VoicemailSink.cs`
+    bullet above) - checking it here means a bad value fails at startup,
+    not on the first voicemail encoded. `[voicemail].recording_filename` is validated
     the same way: non-empty, and containing `{timestamp}` or `{call_id}`
     (case-insensitively) - the one structural property that matters at
     startup, since anything else about the template only affects where

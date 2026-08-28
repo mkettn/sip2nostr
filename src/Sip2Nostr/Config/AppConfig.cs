@@ -131,9 +131,26 @@ public sealed class VoicemailConfig
     [property: TomlPropertyName("ring_timeout_seconds")]
     public int RingTimeoutSeconds { get; init; } = 20;
 
-    // See docs/voicemail.md - ConfigLoader rejects anything larger.
+    // See docs/voicemail.md - ConfigLoader rejects anything larger than
+    // VoicemailBudget.MaxRecordingSeconds (delivery = "audio") or
+    // max_text_recording_seconds below (delivery = "text").
     [property: TomlPropertyName("max_recording_seconds")]
     public int MaxRecordingSeconds { get; init; } = Sip2Nostr.Shared.VoicemailBudget.MaxRecordingSeconds;
+
+    // The max_recording_seconds ceiling used when delivery = "text" -
+    // unlike delivery = "audio"'s ceiling (VoicemailBudget.MaxRecordingSeconds,
+    // derived from the NIP-17/Opus size budget and not configurable), this
+    // is just a sanity limit on how much PCM VoicemailSink buffers in
+    // memory while recording, not derived from anything else. See
+    // docs/voicemail.md.
+    [property: TomlPropertyName("max_text_recording_seconds")]
+    public int MaxTextRecordingSeconds { get; init; } = Sip2Nostr.Shared.VoicemailBudget.MaxTextRecordingSeconds;
+
+    // Passed to Concentus.Oggfile.OpusOggWriteStream's resamplerQuality
+    // parameter when encoding a recording - ConfigLoader rejects anything
+    // outside Concentus' own 0-10 range.
+    [property: TomlPropertyName("opus_resampler_quality")]
+    public int OpusResamplerQuality { get; init; } = Sip2Nostr.Shared.VoicemailBudget.OpusResamplerQuality;
 
     // Optional. Same format rules as [[lines]].sound: raw 8 kHz 16-bit PCM
     // works directly, mono Ogg/Opus (.ogg/.opus) is decoded in-process.

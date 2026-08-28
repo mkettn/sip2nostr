@@ -150,7 +150,7 @@ public sealed class VoicemailSink(
 
     private async Task<string> SaveRecordingAsync(short[] samples, int sampleRate, string callId, string callerNumber)
     {
-        var oggBytes = OggOpusCodec.Encode(samples, sampleRate, VoicemailBudget.OpusBitrateBps, VoicemailBudget.OpusResamplerQuality);
+        var oggBytes = OggOpusCodec.Encode(samples, sampleRate, VoicemailBudget.OpusBitrateBps, voicemailConfig.OpusResamplerQuality);
         var recordingsDir = Path.IsPathRooted(voicemailConfig.RecordingsDir)
             ? voicemailConfig.RecordingsDir
             : Path.GetFullPath(Path.Combine(configDirectory, voicemailConfig.RecordingsDir));

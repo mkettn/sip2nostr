@@ -35,6 +35,18 @@ public static class ConfigLoader
                 $"[voicemail].max_recording_seconds must be greater than 0, got {config.Voicemail.MaxRecordingSeconds}.");
         }
 
+        if (config.Voicemail.MaxTextRecordingSeconds <= 0)
+        {
+            throw new InvalidDataException(
+                $"[voicemail].max_text_recording_seconds must be greater than 0, got {config.Voicemail.MaxTextRecordingSeconds}.");
+        }
+
+        if (config.Voicemail.OpusResamplerQuality is < 0 or > 10)
+        {
+            throw new InvalidDataException(
+                $"[voicemail].opus_resampler_quality must be between 0 and 10, got {config.Voicemail.OpusResamplerQuality}.");
+        }
+
         if (config.Voicemail.Delivery is not ("audio" or "text"))
         {
             throw new InvalidDataException(
@@ -57,14 +69,15 @@ public static class ConfigLoader
         }
 
         // The ceiling depends on which backend is actually recording-length
-        // sensitive: "audio" is bound by the Opus/NIP-17 size budget below;
-        // "text" isn't (a transcript stays small regardless - the real
-        // enforcement there is MaxTranscriptBytes, checked against the
-        // actual output at send time), but recording length still needs
-        // *some* sanity ceiling so VoicemailSink's in-memory PCM buffer
-        // can't grow unbounded. See docs/voicemail.md.
+        // sensitive: "audio" is bound by the Opus/NIP-17 size budget below
+        // (VoicemailBudget.MaxRecordingSeconds - not configurable, derived
+        // from that budget); "text" isn't (a transcript stays small
+        // regardless - the real enforcement there is MaxTranscriptBytes,
+        // checked against the actual output at send time), so its ceiling
+        // is just the configurable max_text_recording_seconds sanity limit
+        // on VoicemailSink's in-memory PCM buffer. See docs/voicemail.md.
         var maxRecordingSecondsCeiling = config.Voicemail.Delivery == "text"
-            ? VoicemailBudget.MaxTextRecordingSeconds
+            ? config.Voicemail.MaxTextRecordingSeconds
             : VoicemailBudget.MaxRecordingSeconds;
         if (config.Voicemail.MaxRecordingSeconds > maxRecordingSecondsCeiling)
         {

@@ -65,9 +65,23 @@ ring_timeout_seconds = 20
 # The default is the largest value that reliably still fits in a single
 # NIP-17 DM at the current Opus encoding - ConfigLoader rejects anything
 # larger at startup. This ceiling only applies to delivery = "audio"
-# below; delivery = "text" allows up to 600s instead, since a transcript
-# isn't bound by the same DM size budget. See docs/voicemail.md.
+# below; delivery = "text" is instead capped by
+# max_text_recording_seconds, since a transcript isn't bound by the same
+# DM size budget. See docs/voicemail.md.
 max_recording_seconds = 27
+# The max_recording_seconds ceiling used when delivery = "text" below.
+# Not derived from anything - just a sanity limit on how much PCM is
+# buffered in memory while recording, so raise it only as far as this
+# host's available RAM comfortably allows for the busiest realistic case
+# (one recording per line, worst case all lines at once).
+max_text_recording_seconds = 600
+# Passed to Concentus' Ogg writer when encoding a recording. Only takes
+# effect if the writer's input and output sample rates ever differ -
+# they don't today (both are the recording's own rate), so this
+# currently has no observable effect; kept configurable for when that
+# changes. 0 (fastest) - 10 (best); ConfigLoader rejects anything
+# outside that range at startup.
+opus_resampler_quality = 5
 # Optional. Same format rules as [[lines]].sound: raw 8 kHz 16-bit PCM
 # works directly, mono Ogg/Opus (.ogg/.opus) is decoded in-process. Falls
 # back to a short tone if unset.

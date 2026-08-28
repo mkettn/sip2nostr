@@ -33,6 +33,8 @@ public class ConfigLoaderTests
             Assert.False(config.Voicemail.Enabled);
             Assert.Equal("audio", config.Voicemail.Delivery);
             Assert.Equal("{timestamp}-{caller}.ogg", config.Voicemail.RecordingFilename);
+            Assert.Equal(VoicemailBudget.MaxTextRecordingSeconds, config.Voicemail.MaxTextRecordingSeconds);
+            Assert.Equal(VoicemailBudget.OpusResamplerQuality, config.Voicemail.OpusResamplerQuality);
         }
         finally
         {
@@ -200,6 +202,8 @@ public class ConfigLoaderTests
     [InlineData("ring_timeout_seconds = -5", "ring_timeout_seconds")]
     [InlineData("max_recording_seconds = 0", "max_recording_seconds")]
     [InlineData("max_recording_seconds = -1", "max_recording_seconds")]
+    [InlineData("max_text_recording_seconds = 0", "max_text_recording_seconds")]
+    [InlineData("max_text_recording_seconds = -5", "max_text_recording_seconds")]
     public void Load_NonPositiveVoicemailTimeout_Throws(string voicemailOverride, string expectedKeyInMessage)
     {
         var toml = $"{MinimalValidToml}\n\n[voicemail]\n{voicemailOverride}\n";
@@ -228,6 +232,101 @@ public class ConfigLoaderTests
         finally
         {
             File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(11)]
+    public void Load_OpusResamplerQualityOutOfRange_Throws(int quality)
+    {
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nopus_resampler_quality = {quality}\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<InvalidDataException>(() => ConfigLoader.Load(path));
+            Assert.Contains("opus_resampler_quality", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(10)]
+    public void Load_OpusResamplerQualityAtBoundary_Succeeds(int quality)
+    {
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nopus_resampler_quality = {quality}\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal(quality, config.Voicemail.OpusResamplerQuality);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_MaxRecordingSecondsBelowConfiguredTextCeiling_Throws()
+    {
+        // max_text_recording_seconds lowers the "text" ceiling below the
+        // default (VoicemailBudget.MaxTextRecordingSeconds) - ConfigLoader
+        // must validate against the configured value, not the constant.
+        var modelPath = WriteTempFile("fake-model-bytes");
+        try
+        {
+            var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"text\"\n" +
+                "max_text_recording_seconds = 30\nmax_recording_seconds = 60\n\n" +
+                $"[voicemail.transcription]\nmodel_path = \"{EscapeTomlString(modelPath)}\"\n";
+            var path = WriteTempConfig(toml);
+            try
+            {
+                var exception = Assert.Throws<InvalidDataException>(() => ConfigLoader.Load(path));
+                Assert.Contains("max_recording_seconds", exception.Message);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+        finally
+        {
+            File.Delete(modelPath);
+        }
+    }
+
+    [Fact]
+    public void Load_MaxRecordingSecondsAboveConfiguredTextCeiling_Succeeds()
+    {
+        // Raising max_text_recording_seconds above the default should let a
+        // previously-rejected max_recording_seconds through.
+        var modelPath = WriteTempFile("fake-model-bytes");
+        try
+        {
+            var raisedCeiling = VoicemailBudget.MaxTextRecordingSeconds + 100;
+            var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"text\"\n" +
+                $"max_text_recording_seconds = {raisedCeiling}\nmax_recording_seconds = {raisedCeiling}\n\n" +
+                $"[voicemail.transcription]\nmodel_path = \"{EscapeTomlString(modelPath)}\"\n";
+            var path = WriteTempConfig(toml);
+            try
+            {
+                var config = ConfigLoader.Load(path);
+                Assert.Equal(raisedCeiling, config.Voicemail.MaxTextRecordingSeconds);
+                Assert.Equal(raisedCeiling, config.Voicemail.MaxRecordingSeconds);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+        finally
+        {
+            File.Delete(modelPath);
         }
     }
 
