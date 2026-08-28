@@ -101,13 +101,19 @@ new `ConfigLoader` validation branches and any new pure logic - see
 `tests/Sip2Nostr.Tests/ConfigLoaderTests.cs` for the existing pattern
 (temp TOML files, one behavior per test).
 
-### File issues instead of scope-creeping a PR
+### File issues instead of scope-creeping a PR - but ask before deferring
 
 When you or a reviewer notice a real improvement that isn't required by
-the current PR's stated goal, write it up as a GitHub issue (current
-behavior / desired behavior / why it's out of scope here) rather than
-folding it into the diff. Keep PRs reviewable and scoped to what they
-claim to do; let the issue tracker hold the backlog.
+the current PR's stated goal, the default is still to keep it in scope
+if it's small enough to do without derailing the PR's actual goal - not
+to reach for a new issue as the easy way out. When it genuinely doesn't
+belong in this diff (too large, too risky, orthogonal to what the PR is
+for), don't unilaterally decide to postpone it to a separate issue and
+move on - say so and ask the user first. Only once they agree it should
+be deferred, write it up as a GitHub issue (current behavior / desired
+behavior / why it's out of scope here). Keep PRs reviewable and scoped
+to what they claim to do; let the issue tracker hold the backlog, but
+only with the user's say-so on what goes there.
 
 ## Review agent
 
