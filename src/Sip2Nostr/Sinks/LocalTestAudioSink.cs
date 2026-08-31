@@ -8,7 +8,8 @@ using Sip2Nostr.Shared;
 namespace Sip2Nostr.Sinks;
 
 // Local-only fallback for [nostr].enabled = false (dev/testing without a
-// Nostr relay): plays a per-line test sound (or a sine wave if none is
+// Nostr relay): answers straight away - there's no ring/answer decision
+// to make here - then plays a per-line test sound (or a sine wave if none is
 // configured) on loop until the caller hangs up, via SIPSorcery's own
 // AudioExtrasSource wired into Call.Audio.SendEncodedSample. Never
 // records or forwards anywhere.
@@ -20,6 +21,12 @@ public sealed class LocalTestAudioSink(
     public async Task<bool> TryHandleAsync(Call call, CancellationToken ct)
     {
         var matchedLine = lines.FirstOrDefault(line => line.Label == call.LineLabel);
+
+        if (!await call.AnswerAsync())
+        {
+            logger.Information("Call {CallId} was gone before test audio could start.", call.CallId);
+            return true;
+        }
 
         var testAudioSource = new AudioExtrasSource(new AudioEncoder(), new AudioSourceOptions { AudioSource = AudioSourcesEnum.Silence });
         testAudioSource.SetAudioSourceFormat(call.AudioFormat);

@@ -227,8 +227,9 @@ just not used for routing decisions yet.
 ## Components
 
 ### 1. SIP/RTP + WebRTC (sipsorcery)
-Registers to the VoIP provider (one or more lines), answers inbound
-INVITEs, and owns both the SIP/RTP leg and the WebRTC leg — the same
+Registers to the VoIP provider (one or more lines), rings the caller on an
+inbound INVITE until something is ready to take the call and answers it
+then, and owns both the SIP/RTP leg and the WebRTC leg — the same
 library handles the audio path on both sides, so bridging is in-process
 rather than across a socket or FFI boundary.
 

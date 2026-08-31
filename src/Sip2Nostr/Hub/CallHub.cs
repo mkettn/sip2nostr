@@ -23,8 +23,11 @@ public sealed class CallHub(IReadOnlyList<ICallSink> sinks, ILogger logger)
                 }
             }
 
+            // A sink that declines never answers (see Call.cs), so an
+            // unhandled call is still ringing rather than connected to
+            // silence.
             logger.Information(
-                "No sink handled call {CallId} from {CallerNumber}; leaving it connected until the caller hangs up.",
+                "No sink handled call {CallId} from {CallerNumber}; leaving it ringing until the caller hangs up.",
                 call.CallId,
                 call.CallerNumber);
             await call.WhenRemoteHungUp;

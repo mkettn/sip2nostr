@@ -8,10 +8,13 @@ using Sip2Nostr.Sip;
 namespace Sip2Nostr.Sinks;
 
 // Rings the callee over Nostr/WebRTC signaling (NIP-17 DMs carrying SDP
-// offer/answer and ICE candidates - see NostrSignalingClient). If
+// offer/answer and ICE candidates - see NostrSignalingClient). The SIP
+// leg is only answered once a real WebRTC answer comes back, so the
+// caller hears ringback for as long as the callee's device is ringing. If
 // ringTimeoutSeconds is set and nobody answers within it, declines so the
-// next sink (typically VoicemailSink) gets a turn; if unset, rings until
-// the caller hangs up.
+// next sink (typically VoicemailSink) gets a turn, leaving the call
+// ringing for that sink to answer; if unset, rings until the caller hangs
+// up.
 public sealed class NosCallSink(
     NostrConfig nostrConfig,
     WebRtcConfig webRtcConfig,
@@ -112,7 +115,7 @@ public sealed class NosCallSink(
                     ringTimeoutSeconds,
                     call.CallId);
                 StopBridging();
-                await SendHangupSafeAsync(signaling, call.CallId);
+                await SendHangupSafeAsync(signaling, call.CallId, "no answer within ring timeout");
                 pc.close();
                 return false;
             }
@@ -141,6 +144,23 @@ public sealed class NosCallSink(
             return false;
         }
 
+        // Answered here, not before the offer went out: the caller hears
+        // ringback for as long as the Nostr side is ringing, and a call
+        // this sink ends up declining is still unanswered when
+        // VoicemailSink gets it. Deliberately outside the try above - a
+        // failure to answer a call the callee has already picked up is not
+        // something the next sink should get a turn at.
+        if (!await call.AnswerAsync())
+        {
+            logger.Warning(
+                "Call {CallId} could not be answered after the WebRTC SDP answer arrived; closing the WebRTC session.",
+                call.CallId);
+            StopBridging();
+            await SendHangupSafeAsync(signaling, call.CallId, "sip leg could not be answered");
+            pc.close();
+            return true;
+        }
+
         await call.WhenRemoteHungUp;
         logger.Information("Call {CallId} ended; closing WebRTC session.", call.CallId);
         StopBridging();
@@ -148,12 +168,12 @@ public sealed class NosCallSink(
         return true;
     }
 
-    private async Task SendHangupSafeAsync(NostrSignalingClient signaling, string callId)
+    private async Task SendHangupSafeAsync(NostrSignalingClient signaling, string callId, string reason)
     {
         try
         {
             logger.Information("Sending WebRTC call hangup over Nostr for call {CallId} so the ringing device stops.", callId);
-            await signaling.SendHangupAsync("no answer within ring timeout");
+            await signaling.SendHangupAsync(reason);
         }
         catch (Exception exception)
         {

@@ -9,10 +9,13 @@ using Sip2Nostr.Voicemail;
 
 namespace Sip2Nostr.Sinks;
 
-// Answering-machine fallback: plays a greeting (or a short tone if none is
-// configured), records the caller, and enqueues it for delivery over
-// Nostr. Always handles the call it's offered - see docs/voicemail.md for
-// the full flow and the exactly-one-job guarantee. The hub only ever
+// Answering-machine fallback: answers the still-ringing call, plays a
+// greeting (or a short tone if none is configured), records the caller,
+// and enqueues it for delivery over Nostr. Always handles the call it's
+// offered - see docs/voicemail.md for the full flow and the
+// exactly-one-job guarantee. Answering is this sink's own call to make
+// (see Call.cs): the caller keeps ringing until the greeting is about to
+// play, not from the moment NosCallSink gave up. The hub only ever
 // exchanges RTP frames (see RtpAudioFrame), so this sink decodes recorded
 // audio against Call.AudioFormat itself, and plays the greeting/tone via
 // SIPSorcery's own AudioExtrasSource wired into Call.Audio.SendEncodedSample
@@ -43,6 +46,16 @@ public sealed class VoicemailSink(
 
     private async Task RunVoicemailAsync(Call call, CancellationToken ct)
     {
+        if (!await call.AnswerAsync())
+        {
+            logger.Information(
+                "Caller {CallerNumber} was gone before voicemail could pick up call {CallId}; nothing recorded.",
+                call.CallerNumber,
+                call.CallId);
+            voicemailSender.Enqueue(new MissedCallNoticeJob(call.CallerNumber, call.CallId));
+            return;
+        }
+
         var sampleRate = call.AudioFormat.ClockRate;
         var decoder = new AudioEncoder();
         var recordingLock = new object();
