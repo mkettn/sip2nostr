@@ -55,6 +55,28 @@ public class OggOpusCodecTests
         Assert.InRange(decoded.Length, samples.Length * 2, samples.Length * 2 + 800);
     }
 
+    // Regression test for a real bug: a byte string that isn't a
+    // decodable Opus stream at all (most commonly in practice: a ".ogg"
+    // file that's actually Ogg Vorbis - the traditional meaning of that
+    // extension, and a different codec Concentus doesn't handle) must
+    // fail loudly, not silently decode to zero samples.
+    // OpusOggReadStream.DecodeNextPacket() returns null rather than
+    // throwing when a packet doesn't parse as Opus, so this has to be
+    // checked explicitly - see Sip/OggOpusCodec.cs.
+    [Fact]
+    public void Decode_NotAnOpusStream_Throws()
+    {
+        var notOpus = System.Text.Encoding.ASCII.GetBytes("this is not an ogg/opus file at all, just plain text");
+
+        Assert.Throws<InvalidDataException>(() => OggOpusCodec.Decode(notOpus, SampleRate));
+    }
+
+    [Fact]
+    public void Decode_EmptyBytes_Throws()
+    {
+        Assert.Throws<InvalidDataException>(() => OggOpusCodec.Decode([], SampleRate));
+    }
+
     private static short[] MakeToneSamples(int sampleRate)
     {
         var samples = new short[sampleRate]; // 1 second

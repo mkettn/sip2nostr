@@ -52,6 +52,28 @@ public static class OggOpusCodec
             {
                 samples.AddRange(packet);
             }
+            else if (!string.IsNullOrEmpty(oggReader.LastError))
+            {
+                // OpusOggReadStream doesn't throw on a packet it can't
+                // decode as Opus - it just returns null and records the
+                // failure in LastError, so a stream that isn't actually
+                // Opus (most commonly: a ".ogg" file that's really Ogg
+                // Vorbis, the traditional meaning of that extension) would
+                // otherwise silently "succeed" with zero samples instead
+                // of failing. Once one packet desyncs this way the rest of
+                // the stream reliably does too (verified against a real
+                // Vorbis file: every remaining packet also comes back
+                // null), so stop at the first failure rather than churning
+                // through the whole file for nothing.
+                throw new InvalidDataException(
+                    $"Not a decodable mono Ogg/Opus stream ({oggReader.LastError}) - if this file is Ogg Vorbis " +
+                    "(the traditional meaning of a \".ogg\" extension) rather than Ogg Opus, re-encode it as Opus.");
+            }
+        }
+
+        if (samples.Count == 0)
+        {
+            throw new InvalidDataException("Ogg/Opus decode produced no samples.");
         }
 
         return samples.ToArray();
