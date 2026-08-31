@@ -15,7 +15,7 @@ never neither.
 Verified end-to-end against a real SIP trunk and a real NIP-17 client,
 for both delivery backends: a call that falls back to voicemail plays
 the greeting/tone, records the caller, and saves the recording as
-Opus/OGG, then either delivers it as a NIP-17 DM that the receiving
+Opus, then either delivers it as a NIP-17 DM that the receiving
 client decrypts and plays back correctly (`delivery = "audio"`), or
 transcribes it and delivers the transcript as DM text (`delivery =
 "text"`). The
@@ -60,8 +60,8 @@ already-answered `Call`, rather than one function doing both.
               was recorded, but it's still a missed call.
            4. Record caller audio for up to `max_recording_seconds`, or
               until they hang up.
-           5. Encode the recording to Opus/OGG (in-process via
-              `Sip/OggOpusCodec.cs`) and save it under `recordings_dir`,
+           5. Encode the recording to Opus (in-process via
+              `Sip/OpusCodec.cs`) and save it under `recordings_dir`,
               named per `recording_filename` (always - this is the
               durability point, independent of whatever happens to the
               send afterward).
@@ -73,7 +73,7 @@ already-answered `Call`, rather than one function doing both.
               can't leave the caller on a silent, still-connected call or
               leak the RTP session.
            7. If the recording is long enough to be worth sending, enqueue
-              a VoicemailAudioJob (the Ogg/Opus path) on VoicemailSender
+              a VoicemailAudioJob (the Opus path) on VoicemailSender
               and move on - delivery happens off this call's critical
               path, in a separate background worker. Otherwise (too
               short), log it and enqueue a MissedCallNoticeJob instead -
@@ -112,7 +112,7 @@ VoicemailSender then, independently of any particular call:
       │
       └─ for each job: MissedCallNoticeJob → plain-text content;
          VoicemailAudioJob → delivery-backend-dependent content built
-         from the already-Opus/OGG-encoded recording on disk (encoded at
+         from the already-Opus-encoded recording on disk (encoded at
          record time by VoicemailSink, not here - see Delivery backends
          below). Either way, send as a NIP-17 private direct message. A
          relay rejecting the event (e.g. too large) is detected and
@@ -128,13 +128,13 @@ How a recorded voicemail becomes DM content is pluggable via
 `[voicemail].delivery`:
 
 - `"audio"` (default) - `Voicemail/AudioInlineDeliveryBackend.cs` reads
-  the recording (already Opus/OGG - `VoicemailSink` encodes it when
+  the recording (already Opus - `VoicemailSink` encodes it when
   saving, not this backend) and inlines it as a base64 `data:` URI in the
   DM content, subject to the NIP-17 size budget covered above.
 - `"text"` - `Voicemail/TranscribedTextDeliveryBackend.cs` transcribes
   `VoicemailAudioJob.Samples` - the original recorded PCM, carried on the
-  job alongside `OggPath` rather than decoded back out of the saved
-  Opus/OGG file - via a speech-to-text engine, sending the transcript as
+  job alongside `OpusPath` rather than decoded back out of the saved
+  Opus file - via a speech-to-text engine, sending the transcript as
   plain text instead. Transcribing the original PCM instead of a
   lossy-recompressed copy avoids feeding whisper.cpp audio that's already
   been through 8 kbps Opus once. This path isn't bound by the Opus/NIP-17
@@ -246,14 +246,14 @@ string?`, `null` meaning nothing could be transcribed), selected by
     `SIPSorcery.Media.AudioEncoder.DecodeAudio` and buffers the PCM - the
     hub itself only ever hands over RTP frames, so this sink is the one
     that knows how to turn them into samples.
-  - `SaveRecordingAsync` encodes the buffered PCM samples to Opus/OGG via
-    `Sip/OggOpusCodec.Encode` (pure logic, unit tested; also used to
+  - `SaveRecordingAsync` encodes the buffered PCM samples to Opus via
+    `Sip/OpusCodec.Encode` (pure logic, unit tested; also used to
     decode `[[lines]].sound`/`[voicemail].greeting_sound` files in
     `Shared/SoundFileResolver.cs` - see `docs/sound-files.md` for the
     format it requires and how a misconfigured file degrades) before
     writing the result under `recordings_dir` - so the file on disk is
     already exactly what `delivery = "audio"` sends, with no separate
-    re-encode step at delivery time. `OggOpusCodec.Encode` runs with
+    re-encode step at delivery time. `OpusCodec.Encode` runs with
     `UseVBR = false`:
     Concentus (like libopus) defaults to VBR, where `Bitrate` is only a
     target the encoder can exceed on complex input, which would
@@ -262,7 +262,7 @@ string?`, `null` meaning nothing could be transcribed), selected by
     deliberately has no `using` - it isn't `IDisposable`; `Finish()` is
     what pads the trailing frame, writes the end-of-stream page, and
     flushes, and `leaveOpen` keeps the underlying `MemoryStream` readable
-    afterwards. `OggOpusCodec.Encode`'s `resamplerQuality` argument is
+    afterwards. `OpusCodec.Encode`'s `resamplerQuality` argument is
     `[voicemail].opus_resampler_quality` (default 5, `VoicemailBudget.
     OpusResamplerQuality` - Concentus rejects anything outside 0-10, and
     `ConfigLoader` checks that at startup too); `OpusOggWriteStream` only
@@ -272,7 +272,7 @@ string?`, `null` meaning nothing could be transcribed), selected by
     observable effect - it's exposed anyway per #21, for whenever that
     changes.
   - `ResolveRecordingFilename` builds the saved file's name from
-    `[voicemail].recording_filename` (default `{timestamp}-{caller}.ogg`)
+    `[voicemail].recording_filename` (default `{timestamp}-{caller}.opus`)
     by substituting `{timestamp}` (`yyyyMMdd-HHmmss`, matching
     `[logging].run_file`'s own templating convention in `Program.cs`),
     `{caller}` (`Call.CallerNumber`, already normalized to digits by
@@ -287,14 +287,14 @@ string?`, `null` meaning nothing could be transcribed), selected by
     `Config/ConfigLoader.cs` rejects all three at startup (see below).
     `SaveRecordingAsync` resolves the full path (`recordings_dir` + the
     templated filename) before creating its directory, so a template
-    with a path separator in it (e.g. `{caller}/{timestamp}.ogg`, to
+    with a path separator in it (e.g. `{caller}/{timestamp}.opus`, to
     group recordings per caller) still works - it's only a rooted path
     or a `..` segment that's rejected, not subdirectories in general.
   - `TryHandleAsync` always returns `true`: `CallHub`'s own `finally`
     calls `Call.HangupAsync` unconditionally once a sink is done, so this
     sink doesn't hang up the SIP call itself and doesn't need a `finally`
     of its own to guarantee that happens even if `RunVoicemailAsync`
-    throws. `RunVoicemailAsync` only ever writes the Opus/OGG recording
+    throws. `RunVoicemailAsync` only ever writes the Opus recording
     and calls `VoicemailSender.Enqueue` - it has no Nostr.Sdk dependency
     at all, so nothing in the call-handling path blocks on relay
     connectivity or a publish.
@@ -336,8 +336,8 @@ string?`, `null` meaning nothing could be transcribed), selected by
   unlike `NostrSignalingClient`, which is scoped to a single call.
   - `Enqueue` takes a `Voicemail/SendJob.cs` - either a `MissedCallNoticeJob`
     (`CallerNumber`, `CallId`, no audio) or a `VoicemailAudioJob` (adds
-    `OggPath`, `Samples`, `SampleRate`, `DurationSeconds` - both the saved
-    Opus/OGG file and the original recorded PCM, so each delivery backend
+    `OpusPath`, `Samples`, `SampleRate`, `DurationSeconds` - both the saved
+    Opus file and the original recorded PCM, so each delivery backend
     reads whichever it actually needs; `VoicemailSink` only populates
     `Samples` when the configured backend's `IVoicemailDeliveryBackend.RequiresPcm`
     says so (`true` for `TranscribedTextDeliveryBackend`, `false` for
@@ -347,7 +347,7 @@ string?`, `null` meaning nothing could be transcribed), selected by
     immediately. It's a plain in-memory queue (multiple calls can enqueue
     concurrently - `Channel` is built for that), not a persistent one, so
     anything still queued at process shutdown is logged as undelivered;
-    a `VoicemailAudioJob`'s Opus/OGG recording is safely already on disk
+    a `VoicemailAudioJob`'s Opus recording is safely already on disk
     regardless, but a dropped `MissedCallNoticeJob` has nothing else
     backing it up.
   - The worker loop (`RunAsync`, started from the constructor) blocks on
@@ -367,7 +367,7 @@ string?`, `null` meaning nothing could be transcribed), selected by
     dropping every job enqueued afterwards despite each still being
     logged as "queued". A batch that fails this way is not retried
     automatically - only the worker itself survives, ready for the next
-    `Enqueue` - though a `VoicemailAudioJob`'s Opus/OGG recording stays
+    `Enqueue` - though a `VoicemailAudioJob`'s Opus recording stays
     safe on disk regardless; a `MissedCallNoticeJob` has nothing else
     backing it up.
   - `BuildMissedCallNoticeContent` builds a short plain-text DM naming
@@ -375,7 +375,7 @@ string?`, `null` meaning nothing could be transcribed), selected by
     any NIP-17 budget.
   - Per `VoicemailAudioJob`: delegates to the configured
     `IVoicemailDeliveryBackend` (see Delivery backends above) rather than
-    encoding anything itself - the recording is already Opus/OGG on disk
+    encoding anything itself - the recording is already Opus on disk
     by the time `VoicemailSender` ever sees the job (`Sinks/VoicemailSink.cs`
     encodes it at record time; deliberately not `ffmpeg`/any external
     process, keeping the whole feature working in a self-contained
@@ -399,7 +399,7 @@ string?`, `null` meaning nothing could be transcribed), selected by
     helper, also used by `NostrSignalingClient.PublishAsync`) - a relay
     can reject an event with `OK: false` without the publish call itself
     throwing, so this is the only way to actually detect it. A failure
-    for one job in a batch is caught and logged per-job (the Ogg/Opus
+    for one job in a batch is caught and logged per-job (the Opus
     path is included for a `VoicemailAudioJob`); it doesn't stop the rest
     of the batch from being attempted.
 
@@ -437,8 +437,8 @@ string?`, `null` meaning nothing could be transcribed), selected by
     the actual encoded output against before every send. `MaxRecordingSeconds`,
     used for the shipped default and startup validation, is deliberately
     *not* `MaxAudioBytes / (bitrate / 8)`: that naive division assumes
-    the encoder produces exactly the target bitrate and ignores the Ogg
-    container itself. Verified empirically (a throwaway encode of a 30s
+    the encoder produces exactly the target bitrate and ignores the
+    container framing overhead itself. Verified empirically (a throwaway encode of a 30s
     tone at 8 kbps with VBR off): actual output ran ~1,050-1,060
     bytes/sec against a naive estimate of 1,000 - a 30s recording came
     out to ~31.8 KB, over budget despite "fitting" the naive math. 10%
@@ -459,8 +459,8 @@ string?`, `null` meaning nothing could be transcribed), selected by
     the cap entirely - the latter is the actual fix; this budget is a
     ceiling this architecture can't grow past.
 - **No fallback if Opus encoding fails when a recording is saved.**
-  The recording is encoded to Opus/OGG at record time
-  (`VoicemailSink.SaveRecordingAsync`, via `Sip/OggOpusCodec.Encode`), so
+  The recording is encoded to Opus at record time
+  (`VoicemailSink.SaveRecordingAsync`, via `Sip/OpusCodec.Encode`), so
   an encoding failure there means nothing is saved to disk at all, not
   just undelivered - `RunVoicemailAsync` throws, and
   `VoicemailSink.TryHandleAsync`'s own catch sends a `MissedCallNoticeJob`
@@ -470,15 +470,15 @@ string?`, `null` meaning nothing could be transcribed), selected by
   when it happens it costs the recording itself, not just the send.
 - **DTX (encoder silence-dropping) is not available, so the size problem
   above can't currently be helped by compressing the silence out of a
-  recording.** `Concentus.Oggfile`'s `OpusOggWriteStream` - the Ogg
-  container writer `Sip/OggOpusCodec.Encode` uses - unconditionally
+  recording.** `Concentus.Oggfile`'s `OpusOggWriteStream` - the
+  container writer `Sip/OpusCodec.Encode` uses - unconditionally
   rejects a DTX-enabled encoder at construction (`ArgumentException("DTX
   is not currently supported in Ogg streams")`, confirmed by reading its
   source). Enabling `IOpusEncoder.UseDTX` would make every encode throw,
   and with no fallback if that happens (see above) that means the
   recording is lost, not just undelivered - the opposite of the goal -
   so it's deliberately left off. Revisiting this needs either a
-  different (DTX-aware) Ogg writer or hand-rolling the Ogg container
+  different (DTX-aware) container writer or hand-rolling the container
   framing to tolerate the granule-position gaps DTX produces.
 - **No silence/VAD trimming or beep tone.** Recording starts immediately
   after the greeting/tone finishes and runs for the full
@@ -491,7 +491,7 @@ string?`, `null` meaning nothing could be transcribed), selected by
   SIP/RTP path per `receiving-calls.md`.
 - **The send queue is in-memory only, not persisted across restarts.** A
   voicemail recorded and enqueued but not yet sent when the process is
-  stopped is lost from the queue (though its Opus/OGG file on disk is
+  stopped is lost from the queue (though its Opus file on disk is
   not - it just won't be retried automatically; resending it would need
   to be done by hand, there's no "scan `recordings_dir` for orphaned
   recordings on startup" logic). For a personal single-line deployment

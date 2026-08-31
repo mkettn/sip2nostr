@@ -32,7 +32,7 @@ public class ConfigLoaderTests
             var config = ConfigLoader.Load(path);
             Assert.False(config.Voicemail.Enabled);
             Assert.Equal("audio", config.Voicemail.Delivery);
-            Assert.Equal("{timestamp}-{caller}.ogg", config.Voicemail.RecordingFilename);
+            Assert.Equal("{timestamp}-{caller}.opus", config.Voicemail.RecordingFilename);
             Assert.Equal(VoicemailBudget.MaxTextRecordingSeconds, config.Voicemail.MaxTextRecordingSeconds);
             Assert.Equal(VoicemailBudget.OpusResamplerQuality, config.Voicemail.OpusResamplerQuality);
         }
@@ -237,9 +237,9 @@ public class ConfigLoaderTests
     }
 
     [Theory]
-    [InlineData("/tmp/{call_id}.ogg")]
-    [InlineData("../{call_id}.ogg")]
-    [InlineData("{caller}/../../etc/{call_id}.ogg")]
+    [InlineData("/tmp/{call_id}.opus")]
+    [InlineData("../{call_id}.opus")]
+    [InlineData("{caller}/../../etc/{call_id}.opus")]
     public void Load_RecordingFilenameEscapingRecordingsDir_Throws(string recordingFilename)
     {
         var toml = $"{MinimalValidToml}\n\n[voicemail]\nrecording_filename = \"{EscapeTomlString(recordingFilename)}\"\n";
@@ -383,9 +383,9 @@ public class ConfigLoaderTests
     }
 
     [Theory]
-    [InlineData("voicemail.ogg")]
+    [InlineData("voicemail.opus")]
     [InlineData("")]
-    [InlineData("{caller}.ogg")]
+    [InlineData("{caller}.opus")]
     public void Load_RecordingFilenameWithoutTimestampOrCallId_Throws(string recordingFilename)
     {
         var toml = $"{MinimalValidToml}\n\n[voicemail]\nrecording_filename = \"{EscapeTomlString(recordingFilename)}\"\n";
@@ -402,9 +402,9 @@ public class ConfigLoaderTests
     }
 
     [Theory]
-    [InlineData("{call_id}.ogg")]
-    [InlineData("{caller}/{timestamp}.ogg")]
-    [InlineData("{TIMESTAMP}-{CALLER}.ogg")]
+    [InlineData("{call_id}.opus")]
+    [InlineData("{caller}/{timestamp}.opus")]
+    [InlineData("{TIMESTAMP}-{CALLER}.opus")]
     public void Load_RecordingFilenameWithTimestampOrCallId_Succeeds(string recordingFilename)
     {
         var toml = $"{MinimalValidToml}\n\n[voicemail]\nrecording_filename = \"{EscapeTomlString(recordingFilename)}\"\n";

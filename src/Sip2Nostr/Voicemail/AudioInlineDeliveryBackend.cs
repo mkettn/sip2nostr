@@ -4,8 +4,8 @@ using Sip2Nostr.Shared;
 namespace Sip2Nostr.Voicemail;
 
 // Default voicemail delivery backend: inlines the recording - already
-// saved as Opus/OGG by Sinks/VoicemailSink.cs - as a base64 data: URI in
-// the DM content. See docs/voicemail.md for the NIP-17 size budget this
+// saved as Opus by Sinks/VoicemailSink.cs - as a base64 data: URI in the
+// DM content. See docs/voicemail.md for the NIP-17 size budget this
 // fits inside.
 public sealed class AudioInlineDeliveryBackend : IVoicemailDeliveryBackend
 {
@@ -13,7 +13,7 @@ public sealed class AudioInlineDeliveryBackend : IVoicemailDeliveryBackend
 
     public async Task<(string Content, List<Tag> Tags, string Description)> BuildContentAsync(VoicemailAudioJob job, CancellationToken ct)
     {
-        var audioBytes = await File.ReadAllBytesAsync(job.OggPath, ct);
+        var audioBytes = await File.ReadAllBytesAsync(job.OpusPath, ct);
 
         // The real enforcement against encoded size - MaxRecordingSeconds
         // is only a heuristic ceiling on the configured value.

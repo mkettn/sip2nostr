@@ -145,7 +145,7 @@ public sealed class VoicemailSink(
             call.CallerNumber,
             recordedSeconds);
         var durationSeconds = (int)Math.Round(recordedSeconds);
-        var oggPath = await SaveRecordingAsync(samples, sampleRate, call.CallId, call.CallerNumber);
+        var opusPath = await SaveRecordingAsync(samples, sampleRate, call.CallId, call.CallerNumber);
 
         // Only a backend that actually reads VoicemailAudioJob.Samples
         // (TranscribedTextDeliveryBackend, for whisper.cpp) needs PCM
@@ -154,21 +154,21 @@ public sealed class VoicemailSink(
         // keeps this correct if a future backend's PCM needs don't line
         // up with today's two-mode delivery split.
         var jobSamples = deliveryRequiresPcm ? samples : [];
-        voicemailSender.Enqueue(new VoicemailAudioJob(oggPath, jobSamples, sampleRate, durationSeconds, call.CallerNumber, call.CallId));
+        voicemailSender.Enqueue(new VoicemailAudioJob(opusPath, jobSamples, sampleRate, durationSeconds, call.CallerNumber, call.CallId));
     }
 
     private async Task<string> SaveRecordingAsync(short[] samples, int sampleRate, string callId, string callerNumber)
     {
-        var oggBytes = OggOpusCodec.Encode(samples, sampleRate, VoicemailBudget.OpusBitrateBps, voicemailConfig.OpusResamplerQuality);
+        var opusBytes = OpusCodec.Encode(samples, sampleRate, VoicemailBudget.OpusBitrateBps, voicemailConfig.OpusResamplerQuality);
         var recordingsDir = Path.IsPathRooted(voicemailConfig.RecordingsDir)
             ? voicemailConfig.RecordingsDir
             : Path.GetFullPath(Path.Combine(configDirectory, voicemailConfig.RecordingsDir));
 
-        var oggPath = Path.GetFullPath(Path.Combine(recordingsDir, ResolveRecordingFilename(callId, callerNumber)));
-        Directory.CreateDirectory(Path.GetDirectoryName(oggPath)!);
-        await File.WriteAllBytesAsync(oggPath, oggBytes);
-        logger.Information("Saved voicemail recording to {OggPath}.", oggPath);
-        return oggPath;
+        var opusPath = Path.GetFullPath(Path.Combine(recordingsDir, ResolveRecordingFilename(callId, callerNumber)));
+        Directory.CreateDirectory(Path.GetDirectoryName(opusPath)!);
+        await File.WriteAllBytesAsync(opusPath, opusBytes);
+        logger.Information("Saved voicemail recording to {OpusPath}.", opusPath);
+        return opusPath;
     }
 
     private string ResolveRecordingFilename(string callId, string callerNumber)

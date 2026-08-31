@@ -8,7 +8,7 @@ namespace Sip2Nostr.Voicemail;
 public interface IVoicemailDeliveryBackend : IAsyncDisposable
 {
     // Whether BuildContentAsync needs VoicemailAudioJob.Samples (the raw
-    // recorded PCM) rather than just the saved Opus/OGG file at OggPath.
+    // recorded PCM) rather than just the saved Opus file at OpusPath.
     // VoicemailSink asks this - instead of re-deriving the same answer
     // from [voicemail].delivery itself - to decide whether to carry PCM
     // in the job at all.

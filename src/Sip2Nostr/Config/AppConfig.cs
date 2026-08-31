@@ -154,8 +154,8 @@ public sealed class VoicemailConfig
     public int OpusResamplerQuality { get; init; } = Sip2Nostr.Shared.VoicemailBudget.OpusResamplerQuality;
 
     // Optional. Same format rules as [[lines]].sound: raw 8 kHz 16-bit PCM
-    // works directly, mono Ogg/Opus (.ogg/.opus) is decoded in-process.
-    // Falls back to a short tone if unset.
+    // works directly, mono Opus (.opus) is decoded in-process. Falls back
+    // to a short tone if unset.
     [property: TomlPropertyName("greeting_sound")]
     public string? GreetingSound { get; init; }
 
@@ -173,7 +173,7 @@ public sealed class VoicemailConfig
     // so recordings from different calls can't silently overwrite each
     // other.
     [property: TomlPropertyName("recording_filename")]
-    public string RecordingFilename { get; init; } = "{timestamp}-{caller}.ogg";
+    public string RecordingFilename { get; init; } = "{timestamp}-{caller}.opus";
 
     // Optional. Relays to publish the voicemail NIP-17 DM to, if different
     // from [nostr].relays (e.g. target_npub advertises a separate NIP-17

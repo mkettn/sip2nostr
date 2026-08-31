@@ -8,7 +8,7 @@ namespace Sip2Nostr.Voicemail;
 // Alternative voicemail delivery backend: transcribes the recording via
 // an IVoicemailTranscriber and sends the text instead of inlining audio.
 // Transcribes job.Samples - the original recorded PCM - directly, rather
-// than decoding job's saved Opus/OGG file back out, so transcription
+// than decoding job's saved Opus file back out, so transcription
 // never runs on lossy-recompressed audio. A transcript is normally tiny
 // compared to the NIP-17 budget that constrains AudioInlineDeliveryBackend,
 // but it's still checked against the actual output (MaxTranscriptBytes)

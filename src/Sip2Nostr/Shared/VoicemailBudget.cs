@@ -11,11 +11,11 @@ public static class VoicemailBudget
     public const int OpusBitrateBps = 8000;
 
     // Default for the configurable [voicemail].opus_resampler_quality
-    // (see Config/AppConfig.cs) - the value actually passed to Concentus.
-    // Oggfile.OpusOggWriteStream's own resamplerQuality parameter when
-    // encoding a recording (Sinks/VoicemailSink.cs) is
+    // (see Config/AppConfig.cs) - the value actually passed to
+    // Concentus.Oggfile.OpusOggWriteStream's own resamplerQuality
+    // parameter when encoding a recording (Sinks/VoicemailSink.cs) is
     // VoicemailConfig.OpusResamplerQuality, not this constant directly.
-    // Unrelated to the sample-rate conversion Sip/OggOpusCodec.Decode does.
+    // Unrelated to the sample-rate conversion Sip/OpusCodec.Decode does.
     public const int OpusResamplerQuality = 5;
 
     public const int MaxAudioBytes = 30_400;
