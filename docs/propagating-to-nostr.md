@@ -70,10 +70,36 @@ additional handshake step before the incoming-call UI appears.
   event with the bridge's real keys, wraps it with a freshly generated
   ephemeral keypair via `NostrSigner.Nip44Encrypt`, and publishes the outer
   event via `Client.SendEvent`. The receive path mirrors this in reverse
-  and dispatches `answer`/`candidate` events to the waiting call.
+  and dispatches `answer`/`candidate`/`hangup`/`reject` events to the
+  waiting call, after checking the inner event's `call-id` tag against the
+  one this client was constructed with (the relay subscription filters on
+  the bridge's pubkey, not on a call, so a second overlapping call's
+  signaling would otherwise land here too - and a `hangup` for the wrong
+  call now tears down a live one). An event with no `call-id` tag at all is
+  still accepted: only a mismatch is evidence it belongs elsewhere.
 - `Sip/SipCallSource.cs` — mints one `Guid.NewGuid()` call-id per inbound
   call (`Call.CallId`). `Sinks/NosCallSink.cs` passes it into
   `NostrSignalingClient`.
+
+## Either side can end the call
+
+A call ends when either leg says so, and the two legs learn about it
+differently. The SIP leg's hangup arrives as a `BYE`/`CANCEL` and
+completes `Call.WhenRemoteHungUp` (see `docs/receiving-calls.md`). The
+Nostr leg's arrives as a NIP-AC `hangup` (or a `reject`, if the callee
+never answered) and completes `NostrSignalingClient.WhenCalleeHungUp` —
+nothing on the WebRTC leg itself is watched for it. `NosCallSink` races
+both, at both stages of a call:
+
+- **While the callee's device is ringing:** a `hangup`/`reject` declines the
+  call immediately rather than waiting out `ring_timeout_seconds`, so a
+  declined call reaches `VoicemailSink` (or ends) straight away. sip2nostr
+  doesn't send its own `hangup` back in that case — a device that just
+  hung up doesn't need telling to stop ringing.
+- **Once audio is bridged:** a `hangup` tears the bridge down and returns,
+  which is what makes `CallHub`'s own `finally` hang the SIP leg up with a
+  `BYE`. Without this the caller is left on a silent, still-connected
+  call.
 
 The wrap/unwrap logic was first verified locally with a round-trip test
 (two throwaway keypairs, no network): build and sign an offer as the
@@ -96,6 +122,14 @@ ways.
   clients ignoring their own echoed ICE/hangup events and only accepting
   self-addressed answer/reject in specific states. Not relevant to a
   single-instance bridge today, but worth knowing if that ever changes.
+  (Events not authored by `target_npub` are dropped regardless, so the
+  bridge's own echoed events are never acted on.)
+- **A callee that vanishes without signaling isn't noticed.** The
+  Nostr-side hangup is the only thing that ends a bridged call from that
+  side; `RTCPeerConnection` connection-state changes aren't watched, so a
+  NosCall that force-quits or loses the network mid-call leaves the caller
+  connected until they hang up themselves. Watching ICE state instead
+  would need care not to drop calls on a transient blip.
 - **No busy/reject signaling sent.** If sip2nostr is somehow mid-call
   already, it doesn't auto-reject a second offer the way NIP-AC recommends.
 - **No multi-device self-notification.** Not applicable — sip2nostr is a

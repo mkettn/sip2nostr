@@ -14,7 +14,9 @@ namespace Sip2Nostr.Sinks;
 // ringTimeoutSeconds is set and nobody answers within it, declines so the
 // next sink (typically VoicemailSink) gets a turn, leaving the call
 // ringing for that sink to answer; if unset, rings until the caller hangs
-// up.
+// up. A hangup from the callee ends the call at either stage - declining
+// straight away if it arrives while their device is still ringing, ending
+// the SIP leg if it arrives mid-call.
 public sealed class NosCallSink(
     NostrConfig nostrConfig,
     WebRtcConfig webRtcConfig,
@@ -48,6 +50,7 @@ public sealed class NosCallSink(
         webRtcAudio.OnAudioReceived += forwardToSip;
 
         await using var signaling = new NostrSignalingClient(nostrConfig, call.CallId, logger.ForContext<NostrSignalingClient>());
+        var calleeHangup = signaling.WhenCalleeHungUp;
         try
         {
             await signaling.ConnectAsync();
@@ -82,9 +85,13 @@ public sealed class NosCallSink(
                 call.CallId,
                 ringTimeoutSeconds is int s ? $" (up to {s}s before declining)" : string.Empty);
 
+            // calleeHangup is in here even without a ring timeout: a
+            // callee who declines or hangs up while their device is
+            // ringing is done with this call, and waiting out a timeout
+            // that may never come just leaves the caller ringing.
             var waitTasks = ringTimeoutTask is not null
-                ? new Task[] { answerTask, ringTimeoutTask, call.WhenRemoteHungUp }
-                : new Task[] { answerTask, call.WhenRemoteHungUp };
+                ? new Task[] { answerTask, calleeHangup, ringTimeoutTask, call.WhenRemoteHungUp }
+                : new Task[] { answerTask, calleeHangup, call.WhenRemoteHungUp };
             await Task.WhenAny(waitTasks);
 
             // Checked before call.WhenRemoteHungUp - see docs/voicemail.md
@@ -110,12 +117,25 @@ public sealed class NosCallSink(
 
             if (!answerTask.IsCompleted)
             {
-                logger.Information(
-                    "No WebRTC SDP answer arrived within {RingTimeoutSeconds}s for call {CallId}; declining.",
-                    ringTimeoutSeconds,
-                    call.CallId);
+                if (calleeHangup.IsCompleted)
+                {
+                    logger.Information(
+                        "Nostr side ended call {CallId} before answering it ({Reason}); declining.",
+                        call.CallId,
+                        DescribeReason(await calleeHangup));
+                }
+                else
+                {
+                    logger.Information(
+                        "No WebRTC SDP answer arrived within {RingTimeoutSeconds}s for call {CallId}; declining.",
+                        ringTimeoutSeconds,
+                        call.CallId);
+                    // Only when we're the one giving up - a device that
+                    // just hung up doesn't need to be told to stop ringing.
+                    await SendHangupSafeAsync(signaling, call.CallId, "no answer within ring timeout");
+                }
+
                 StopBridging();
-                await SendHangupSafeAsync(signaling, call.CallId, "no answer within ring timeout");
                 pc.close();
                 return false;
             }
@@ -161,12 +181,30 @@ public sealed class NosCallSink(
             return true;
         }
 
-        await call.WhenRemoteHungUp;
-        logger.Information("Call {CallId} ended; closing WebRTC session.", call.CallId);
+        // Either leg can end a bridged call, and the SIP leg only learns
+        // about a Nostr-side hangup from the signaling event - closing the
+        // peer connection alone would leave the caller on a silent call.
+        // CallHub's own finally hangs the SIP leg up once this returns.
+        await Task.WhenAny(call.WhenRemoteHungUp, calleeHangup);
+        if (calleeHangup.IsCompleted && !call.WhenRemoteHungUp.IsCompleted)
+        {
+            logger.Information(
+                "Nostr side hung up call {CallId} ({Reason}); ending the SIP leg.",
+                call.CallId,
+                DescribeReason(await calleeHangup));
+        }
+        else
+        {
+            logger.Information("Call {CallId} ended; closing WebRTC session.", call.CallId);
+        }
+
         StopBridging();
         pc.close();
         return true;
     }
+
+    private static string DescribeReason(string reason) =>
+        string.IsNullOrWhiteSpace(reason) ? "no reason given" : reason;
 
     private async Task SendHangupSafeAsync(NostrSignalingClient signaling, string callId, string reason)
     {

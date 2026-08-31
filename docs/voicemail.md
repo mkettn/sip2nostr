@@ -43,12 +43,14 @@ the moment the greeting starts.
       ├─ WebRTC offer sent over Nostr, same as today
       │
       ▼
- Wait for: Nostr answer | ring_timeout_seconds elapses | caller hangs up | signaling fails
+ Wait for: Nostr answer | callee declines/hangs up | ring_timeout_seconds
+           elapses | caller hangs up | signaling fails
       │
       ├─ Nostr answers in time  → bridge audio, returns true (handled)
       ├─ Caller hangs up first  → tear down, returns true (handled)
       │
-      └─ Timeout or signaling failure → decline (return false); CallHub
+      └─ Callee declined, timeout, or signaling failure → decline (return
+         false); CallHub
          offers the Call to the next configured sink, VoicemailSink:
            1. Close the WebRTC peer connection; the SIP leg's Call.Audio
               is reused directly - no new media session is created.
@@ -56,6 +58,8 @@ the moment the greeting starts.
               NosCall) stops ringing (best-effort; failure is logged, not
               fatal) - the bridge originated this call, so giving up on it
               is a hangup, not a reject (the callee's decline signal).
+              Skipped when the callee is the one who ended it: a device
+              that just hung up doesn't need telling to stop ringing.
            3. Answer the SIP leg (`Call.AnswerAsync`) - this is where the
               caller stops hearing ringback. If it returns false the
               caller gave up while it was ringing: log it and enqueue a
@@ -200,7 +204,11 @@ string?`, `null` meaning nothing could be transcribed), selected by
 
 - `Sinks/NosCallSink.cs`:
   - `TryHandleAsync` races the existing `WaitForAnswerAsync` Nostr call
-    against `Task.Delay(ringTimeoutSeconds)` and `Call.WhenRemoteHungUp`.
+    against `Task.Delay(ringTimeoutSeconds)`, `Call.WhenRemoteHungUp`, and
+    `NostrSignalingClient.WhenCalleeHungUp` - a callee who declines or
+    hangs up while their device is ringing gets to voicemail immediately
+    instead of waiting out a timeout that, with `ringTimeoutSeconds`
+    unset, would never come (see `docs/propagating-to-nostr.md`).
     `ringTimeoutSeconds` is `null` unless `[voicemail].enabled` (wired up
     in `Program.cs`), so with voicemail disabled this sink rings
     indefinitely instead of timing out, matching pre-voicemail behavior.

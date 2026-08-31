@@ -130,8 +130,10 @@ something is actually ready to take the call.
    dialogue-level hangup event never fires for a call that was never
    answered), sipsorcery expiring an `INVITE` left ringing for
    `SIPTimings.MAX_RING_TIME`/3 minutes (`NoRingTimeout`), or the
-   passed-in shutdown `CancellationToken`. `Call.HangupAsync` sends `BYE`
-   for an answered call and rejects the pending `INVITE` with
+   passed-in shutdown `CancellationToken`. A sink can also end a call
+   itself by returning — `NosCallSink` does exactly that when the Nostr
+   side hangs up (see `docs/propagating-to-nostr.md`). `Call.HangupAsync`
+   sends `BYE` for an answered call and rejects the pending `INVITE` with
    `480 Temporarily Unavailable` for one that was never answered — a local
    shutdown still closes the session without sending `BYE` itself (see
    Blind Spots).
