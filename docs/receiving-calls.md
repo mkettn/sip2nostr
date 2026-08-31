@@ -133,12 +133,12 @@ something is actually ready to take the call.
    passed-in shutdown `CancellationToken`. A sink can also end a call
    itself by returning — `NosCallSink` does exactly that when the Nostr
    side hangs up (see `docs/propagating-to-nostr.md`). `Call.HangupAsync`
-   sends `BYE` for an answered call and rejects the pending `INVITE` with
-   `480 Temporarily Unavailable` for one that was never answered — except
-   after a `MAX_RING_TIME` expiry, where the transaction has no final
-   response but can no longer take one either — a local
-   shutdown still closes the session without sending `BYE` itself (see
-   Blind Spots).
+   sends `BYE` for an answered call, and turns down one that was never
+   answered on its pending `INVITE` with `480 Temporarily Unavailable` —
+   skipped for a call the caller already cancelled, or one whose
+   transaction expired, since neither can take another final response. A
+   local shutdown still closes the session without sending `BYE` itself
+   (see Blind Spots).
 
 ## Why response routing needs the configurable DNS resolver to actually work
 

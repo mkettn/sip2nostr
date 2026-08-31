@@ -349,21 +349,23 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
                 // ua.Hangup() only sends BYE for an established dialogue, so
                 // a call nothing ever answered has to be turned down on its
                 // still-pending INVITE transaction instead - otherwise the
-                // caller keeps ringing until the provider gives up. A
-                // caller's CANCEL isn't that case: sipsorcery answers it
-                // with 487, which IsUASAnswered already covers. An expired
-                // transaction is - it has no final response but can't take
-                // one either, and rejecting it re-registers the dead
-                // transaction with the transport to retransmit a 480 at a
-                // caller who left minutes ago.
+                // caller keeps ringing until the provider gives up. Two
+                // states can't take that 480 and aren't covered by
+                // IsUASAnswered (which is "some final response was sent"):
+                // a cancelled call, because sipsorcery raises CallCancelled
+                // before it sends its own 487, so this can run while that
+                // response is still in flight; and an expired transaction,
+                // which has no final response and can't take one - sending
+                // it re-registers the dead transaction with the transport
+                // to retransmit at a caller who left minutes ago.
                 if (uas.IsUASAnswered)
                 {
                     ua.Hangup();
                 }
-                else if (uas.ClientTransaction.HasTimedOut)
+                else if (uas.IsCancelled || uas.ClientTransaction.HasTimedOut)
                 {
                     logger.Information(
-                        "Call {CallId}'s INVITE transaction already timed out; nothing left to turn down.",
+                        "Call {CallId} was already cancelled or timed out; nothing left to turn down.",
                         callId);
                 }
                 else
