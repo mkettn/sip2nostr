@@ -249,10 +249,12 @@ string?`, `null` meaning nothing could be transcribed), selected by
   - `SaveRecordingAsync` encodes the buffered PCM samples to Opus/OGG via
     `Sip/OggOpusCodec.Encode` (pure logic, unit tested; also used to
     decode `[[lines]].sound`/`[voicemail].greeting_sound` files in
-    `Shared/SoundFileResolver.cs`) before writing the result under
-    `recordings_dir` - so the file on disk is already exactly what
-    `delivery = "audio"` sends, with no separate re-encode step at
-    delivery time. `OggOpusCodec.Encode` runs with `UseVBR = false`:
+    `Shared/SoundFileResolver.cs` - see `docs/sound-files.md` for the
+    format it requires and how a misconfigured file degrades) before
+    writing the result under `recordings_dir` - so the file on disk is
+    already exactly what `delivery = "audio"` sends, with no separate
+    re-encode step at delivery time. `OggOpusCodec.Encode` runs with
+    `UseVBR = false`:
     Concentus (like libopus) defaults to VBR, where `Bitrate` is only a
     target the encoder can exceed on complex input, which would
     undermine the size budget `AudioInlineDeliveryBackend` checks the

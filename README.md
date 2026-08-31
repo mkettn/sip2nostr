@@ -145,7 +145,8 @@ uri = "sip:+4989123456@sip.your-provider.de"
 label = "main"
 # Optional: when [nostr].enabled is false, answer calls on this line and
 # play this file on loop to test SIP audio. Raw 8 kHz 16-bit PCM works
-# directly; mono Ogg/Opus (.ogg/.opus) is decoded in-process.
+# directly; mono Ogg/Opus (.ogg/.opus) is decoded in-process - see
+# docs/sound-files.md for exactly what's supported and how to convert a file.
 # sound = "sounds/test.opus"
 
 [[lines]]

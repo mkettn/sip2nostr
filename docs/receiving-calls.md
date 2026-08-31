@@ -82,7 +82,8 @@ transport-agnostic `Call`, which `CallHub` routes through the configured
    - **Local test audio (`LocalTestAudioSink`, verified):** plays either a
      configured sound file (`[[lines]].sound`, decoded to raw 8 kHz PCM
      in-process via `Sip/OggOpusCodec.cs` if it isn't already
-     `.pcm`/`.raw`/`.s16le`) or a sine wave test tone on loop over
+     `.pcm`/`.raw`/`.s16le` - see `docs/sound-files.md` for what's
+     actually supported) or a sine wave test tone on loop over
      `Call.Audio` until the caller hangs up, via SIPSorcery's own
      `AudioExtrasSource` wired into `Call.Audio.SendEncodedSample`. Only
      wired in when `[nostr].enabled = false`.
