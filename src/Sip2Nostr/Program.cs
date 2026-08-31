@@ -54,7 +54,7 @@ static IVoicemailDeliveryBackend CreateVoicemailDeliveryBackend(AppConfig config
 {
     if (!config.Voicemail.Enabled || config.Voicemail.Delivery != "text")
     {
-        return new AudioInlineDeliveryBackend(logger.ForContext<AudioInlineDeliveryBackend>());
+        return new AudioInlineDeliveryBackend();
     }
 
     var transcriber = CreateTranscriber(config.Voicemail.Transcription, config.ConfigDirectory, logger);
@@ -136,7 +136,12 @@ try
 
         if (config.Voicemail.Enabled)
         {
-            sinks.Add(new VoicemailSink(config.Voicemail, voicemailSender, config.ConfigDirectory, Log.Logger.ForContext<VoicemailSink>()));
+            sinks.Add(new VoicemailSink(
+                config.Voicemail,
+                voicemailSender,
+                voicemailDeliveryBackend.RequiresPcm,
+                config.ConfigDirectory,
+                Log.Logger.ForContext<VoicemailSink>()));
         }
 
         _ = CheckNostrConnectivitySafeAsync(config.Nostr, Log.Logger);

@@ -182,9 +182,9 @@ public sealed class VoicemailSender : IAsyncDisposable
         {
             _logger.Error(
                 exception,
-                "Failed to prepare voicemail for call {CallId} for sending; the recording is still saved at {WavPath}.",
+                "Failed to prepare voicemail for call {CallId} for sending; the recording is still saved at {OpusPath}.",
                 audioJob.CallId,
-                audioJob.WavPath);
+                audioJob.OpusPath);
             return null;
         }
         catch (Exception exception)
@@ -210,9 +210,9 @@ public sealed class VoicemailSender : IAsyncDisposable
         {
             _logger.Error(
                 exception,
-                "Failed to send voicemail for call {CallId} over Nostr; the recording is still saved at {WavPath}.",
+                "Failed to send voicemail for call {CallId} over Nostr; the recording is still saved at {OpusPath}.",
                 audioJob.CallId,
-                audioJob.WavPath);
+                audioJob.OpusPath);
         }
         catch (Exception exception)
         {

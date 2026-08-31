@@ -26,7 +26,9 @@ uri = "sip:+4989123456@sip.your-provider.de"
 label = "main"
 # Optional: when [nostr].enabled is false, answer calls on this line and
 # play this file on loop to test SIP audio. Raw 8 kHz 16-bit PCM works
-# directly; other formats require ffmpeg to be installed for conversion.
+# directly; mono Opus (.opus) is decoded in-process. See
+# docs/sound-files.md for exactly what's supported and how to convert a
+# file if needed.
 # sound = "sounds/test.opus"
 
 [[lines]]
@@ -65,16 +67,43 @@ ring_timeout_seconds = 20
 # The default is the largest value that reliably still fits in a single
 # NIP-17 DM at the current Opus encoding - ConfigLoader rejects anything
 # larger at startup. This ceiling only applies to delivery = "audio"
-# below; delivery = "text" allows up to 600s instead, since a transcript
-# isn't bound by the same DM size budget. See docs/voicemail.md.
+# below; delivery = "text" is instead capped by
+# max_text_recording_seconds, since a transcript isn't bound by the same
+# DM size budget. See docs/voicemail.md.
 max_recording_seconds = 27
+# The max_recording_seconds ceiling used when delivery = "text" below.
+# Not derived from anything - just a sanity limit on how much PCM is
+# buffered in memory while recording, so raise it only as far as this
+# host's available RAM comfortably allows for the busiest realistic case
+# (one recording per line, worst case all lines at once). ConfigLoader
+# rejects anything above 3600 (1 hour) at startup, so this can't itself
+# become unbounded.
+max_text_recording_seconds = 600
+# Passed to Concentus when encoding a recording. Only takes effect if
+# the writer's input and output sample rates ever differ -
+# they don't today (both are the recording's own rate), so this
+# currently has no observable effect; kept configurable for when that
+# changes. 0 (fastest) - 10 (best); ConfigLoader rejects anything
+# outside that range at startup.
+opus_resampler_quality = 5
 # Optional. Same format rules as [[lines]].sound: raw 8 kHz 16-bit PCM
-# works directly, other formats require ffmpeg. Falls back to a short
-# tone if unset.
+# works directly, mono Opus (.opus) is decoded in-process. Falls back to
+# a short tone if unset.
 # greeting_sound = "sounds/greeting.opus"
-# Where recordings are saved (as WAV), relative to this config file unless
-# rooted. Always written, regardless of whether the Nostr send succeeds.
+# Where recordings are saved (as Opus), relative to this config file
+# unless rooted. Always written, regardless of whether the Nostr send succeeds.
 recordings_dir = "voicemail"
+# Filename for a saved recording, relative to recordings_dir above.
+# Placeholders: {timestamp} (yyyyMMdd-HHmmss), {caller} (the normalized
+# caller number), {call_id} (a per-call unique id, not a phone number -
+# useful if you'd rather not have the caller's number in filenames).
+# Must include {timestamp} or {call_id} so recordings from different
+# calls can't overwrite each other, must be a relative path (joined onto
+# recordings_dir above - a rooted value would silently discard it), and
+# must not contain a ".." segment - ConfigLoader rejects a value
+# violating any of these at startup. A path separator is fine otherwise,
+# e.g. "{caller}/{timestamp}.opus" to group recordings per caller.
+recording_filename = "{timestamp}-{caller}.opus"
 # Optional. Relays to publish the voicemail DM to, if different from
 # [nostr].relays above - e.g. target_npub advertises a separate NIP-17
 # DM inbox relay list (kind:10050). Falls back to the Nostr SDK's default

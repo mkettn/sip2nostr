@@ -131,19 +131,49 @@ public sealed class VoicemailConfig
     [property: TomlPropertyName("ring_timeout_seconds")]
     public int RingTimeoutSeconds { get; init; } = 20;
 
-    // See docs/voicemail.md - ConfigLoader rejects anything larger.
+    // See docs/voicemail.md - ConfigLoader rejects anything larger than
+    // VoicemailBudget.MaxRecordingSeconds (delivery = "audio") or
+    // max_text_recording_seconds below (delivery = "text").
     [property: TomlPropertyName("max_recording_seconds")]
     public int MaxRecordingSeconds { get; init; } = Sip2Nostr.Shared.VoicemailBudget.MaxRecordingSeconds;
 
+    // The max_recording_seconds ceiling used when delivery = "text" -
+    // unlike delivery = "audio"'s ceiling (VoicemailBudget.MaxRecordingSeconds,
+    // derived from the NIP-17/Opus size budget and not configurable), this
+    // is just a sanity limit on how much PCM VoicemailSink buffers in
+    // memory while recording, not derived from anything else. ConfigLoader
+    // caps it at VoicemailBudget.MaxTextRecordingSecondsCeiling so it can't
+    // itself become unbounded. See docs/voicemail.md.
+    [property: TomlPropertyName("max_text_recording_seconds")]
+    public int MaxTextRecordingSeconds { get; init; } = Sip2Nostr.Shared.VoicemailBudget.MaxTextRecordingSeconds;
+
+    // Passed to Concentus.Oggfile.OpusOggWriteStream's resamplerQuality
+    // parameter when encoding a recording - ConfigLoader rejects anything
+    // outside Concentus' own 0-10 range.
+    [property: TomlPropertyName("opus_resampler_quality")]
+    public int OpusResamplerQuality { get; init; } = Sip2Nostr.Shared.VoicemailBudget.OpusResamplerQuality;
+
     // Optional. Same format rules as [[lines]].sound: raw 8 kHz 16-bit PCM
-    // works directly, other formats require ffmpeg. Falls back to a short
-    // tone if unset.
+    // works directly, mono Opus (.opus) is decoded in-process. Falls back
+    // to a short tone if unset.
     [property: TomlPropertyName("greeting_sound")]
     public string? GreetingSound { get; init; }
 
     // Relative to the config file's directory unless rooted.
     [property: TomlPropertyName("recordings_dir")]
     public string RecordingsDir { get; init; } = "voicemail";
+
+    // Filename for a saved recording, relative to recordings_dir - joined
+    // straight onto it, so must be a relative path with no ".." segment
+    // (checked by ConfigLoader; a rooted value would otherwise silently
+    // discard recordings_dir entirely via Path.Combine). Placeholders:
+    // {timestamp} (yyyyMMdd-HHmmss), {caller} (the normalized caller
+    // number), {call_id} (a per-call unique id, not a phone number). Must
+    // include {timestamp} or {call_id} - also checked by ConfigLoader -
+    // so recordings from different calls can't silently overwrite each
+    // other.
+    [property: TomlPropertyName("recording_filename")]
+    public string RecordingFilename { get; init; } = "{timestamp}-{caller}.opus";
 
     // Optional. Relays to publish the voicemail NIP-17 DM to, if different
     // from [nostr].relays (e.g. target_npub advertises a separate NIP-17

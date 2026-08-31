@@ -1,16 +1,19 @@
 using System.Security.Cryptography;
 using System.Text;
 using Serilog;
+using Sip2Nostr.Sip;
 
 namespace Sip2Nostr.Shared;
 
 // Resolves a configured sound path (relative to the config file's
 // directory unless rooted) to a playable raw 8 kHz mono 16-bit PCM file,
-// converting via ffmpeg and caching the result if needed. Shared by
-// [[lines]].sound (LocalTestAudioSink) and [voicemail].greeting_sound
-// (VoicemailSink) - see docs/voicemail.md for the ffmpeg fallback story.
+// decoding mono Opus in-process via OpusCodec and caching the result if
+// needed. Shared by [[lines]].sound (LocalTestAudioSink) and
+// [voicemail].greeting_sound (VoicemailSink) - see docs/voicemail.md.
 public static class SoundFileResolver
 {
+    private const int PlaybackSampleRate = 8000;
+
     public static string? Resolve(string soundPath, string configDirectory, ILogger logger)
     {
         var resolvedSoundPath = Path.IsPathRooted(soundPath)
@@ -31,10 +34,19 @@ public static class SoundFileResolver
             return resolvedSoundPath;
         }
 
-        return ConvertSoundToRawPcm(resolvedSoundPath, logger);
+        if (!IsOpusPath(resolvedSoundPath))
+        {
+            logger.Warning(
+                "Configured sound file {SoundPath} is not a supported format; only raw 8 kHz 16-bit PCM " +
+                "(.pcm/.raw/.s16le) and mono Opus (.opus) files are supported.",
+                soundPath);
+            return null;
+        }
+
+        return DecodeOpusToRawPcm(resolvedSoundPath, logger);
     }
 
-    private static string? ConvertSoundToRawPcm(string soundPath, ILogger logger)
+    private static string? DecodeOpusToRawPcm(string soundPath, ILogger logger)
     {
         var cachePath = GetConvertedSoundPath(soundPath);
         if (File.Exists(cachePath) && File.GetLastWriteTimeUtc(cachePath) >= File.GetLastWriteTimeUtc(soundPath))
@@ -44,53 +56,21 @@ public static class SoundFileResolver
 
         try
         {
+            var opusBytes = File.ReadAllBytes(soundPath);
+            var samples = OpusCodec.Decode(opusBytes, PlaybackSampleRate);
+
+            var pcmBytes = new byte[samples.Length * sizeof(short)];
+            Buffer.BlockCopy(samples, 0, pcmBytes, 0, pcmBytes.Length);
+
             Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
-            using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "ffmpeg",
-                ArgumentList =
-                {
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-y",
-                    "-i",
-                    soundPath,
-                    "-ac",
-                    "1",
-                    "-ar",
-                    "8000",
-                    "-f",
-                    "s16le",
-                    cachePath,
-                },
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            });
+            File.WriteAllBytes(cachePath, pcmBytes);
 
-            if (process is null)
-            {
-                logger.Warning("Could not start ffmpeg to convert {SoundPath}.", soundPath);
-                return null;
-            }
-
-            var error = process.StandardError.ReadToEnd();
-            process.WaitForExit();
-            if (process.ExitCode != 0)
-            {
-                logger.Warning(
-                    "ffmpeg failed to convert {SoundPath} to raw PCM: {FfmpegError}",
-                    soundPath,
-                    error.Trim());
-                return null;
-            }
-
-            logger.Information("Converted {SoundPath} to raw 8 kHz PCM at {ConvertedSoundPath}.", soundPath, cachePath);
+            logger.Information("Decoded {SoundPath} to raw 8 kHz PCM at {ConvertedSoundPath}.", soundPath, cachePath);
             return cachePath;
         }
-        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
+        catch (Exception exception)
         {
-            logger.Warning(exception, "Could not convert {SoundPath}; install ffmpeg or provide raw 8 kHz 16-bit PCM.", soundPath);
+            logger.Warning(exception, "Could not decode {SoundPath}; provide a mono Opus file or raw 8 kHz 16-bit PCM.", soundPath);
             return null;
         }
     }
@@ -102,6 +82,9 @@ public static class SoundFileResolver
             extension.Equals(".raw", StringComparison.OrdinalIgnoreCase) ||
             extension.Equals(".s16le", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool IsOpusPath(string soundPath) =>
+        Path.GetExtension(soundPath).Equals(".opus", StringComparison.OrdinalIgnoreCase);
 
     private static string GetConvertedSoundPath(string soundPath)
     {

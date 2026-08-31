@@ -20,6 +20,7 @@ namespace Sip2Nostr.Sinks;
 public sealed class VoicemailSink(
     VoicemailConfig voicemailConfig,
     VoicemailSender voicemailSender,
+    bool deliveryRequiresPcm,
     string configDirectory,
     ILogger logger) : ICallSink
 {
@@ -144,21 +145,38 @@ public sealed class VoicemailSink(
             call.CallerNumber,
             recordedSeconds);
         var durationSeconds = (int)Math.Round(recordedSeconds);
-        var wavPath = await SaveRecordingAsync(samples, sampleRate, call.CallId);
-        voicemailSender.Enqueue(new VoicemailAudioJob(wavPath, sampleRate, durationSeconds, call.CallerNumber, call.CallId));
+        var opusPath = await SaveRecordingAsync(samples, sampleRate, call.CallId, call.CallerNumber);
+
+        // Only a backend that actually reads VoicemailAudioJob.Samples
+        // (TranscribedTextDeliveryBackend, for whisper.cpp) needs PCM
+        // carried in the job; asking the backend itself (rather than
+        // re-deriving the same answer from [voicemail].delivery here)
+        // keeps this correct if a future backend's PCM needs don't line
+        // up with today's two-mode delivery split.
+        var jobSamples = deliveryRequiresPcm ? samples : [];
+        voicemailSender.Enqueue(new VoicemailAudioJob(opusPath, jobSamples, sampleRate, durationSeconds, call.CallerNumber, call.CallId));
     }
 
-    private async Task<string> SaveRecordingAsync(short[] samples, int sampleRate, string callId)
+    private async Task<string> SaveRecordingAsync(short[] samples, int sampleRate, string callId, string callerNumber)
     {
-        var wavBytes = WavEncoder.Encode(samples, sampleRate);
+        var opusBytes = OpusCodec.Encode(samples, sampleRate, VoicemailBudget.OpusBitrateBps, voicemailConfig.OpusResamplerQuality);
         var recordingsDir = Path.IsPathRooted(voicemailConfig.RecordingsDir)
             ? voicemailConfig.RecordingsDir
             : Path.GetFullPath(Path.Combine(configDirectory, voicemailConfig.RecordingsDir));
-        Directory.CreateDirectory(recordingsDir);
 
-        var wavPath = Path.Combine(recordingsDir, $"{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}-{callId}.wav");
-        await File.WriteAllBytesAsync(wavPath, wavBytes);
-        logger.Information("Saved voicemail recording to {WavPath}.", wavPath);
-        return wavPath;
+        var opusPath = Path.GetFullPath(Path.Combine(recordingsDir, ResolveRecordingFilename(callId, callerNumber)));
+        Directory.CreateDirectory(Path.GetDirectoryName(opusPath)!);
+        await File.WriteAllBytesAsync(opusPath, opusBytes);
+        logger.Information("Saved voicemail recording to {OpusPath}.", opusPath);
+        return opusPath;
+    }
+
+    private string ResolveRecordingFilename(string callId, string callerNumber)
+    {
+        var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss");
+        return voicemailConfig.RecordingFilename
+            .Replace("{timestamp}", timestamp, StringComparison.OrdinalIgnoreCase)
+            .Replace("{caller}", callerNumber, StringComparison.OrdinalIgnoreCase)
+            .Replace("{call_id}", callId, StringComparison.OrdinalIgnoreCase);
     }
 }

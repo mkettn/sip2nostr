@@ -14,10 +14,11 @@ never neither.
 
 Verified end-to-end against a real SIP trunk and a real NIP-17 client,
 for both delivery backends: a call that falls back to voicemail plays
-the greeting/tone and records the caller, then either encodes it to
-Opus/OGG and delivers it as a NIP-17 DM that the receiving client
-decrypts and plays back correctly (`delivery = "audio"`), or transcribes
-it and delivers the transcript as DM text (`delivery = "text"`). The
+the greeting/tone, records the caller, and saves the recording as
+Opus, then either delivers it as a NIP-17 DM that the receiving
+client decrypts and plays back correctly (`delivery = "audio"`), or
+transcribes it and delivers the transcript as DM text (`delivery =
+"text"`). The
 `MissedCallNoticeJob` path (recording too short / caller hangs up
 before anything is captured) hasn't specifically been exercised, but
 shares the same delivery code as the verified `VoicemailAudioJob` path.
@@ -59,9 +60,11 @@ already-answered `Call`, rather than one function doing both.
               was recorded, but it's still a missed call.
            4. Record caller audio for up to `max_recording_seconds`, or
               until they hang up.
-           5. Save the recording as a WAV file under `recordings_dir`
-              (always - this is the durability point, independent of
-              whatever happens to the send afterward).
+           5. Encode the recording to Opus (in-process via
+              `Sip/OpusCodec.cs`) and save it under `recordings_dir`,
+              named per `recording_filename` (always - this is the
+              durability point, independent of whatever happens to the
+              send afterward).
            6. Return true (handled) - CallHub's own `finally` calls
               `Call.HangupAsync` unconditionally once a sink is done, so
               VoicemailSink doesn't need to hang up the SIP call itself.
@@ -70,16 +73,16 @@ already-answered `Call`, rather than one function doing both.
               can't leave the caller on a silent, still-connected call or
               leak the RTP session.
            7. If the recording is long enough to be worth sending, enqueue
-              a VoicemailAudioJob (the WAV path) on VoicemailSender and
-              move on - encoding and delivery happen off this call's
-              critical path, in a separate background worker. Otherwise
-              (too short), log it and enqueue a MissedCallNoticeJob
-              instead - the same "exactly one job" rule as step 3.
+              a VoicemailAudioJob (the Opus path) on VoicemailSender
+              and move on - delivery happens off this call's critical
+              path, in a separate background worker. Otherwise (too
+              short), log it and enqueue a MissedCallNoticeJob instead -
+              the same "exactly one job" rule as step 3.
            8. If RunVoicemailAsync throws instead of reaching step 7 (a
-              bad greeting_sound path, a disk error saving the
-              recording), VoicemailSink.TryHandleAsync's own catch around
-              the call enqueues a MissedCallNoticeJob - so a
-              misconfiguration still notifies target_npub instead of
+              bad greeting_sound path, a disk error or Opus encoding
+              failure saving the recording), VoicemailSink.TryHandleAsync's
+              own catch around the call enqueues a MissedCallNoticeJob -
+              so a misconfiguration still notifies target_npub instead of
               silently dropping the caller with nothing to show for it
               anywhere but a log line.
 ```
@@ -108,13 +111,12 @@ VoicemailSender then, independently of any particular call:
       │  jobs costs one connect, not one per job)
       │
       └─ for each job: MissedCallNoticeJob → plain-text content;
-         VoicemailAudioJob → re-encode as Opus/OGG in-process via
-         Concentus (pure C#, no external program) - if encoding fails,
-         nothing is sent (see Blind spots: there's no WAV fallback,
-         since raw WAV can never fit the budget anyway). Either way,
-         send as a NIP-17 private direct message. A relay rejecting the
-         event (e.g. too large) is detected and logged as a failure,
-         not reported as sent.
+         VoicemailAudioJob → delivery-backend-dependent content built
+         from the already-Opus-encoded recording on disk (encoded at
+         record time by VoicemailSink, not here - see Delivery backends
+         below). Either way, send as a NIP-17 private direct message. A
+         relay rejecting the event (e.g. too large) is detected and
+         logged as a failure, not reported as sent.
       │
       ▼
  Disconnect, go back to idle
@@ -125,17 +127,23 @@ VoicemailSender then, independently of any particular call:
 How a recorded voicemail becomes DM content is pluggable via
 `[voicemail].delivery`:
 
-- `"audio"` (default) - `Voicemail/AudioInlineDeliveryBackend.cs` encodes
-  the recording to Opus/OGG and inlines it as a base64 `data:` URI in the
+- `"audio"` (default) - `Voicemail/AudioInlineDeliveryBackend.cs` reads
+  the recording (already Opus - `VoicemailSink` encodes it when
+  saving, not this backend) and inlines it as a base64 `data:` URI in the
   DM content, subject to the NIP-17 size budget covered above.
 - `"text"` - `Voicemail/TranscribedTextDeliveryBackend.cs` transcribes
-  the recording via a speech-to-text engine and sends the transcript as
-  plain text instead. This path isn't bound by the Opus/NIP-17 budget
-  above, so it has its own two checks: `max_recording_seconds` is capped
-  at `VoicemailBudget.MaxTextRecordingSeconds` (600s) instead of
+  `VoicemailAudioJob.Samples` - the original recorded PCM, carried on the
+  job alongside `OpusPath` rather than decoded back out of the saved
+  Opus file - via a speech-to-text engine, sending the transcript as
+  plain text instead. Transcribing the original PCM instead of a
+  lossy-recompressed copy avoids feeding whisper.cpp audio that's already
+  been through 8 kbps Opus once. This path isn't bound by the Opus/NIP-17
+  budget above, so it has its own two checks: `max_recording_seconds` is
+  capped at `[voicemail].max_text_recording_seconds` (default 600s,
+  `VoicemailBudget.MaxTextRecordingSeconds`) instead of
   `VoicemailBudget.MaxRecordingSeconds` (see `Config/ConfigLoader.cs`) -
-  a sanity ceiling on how much PCM `VoicemailSink` buffers in memory
-  while recording, not a size budget - and the transcript itself is
+  a configurable sanity ceiling on how much PCM `VoicemailSink` buffers
+  in memory while recording, not a size budget - and the transcript itself is
   checked against `VoicemailBudget.MaxTranscriptBytes` (40,000 bytes) at
   send time, mirroring `AudioInlineDeliveryBackend`'s `MaxAudioBytes`
   check. A transcript is normally tiny compared to that budget, but
@@ -147,9 +155,17 @@ How a recorded voicemail becomes DM content is pluggable via
 
 Both implement `Voicemail/IVoicemailDeliveryBackend.cs`
 (`BuildContentAsync(VoicemailAudioJob, CancellationToken) -> (Content,
-Tags, Description)`) - the only thing `VoicemailSender` depends on; it
-doesn't know or care which backend it's holding, and owns disposing it
-alongside its own worker.
+Tags, Description)`, plus a `RequiresPcm` property - `false` for
+`AudioInlineDeliveryBackend`, `true` for `TranscribedTextDeliveryBackend`
+- that `VoicemailSink` reads to decide whether to populate
+`VoicemailAudioJob.Samples`, so that decision lives with the backend
+that actually knows its own needs rather than being re-derived from
+`[voicemail].delivery` at the recording site) - the only thing
+`VoicemailSender` depends on; it doesn't know or care which backend it's
+holding, and owns disposing it alongside its own worker. `Program.cs`
+passes the same backend instance's `RequiresPcm` to `VoicemailSink`
+separately, since the sink itself only calls `VoicemailSender.Enqueue`
+and never touches the backend directly.
 
 ### Speech-to-text engine
 
@@ -166,8 +182,9 @@ string?`, `null` meaning nothing could be transcribed), selected by
   (`[voicemail.transcription].model_path`, required when
   `delivery = "text"` - `ConfigLoader` checks the file exists at
   startup). whisper.cpp expects 16 kHz mono float samples in `[-1, 1]`;
-  voicemail recordings are 8 kHz PCM (G.711's rate), so
-  `WhisperNetTranscriber` resamples via `SIPSorcery.Media.PcmResampler`
+  `TranscribedTextDeliveryBackend` hands over `VoicemailAudioJob.Samples`
+  as recorded - 8 kHz PCM (G.711's rate) - so `WhisperNetTranscriber`
+  resamples via `SIPSorcery.Media.PcmResampler`
   (already a project dependency, so no new one is needed just for that)
   and converts to `float` before handing samples to Whisper.
   `[voicemail.transcription].language` pins the spoken language (e.g.
@@ -219,12 +236,8 @@ string?`, `null` meaning nothing could be transcribed), selected by
     sipMediaSession.SendAudio` - same off-the-shelf player, same signature
     (`ICallAudio.SendEncodedSample` exists specifically to match it), just
     retargeted at the hub's `ICallAudio` instead of a concrete
-    `RTPSession`. An earlier version of this sink hand-rolled its own PCM
-    pacing/RTP-framing loop instead; that reimplemented exactly what
-    `AudioExtrasSource` already does correctly (a monotonic timestamp, a
-    real-time-paced send loop, marker bits) and got two of the three
-    wrong - see the PR review that caught it. `AudioExtrasSource` needs a
-    real file to stream from, so the sound-file path from
+    `RTPSession`. `AudioExtrasSource` needs a real file to stream from,
+    so the sound-file path from
     `SoundFileResolver.Resolve` is opened directly (`File.OpenRead` +
     `SendAudioFromStream`) rather than loaded into a `short[]` first, and
     the no-greeting-configured case now uses `SetSource(SineWave)` instead
@@ -233,43 +246,110 @@ string?`, `null` meaning nothing could be transcribed), selected by
     `SIPSorcery.Media.AudioEncoder.DecodeAudio` and buffers the PCM - the
     hub itself only ever hands over RTP frames, so this sink is the one
     that knows how to turn them into samples.
-  - `WavEncoder` (pure logic, unit tested) writes a minimal canonical
-    16-bit PCM WAV header around the buffered samples.
+  - `SaveRecordingAsync` encodes the buffered PCM samples to Opus via
+    `Sip/OpusCodec.Encode` (pure logic, unit tested; also used to
+    decode `[[lines]].sound`/`[voicemail].greeting_sound` files in
+    `Shared/SoundFileResolver.cs` - see `docs/sound-files.md` for the
+    format it requires and how a misconfigured file degrades) before
+    writing the result under `recordings_dir` - so the file on disk is
+    already exactly what `delivery = "audio"` sends, with no separate
+    re-encode step at delivery time. `OpusCodec.Encode` runs with
+    `UseVBR = false`:
+    Concentus (like libopus) defaults to VBR, where `Bitrate` is only a
+    target the encoder can exceed on complex input, which would
+    undermine the size budget `AudioInlineDeliveryBackend` checks the
+    saved file against (see Blind spots below). Its `OpusOggWriteStream`
+    deliberately has no `using` - it isn't `IDisposable`; `Finish()` is
+    what pads the trailing frame, writes the end-of-stream page, and
+    flushes, and `leaveOpen` keeps the underlying `MemoryStream` readable
+    afterwards. `OpusCodec.Encode`'s `resamplerQuality` argument is
+    `[voicemail].opus_resampler_quality` (default 5, `VoicemailBudget.
+    OpusResamplerQuality` - Concentus rejects anything outside 0-10, and
+    `ConfigLoader` checks that at startup too); `OpusOggWriteStream` only
+    consults it to build a resampler for when its own input and encoder
+    sample rates differ, which they never do here (`Encode` always passes
+    the same `sampleRate` for both), so today this setting has no
+    observable effect - it's exposed anyway per #21, for whenever that
+    changes.
+  - `ResolveRecordingFilename` builds the saved file's name from
+    `[voicemail].recording_filename` (default `{timestamp}-{caller}.opus`)
+    by substituting `{timestamp}` (`yyyyMMdd-HHmmss`, matching
+    `[logging].run_file`'s own templating convention in `Program.cs`),
+    `{caller}` (`Call.CallerNumber`, already normalized to digits by
+    `PhoneNumberNormalizer` - see `caller-allowlist.md` - so it's always
+    a filesystem-safe path segment even though it's attacker-controlled
+    From-header data), and `{call_id}` (`Call.CallId`, a `Guid` - not a
+    phone number, but useful if you'd rather the caller's number not
+    appear in filenames). A template that includes neither `{timestamp}`
+    nor `{call_id}` would let concurrent calls silently overwrite each
+    other's recording, and a rooted template or one containing a `..`
+    segment could write outside `recordings_dir` entirely, so
+    `Config/ConfigLoader.cs` rejects all three at startup (see below).
+    `SaveRecordingAsync` resolves the full path (`recordings_dir` + the
+    templated filename) before creating its directory, so a template
+    with a path separator in it (e.g. `{caller}/{timestamp}.opus`, to
+    group recordings per caller) still works - it's only a rooted path
+    or a `..` segment that's rejected, not subdirectories in general.
   - `TryHandleAsync` always returns `true`: `CallHub`'s own `finally`
     calls `Call.HangupAsync` unconditionally once a sink is done, so this
     sink doesn't hang up the SIP call itself and doesn't need a `finally`
     of its own to guarantee that happens even if `RunVoicemailAsync`
-    throws. `RunVoicemailAsync` only ever writes the WAV and calls
-    `VoicemailSender.Enqueue` - it has no Nostr.Sdk dependency at all, so
-    nothing in the call-handling path blocks on relay connectivity or a
-    publish.
-  - `[voicemail].ring_timeout_seconds` / `max_recording_seconds` are
-    validated (`> 0`) in `Config/ConfigLoader.cs` at startup, alongside
-    the rest of config loading - an unchecked bad value would otherwise
-    surface deep inside `Task.Delay` as every call being silently routed
-    to voicemail with a misleading "signaling failed" log line.
-    `max_recording_seconds` is also rejected there if it exceeds
-    `Shared/VoicemailBudget.cs`'s `MaxRecordingSeconds` - a value that
-    reliably fits a NIP-17 DM with headroom to spare (see Blind spots
-    below) - so a value that can never be delivered fails at startup
-    rather than only after a caller has already left an undeliverable
-    message. `VoicemailSender.LoadAudioAsync` separately checks the
-    *actual* encoded size against `VoicemailBudget.MaxAudioBytes` before
-    every send, since `MaxRecordingSeconds` is a heuristic ceiling on the
-    configured value, not a guarantee about what any given recording
-    encodes to.
+    throws. `RunVoicemailAsync` only ever writes the Opus recording
+    and calls `VoicemailSender.Enqueue` - it has no Nostr.Sdk dependency
+    at all, so nothing in the call-handling path blocks on relay
+    connectivity or a publish.
+  - `[voicemail].ring_timeout_seconds` / `max_recording_seconds` /
+    `max_text_recording_seconds` are validated (`> 0`) in
+    `Config/ConfigLoader.cs` at startup, alongside the rest of config
+    loading - an unchecked bad value would otherwise surface deep inside
+    `Task.Delay` as every call being silently routed to voicemail with a
+    misleading "signaling failed" log line.
+    `max_recording_seconds` is also rejected there if it exceeds the
+    ceiling for the configured `delivery` mode: `Shared/VoicemailBudget.cs`'s
+    `MaxRecordingSeconds` for `"audio"` - a fixed value, not configurable,
+    that reliably fits a NIP-17 DM with headroom to spare (see Blind spots
+    below) - or the configured `max_text_recording_seconds` (default
+    `VoicemailBudget.MaxTextRecordingSeconds`, 600s; itself capped at
+    `VoicemailBudget.MaxTextRecordingSecondsCeiling`, 3600s, so raising
+    this sanity limit can't itself become unbounded) for `"text"` - so a
+    value that can never be delivered, or one that would let
+    `VoicemailSink` buffer more PCM in memory than intended, fails at
+    startup rather than only after a caller has already left a message.
+    `AudioInlineDeliveryBackend.BuildContentAsync` separately
+    checks the *actual* encoded size against `VoicemailBudget.MaxAudioBytes`
+    before every send, since `MaxRecordingSeconds` is a heuristic ceiling
+    on the configured value, not a guarantee about what any given
+    recording encodes to. `[voicemail].opus_resampler_quality` (default
+    `VoicemailBudget.OpusResamplerQuality`, 5) is validated against the
+    `0`-`10` range Concentus itself enforces (see the `VoicemailSink.cs`
+    bullet above) - checking it here means a bad value fails at startup,
+    not on the first voicemail encoded. `[voicemail].recording_filename`
+    is validated as: non-empty; containing `{timestamp}` or `{call_id}`
+    (case-insensitively); not rooted; and containing no `..` path
+    segment - the latter two because `SaveRecordingAsync` joins the
+    resolved filename straight onto `recordings_dir`, and a rooted value
+    would silently discard `recordings_dir` entirely (`Path.Combine`'s
+    documented behavior) while a `..` segment could escape it, so a
+    template can only ever name something under `recordings_dir`.
 - `Voicemail/VoicemailSender.cs`: one instance, constructed once in
   `Program.cs` and shared across every call for the life of the process -
   unlike `NostrSignalingClient`, which is scoped to a single call.
   - `Enqueue` takes a `Voicemail/SendJob.cs` - either a `MissedCallNoticeJob`
     (`CallerNumber`, `CallId`, no audio) or a `VoicemailAudioJob` (adds
-    `WavPath`, `SampleRate`, `DurationSeconds`) - and writes it to an
-    unbounded `System.Threading.Channels.Channel<SendJob>`, returning
+    `OpusPath`, `Samples`, `SampleRate`, `DurationSeconds` - both the saved
+    Opus file and the original recorded PCM, so each delivery backend
+    reads whichever it actually needs; `VoicemailSink` only populates
+    `Samples` when the configured backend's `IVoicemailDeliveryBackend.RequiresPcm`
+    says so (`true` for `TranscribedTextDeliveryBackend`, `false` for
+    `AudioInlineDeliveryBackend`, which never reads it and would
+    otherwise carry the full recording in memory for every "audio" job
+    unread) - and writes it to an unbounded `System.Threading.Channels.Channel<SendJob>`, returning
     immediately. It's a plain in-memory queue (multiple calls can enqueue
     concurrently - `Channel` is built for that), not a persistent one, so
     anything still queued at process shutdown is logged as undelivered;
-    a `VoicemailAudioJob`'s WAV is safely already on disk regardless, but
-    a dropped `MissedCallNoticeJob` has nothing else backing it up.
+    a `VoicemailAudioJob`'s Opus recording is safely already on disk
+    regardless, but a dropped `MissedCallNoticeJob` has nothing else
+    backing it up.
   - The worker loop (`RunAsync`, started from the constructor) blocks on
     `Channel.Reader.WaitToReadAsync` while the queue is empty - no relay
     connection, no timer. On the first item it drains everything
@@ -287,36 +367,24 @@ string?`, `null` meaning nothing could be transcribed), selected by
     dropping every job enqueued afterwards despite each still being
     logged as "queued". A batch that fails this way is not retried
     automatically - only the worker itself survives, ready for the next
-    `Enqueue` - though a `VoicemailAudioJob`'s WAV stays safe on disk
-    regardless; a `MissedCallNoticeJob` has nothing else backing it up.
+    `Enqueue` - though a `VoicemailAudioJob`'s Opus recording stays
+    safe on disk regardless; a `MissedCallNoticeJob` has nothing else
+    backing it up.
   - `BuildMissedCallNoticeContent` builds a short plain-text DM naming
     `CallerNumber`; no encoding, no size check needed - it's well under
     any NIP-17 budget.
-  - Per `VoicemailAudioJob`: re-encodes to Opus/OGG entirely in-process via
-    `Concentus` (a pure C# port of libopus) and `Concentus.Oggfile`
-    (writes the Ogg container - `OpusOggWriteStream` - around the
-    encoded packets) - no WAV fallback if encoding fails (see Blind
-    spots: raw WAV can never fit the budget, so a fallback could only
-    ever fail later instead of failing here with a clear reason). The
-    encoder runs with `UseVBR = false`: Concentus (like libopus)
-    defaults to VBR, where `Bitrate` is only a target the encoder can
-    exceed on complex input, which would undermine the size budget
-    below. `WavEncoder`'s header is a fixed, known 44 bytes, exposed as
-    `WavEncoder.HeaderLength` and consumed by a matching
-    `WavEncoder.Decode`, so the PCM samples are read back through a
-    tested round-trip rather than a magic-number reinterpret.
-    Deliberately not `ffmpeg`/any external process - this keeps the
-    whole feature working in a self-contained single-file binary with
-    nothing to install on the host, and there's no intermediate `.ogg`
-    file on disk at all (`OpusOggWriteStream` writes straight into a
-    `MemoryStream`). `OpusOggWriteStream` deliberately has no `using` -
-    it isn't `IDisposable`; its `Finish()` is what pads the trailing
-    frame, writes the end-of-stream page, and flushes, and `leaveOpen`
-    keeps the `MemoryStream` readable afterwards. The encoded size is
-    checked against
-    `VoicemailBudget.MaxAudioBytes` before anything is sent - see Blind
-    spots below - throwing rather than attempting a send that can only
-    fail deep inside NIP-44 encryption or at the relay. Then
+  - Per `VoicemailAudioJob`: delegates to the configured
+    `IVoicemailDeliveryBackend` (see Delivery backends above) rather than
+    encoding anything itself - the recording is already Opus on disk
+    by the time `VoicemailSender` ever sees the job (`Sinks/VoicemailSink.cs`
+    encodes it at record time; deliberately not `ffmpeg`/any external
+    process, keeping the whole feature working in a self-contained
+    single-file binary with nothing to install on the host).
+    `AudioInlineDeliveryBackend.BuildContentAsync` checks the file's
+    actual size against `VoicemailBudget.MaxAudioBytes` before anything
+    is sent - see Blind spots below - throwing rather than attempting a
+    send that can only fail deep inside NIP-44 encryption or at the
+    relay. Then `VoicemailSender`
     calls `Client.SendPrivateMsgTo(relayUrls, ...)` - NIP-17: rumor,
     seal, gift wrap, and publish all handled by `Nostr.Sdk` - targeting
     exactly the relay set (`[voicemail].dm_relays`, or `[nostr].relays`
@@ -331,9 +399,9 @@ string?`, `null` meaning nothing could be transcribed), selected by
     helper, also used by `NostrSignalingClient.PublishAsync`) - a relay
     can reject an event with `OK: false` without the publish call itself
     throwing, so this is the only way to actually detect it. A failure
-    for one job in a batch is caught and logged per-job (the WAV path is
-    included for a `VoicemailAudioJob`); it doesn't stop the rest of the
-    batch from being attempted.
+    for one job in a batch is caught and logged per-job (the Opus
+    path is included for a `VoicemailAudioJob`); it doesn't stop the rest
+    of the batch from being attempted.
 
 ## Blind spots
 
@@ -365,12 +433,12 @@ string?`, `null` meaning nothing could be transcribed), selected by
     ≈ 30,400   bytes of raw (pre-base64) encoded audio - MaxAudioBytes
     ```
     `Shared/VoicemailBudget.cs` holds this as `MaxAudioBytes` (30,400) -
-    the hard ceiling `VoicemailSender.LoadAudioAsync` checks the actual
-    encoded output against before every send. `MaxRecordingSeconds`,
+    the hard ceiling `AudioInlineDeliveryBackend.BuildContentAsync` checks
+    the actual encoded output against before every send. `MaxRecordingSeconds`,
     used for the shipped default and startup validation, is deliberately
     *not* `MaxAudioBytes / (bitrate / 8)`: that naive division assumes
-    the encoder produces exactly the target bitrate and ignores the Ogg
-    container itself. Verified empirically (a throwaway encode of a 30s
+    the encoder produces exactly the target bitrate and ignores the
+    container framing overhead itself. Verified empirically (a throwaway encode of a 30s
     tone at 8 kbps with VBR off): actual output ran ~1,050-1,060
     bytes/sec against a naive estimate of 1,000 - a 30s recording came
     out to ~31.8 KB, over budget despite "fitting" the naive math. 10%
@@ -390,28 +458,28 @@ string?`, `null` meaning nothing could be transcribed), selected by
     upload path (data URI → uploaded file + `imeta`/`url` tag) to remove
     the cap entirely - the latter is the actual fix; this budget is a
     ceiling this architecture can't grow past.
-- **No WAV fallback if Opus encoding fails.** An earlier version fell
-  back to sending the raw WAV when `EncodeOpusOgg` threw, but that
-  fallback could never actually succeed for a real voicemail: 8kHz
-  16-bit mono WAV runs 16,000 bytes/sec, so `MaxAudioBytes` (30,400)
-  only fits a 1.0-1.9s WAV, and recordings under 1.0s are already
-  dropped before encoding is ever attempted (`VoicemailSink.RunVoicemailAsync`).
-  The fallback was therefore dead weight that just moved the failure
-  later (an opaque error inside `SendPrivateMsgTo`) instead of avoiding
-  it. `LoadAudioAsync` now throws directly on an encoding failure - the
-  recording stays on disk, undelivered, same as any other send failure.
+- **No fallback if Opus encoding fails when a recording is saved.**
+  The recording is encoded to Opus at record time
+  (`VoicemailSink.SaveRecordingAsync`, via `Sip/OpusCodec.Encode`), so
+  an encoding failure there means nothing is saved to disk at all, not
+  just undelivered - `RunVoicemailAsync` throws, and
+  `VoicemailSink.TryHandleAsync`'s own catch sends a `MissedCallNoticeJob`
+  instead (see Flow step 8). A genuine encoding failure is not expected
+  in normal operation (no I/O, no external process - see DTX below for
+  the one known throw path, which is deliberately never triggered), but
+  when it happens it costs the recording itself, not just the send.
 - **DTX (encoder silence-dropping) is not available, so the size problem
   above can't currently be helped by compressing the silence out of a
-  recording.** `Concentus.Oggfile`'s `OpusOggWriteStream` - the Ogg
-  container writer `VoicemailSender` uses - unconditionally rejects a
-  DTX-enabled encoder at construction (`ArgumentException("DTX is not
-  currently supported in Ogg streams")`, confirmed by reading its
+  recording.** `Concentus.Oggfile`'s `OpusOggWriteStream` - the
+  container writer `Sip/OpusCodec.Encode` uses - unconditionally
+  rejects a DTX-enabled encoder at construction (`ArgumentException("DTX
+  is not currently supported in Ogg streams")`, confirmed by reading its
   source). Enabling `IOpusEncoder.UseDTX` would make every encode throw,
-  and with no WAV fallback (see above) that means nothing gets sent at
-  all - the opposite of the goal - so it's deliberately left off.
-  Revisiting this needs either a different (DTX-aware) Ogg writer or
-  hand-rolling the Ogg container framing to tolerate the
-  granule-position gaps DTX produces.
+  and with no fallback if that happens (see above) that means the
+  recording is lost, not just undelivered - the opposite of the goal -
+  so it's deliberately left off. Revisiting this needs either a
+  different (DTX-aware) container writer or hand-rolling the container
+  framing to tolerate the granule-position gaps DTX produces.
 - **No silence/VAD trimming or beep tone.** Recording starts immediately
   after the greeting/tone finishes and runs for the full
   `max_recording_seconds` (or until hangup) regardless of whether the
@@ -423,10 +491,11 @@ string?`, `null` meaning nothing could be transcribed), selected by
   SIP/RTP path per `receiving-calls.md`.
 - **The send queue is in-memory only, not persisted across restarts.** A
   voicemail recorded and enqueued but not yet sent when the process is
-  stopped is lost from the queue (though its WAV file on disk is not -
-  it just won't be retried automatically; resending it would need to be
-  done by hand, there's no "scan `recordings_dir` for orphaned WAVs on
-  startup" logic). For a personal single-line deployment where the
+  stopped is lost from the queue (though its Opus file on disk is
+  not - it just won't be retried automatically; resending it would need
+  to be done by hand, there's no "scan `recordings_dir` for orphaned
+  recordings on startup" logic). For a personal single-line deployment
+  where the
   process runs continuously, this is a minor gap; it would matter more
   under frequent restarts or heavy call volume.
 - **No accuracy floor on transcription.** Whisper (like any STT model)

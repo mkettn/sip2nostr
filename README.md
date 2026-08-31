@@ -145,7 +145,8 @@ uri = "sip:+4989123456@sip.your-provider.de"
 label = "main"
 # Optional: when [nostr].enabled is false, answer calls on this line and
 # play this file on loop to test SIP audio. Raw 8 kHz 16-bit PCM works
-# directly; other formats require ffmpeg to be installed for conversion.
+# directly; mono Opus (.opus) is decoded in-process - see
+# docs/sound-files.md for exactly what's supported and how to convert a file.
 # sound = "sounds/test.opus"
 
 [[lines]]
@@ -182,20 +183,27 @@ Opt-in (`[voicemail].enabled = false` by default). When enabled, if
 `target_npub` doesn't answer a call over Nostr within
 `[voicemail].ring_timeout_seconds`, the call diverts to a local greeting
 (or a short tone if `greeting_sound` isn't configured) followed by a
-recording of up to `max_recording_seconds`, saved locally under
-`[voicemail].recordings_dir` and the SIP call hung up immediately —
-encoding and delivery happen off the call's critical path, handed to a
+recording of up to `max_recording_seconds`, encoded and saved locally as
+Opus (in-process via `Concentus` — pure C#, no external program
+required) under `[voicemail].recordings_dir`, named per
+`[voicemail].recording_filename` (a template with `{timestamp}`,
+`{caller}`, and `{call_id}` placeholders — defaults to
+`{timestamp}-{caller}.opus`), and the SIP call hung up immediately —
+delivery happens off the call's critical path, handed to a
 background worker (`Voicemail/VoicemailSender.cs`, one instance shared
 for the process lifetime) that connects to `[voicemail].dm_relays` (or
 `[nostr].relays` as a fallback — a NIP-17 DM inbox, kind:10050, can
 legitimately differ from the relays used for call signaling) only when
 something's queued, sends it as a Nostr direct message, then disconnects.
 How the recording turns into DM content is pluggable via
-`[voicemail].delivery`: `"audio"` (default) re-encodes it as Opus/OGG
-in-process via `Concentus` — pure C#, no external program required — and
-inlines it; `"text"` transcribes it offline via Whisper.net and sends the
-transcript instead, no relay-side or third-party involvement needed for
-the transcription itself (just a local GGML model file). Exactly one DM
+`[voicemail].delivery`: `"audio"` (default) inlines the already-encoded
+Opus recording directly, so `max_recording_seconds` is capped by
+what reliably fits a NIP-17 DM (27s by default); `"text"` transcribes it
+offline via Whisper.net and sends the transcript instead, no relay-side
+or third-party involvement needed for the transcription itself (just a
+local GGML model file), so it's instead capped by the separately
+configurable `[voicemail].max_text_recording_seconds` (default 600s, a
+memory-use sanity limit rather than a DM size budget). Exactly one DM
 per missed call: the recording, or - if the caller hung up before
 anything worth sending was captured - a plain-text missed-call notice
 naming the caller. Recordings on disk don't depend on delivery
