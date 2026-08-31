@@ -7,38 +7,51 @@ and `[voicemail].greeting_sound` (the voicemail greeting,
 dependency (see issue #17): there's no `ffmpeg` or any other converter
 running in the background, so a configured sound file has to already be
 in one of the formats sip2nostr can read itself. **Not every file with a
-`.ogg` extension qualifies** - see "The most common mistake" below.
+`.ogg` extension qualifies** - see "The most common mistake" below - so
+**use a `.opus` extension for Ogg/Opus files**, not `.ogg`.
 
 ## Supported formats
 
 | Format | Extension | How it's used |
 |---|---|---|
 | Raw 16-bit PCM, 8 kHz, mono | `.pcm`, `.raw`, `.s16le` | Used directly, no decoding at all |
-| Ogg Opus, mono | `.ogg`, `.opus` | Decoded in-process (`Sip/OggOpusCodec.cs`), then cached as raw PCM under `/tmp/sip2nostr/sounds/` |
+| Ogg Opus, mono | `.opus` (`.ogg` also accepted - see below) | Decoded in-process (`Sip/OggOpusCodec.cs`), then cached as raw PCM under `/tmp/sip2nostr/sounds/` |
 
 Nothing else is supported - not WAV, not MP3, not AAC, and critically
-**not Ogg Vorbis** (see below). If a configured file doesn't match one of
-the two rows above, it's treated as a decode failure (see "What happens
-if a file can't be used" below).
+**not Ogg Vorbis** (see below). This isn't a technical limit so much as a
+deliberate one: #17 removed `ffmpeg` specifically to get rid of sip2nostr's
+one external-process dependency, and decoding Opus reuses `Concentus`,
+already a project dependency for encoding voicemail recordings. Vorbis is
+a different codec entirely - supporting it would mean adding a second,
+separate decoder library for what's normally a couple of small,
+operator-authored clips you fully control. If a configured file doesn't
+match one of the two rows above, it's treated as a decode failure (see
+"What happens if a file can't be used" below).
 
 ## The most common mistake: `.ogg` doesn't mean Opus
 
-`.ogg` is a *container* extension, not a codec name. Historically it's
-associated with Vorbis, and plenty of tools (including many "convert to
-ogg" presets) still produce Ogg Vorbis, Ogg FLAC, or other codecs inside
-an `.ogg` file - none of which sip2nostr can decode. `Sip/OggOpusCodec.cs`
-only understands Opus-in-Ogg (it's built on Concentus, an Opus-only
-library), and a `.ogg` file with a different codec inside it is not a
-recoverable situation the way a wrong sample rate or channel count would
-be - it fails to decode outright.
+`.ogg` is a *container* extension, not a codec name, and sip2nostr
+accepts it purely for convenience - it doesn't treat `.ogg` and `.opus`
+any differently, both go through the same Opus-only decode. The
+difference is what the extension communicates to *you*: `.ogg` is
+historically the Vorbis extension, and plenty of tools (including many
+"convert to ogg" presets) still produce Ogg Vorbis, Ogg FLAC, or other
+codecs inside an `.ogg` file - none of which sip2nostr can decode.
+`.opus`, by contrast, is specifically reserved for Ogg-Opus files (RFC
+7845) - naming a file `.opus` is a claim about what's actually inside it,
+where `.ogg` is not. **Always use `.opus` for files you intend sip2nostr
+to decode as Opus**; `Sip/OggOpusCodec.cs` only understands Opus-in-Ogg,
+and a file with a different codec inside it - whatever its extension - is
+not a recoverable situation the way a wrong sample rate or channel count
+would be, it fails to decode outright.
 
 **Check what's actually in the file before configuring it:**
 
 ```
-$ file greeting.ogg
-greeting.ogg: Ogg data, Opus audio, mono, 48000 Hz    # good - this works
-greeting.ogg: Ogg data, Vorbis audio, stereo, 44100 Hz # bad - this doesn't
-greeting.ogg: Ogg data, FLAC audio                     # also bad
+$ file greeting.opus
+greeting.opus: Ogg data, Opus audio, mono, 48000 Hz    # good - this works
+greeting.opus: Ogg data, Vorbis audio, stereo, 44100 Hz # bad - this doesn't
+greeting.opus: Ogg data, FLAC audio                     # also bad
 ```
 
 (`ogginfo`/`opusinfo`, from the `vorbis-tools`/`opus-tools` packages, give
@@ -55,10 +68,10 @@ actually tested):
 
 ```
 # via ffmpeg
-$ ffmpeg -i greeting.wav -ac 1 -c:a libopus greeting.ogg
+$ ffmpeg -i greeting.wav -ac 1 -c:a libopus greeting.opus
 
 # via opus-tools' opusenc (explicit about downmixing)
-$ opusenc --downmix-mono greeting.wav greeting.ogg
+$ opusenc --downmix-mono greeting.wav greeting.opus
 ```
 
 `-ac 1` / `--downmix-mono` forces mono - stereo Opus does decode without
@@ -78,7 +91,7 @@ $ ffmpeg -i greeting.wav -ac 1 -ar 8000 -f s16le greeting.pcm
 
 ## What happens if a file can't be used
 
-A file that doesn't exist, isn't `.pcm`/`.raw`/`.s16le`/`.ogg`/`.opus`, or
+A file that doesn't exist, isn't `.pcm`/`.raw`/`.s16le`/`.opus`/`.ogg`, or
 fails to decode (wrong codec, corrupt, etc.) is **not a startup error** -
 `SoundFileResolver.Resolve` logs a `Warning` and returns `null`, and the
 caller falls back to a short sine-wave tone instead (see #26 on making
@@ -111,10 +124,10 @@ for one of:
 [[lines]]
 uri = "sip:+4989123456@sip.your-provider.de"
 label = "main"
-sound = "sounds/test.ogg"          # relative to the config file unless rooted
+sound = "sounds/test.opus"          # relative to the config file unless rooted
 
 [voicemail]
-greeting_sound = "sounds/greeting.ogg"
+greeting_sound = "sounds/greeting.opus"
 ```
 
 See `config.example.toml` for the full annotated example.
