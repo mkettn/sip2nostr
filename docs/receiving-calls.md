@@ -134,7 +134,9 @@ something is actually ready to take the call.
    itself by returning — `NosCallSink` does exactly that when the Nostr
    side hangs up (see `docs/propagating-to-nostr.md`). `Call.HangupAsync`
    sends `BYE` for an answered call and rejects the pending `INVITE` with
-   `480 Temporarily Unavailable` for one that was never answered — a local
+   `480 Temporarily Unavailable` for one that was never answered — except
+   after a `MAX_RING_TIME` expiry, where the transaction has no final
+   response but can no longer take one either — a local
    shutdown still closes the session without sending `BYE` itself (see
    Blind Spots).
 

@@ -349,10 +349,22 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
                 // ua.Hangup() only sends BYE for an established dialogue, so
                 // a call nothing ever answered has to be turned down on its
                 // still-pending INVITE transaction instead - otherwise the
-                // caller keeps ringing until the provider gives up.
+                // caller keeps ringing until the provider gives up. A
+                // caller's CANCEL isn't that case: sipsorcery answers it
+                // with 487, which IsUASAnswered already covers. An expired
+                // transaction is - it has no final response but can't take
+                // one either, and rejecting it re-registers the dead
+                // transaction with the transport to retransmit a 480 at a
+                // caller who left minutes ago.
                 if (uas.IsUASAnswered)
                 {
                     ua.Hangup();
+                }
+                else if (uas.ClientTransaction.HasTimedOut)
+                {
+                    logger.Information(
+                        "Call {CallId}'s INVITE transaction already timed out; nothing left to turn down.",
+                        callId);
                 }
                 else
                 {
