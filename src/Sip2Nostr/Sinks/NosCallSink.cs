@@ -105,6 +105,18 @@ public sealed class NosCallSink(
                     "Stopped waiting for a WebRTC SDP answer for call {CallId} because shutdown was requested.",
                     call.CallId);
                 StopBridging();
+
+                // Same reasoning as the two decision paths below: without
+                // this, a restart leaves NosCall believing a call it was
+                // never told about is still ringing. Best-effort like the
+                // others - the relay connection this call already opened
+                // is still live at this point, nothing has torn it down
+                // yet, even though ct itself is now cancelled.
+                if (!calleeHangup.IsCompleted)
+                {
+                    await SendHangupSafeAsync(signaling, call.CallId, "sip2nostr shutting down");
+                }
+
                 pc.close();
                 return true;
             }
@@ -122,7 +134,11 @@ public sealed class NosCallSink(
                 // "busy" with an abandoned one.
                 if (!calleeHangup.IsCompleted)
                 {
-                    await SendHangupSafeAsync(signaling, call.CallId, "caller hung up before answering");
+                    // Covers both a caller CANCEL/BYE and sipsorcery's own
+                    // MAX_RING_TIME expiry - Call.WhenRemoteHungUp doesn't
+                    // distinguish them, and unlike the former, the latter
+                    // doesn't actually mean the caller hung up.
+                    await SendHangupSafeAsync(signaling, call.CallId, "call ended before it could be answered");
                 }
 
                 pc.close();

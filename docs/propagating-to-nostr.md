@@ -102,7 +102,18 @@ both, at both stages of a call:
   the callee's device the call is over, so it's left ringing at an empty
   line. Skipped if the callee had already ended it their own way at
   essentially the same moment, so as not to send a pointless hangup for a
-  call NosCall already knows is done.
+  call NosCall already knows is done. `Call.WhenRemoteHungUp` completing
+  doesn't distinguish a caller `CANCEL`/`BYE` from sipsorcery's own
+  `MAX_RING_TIME` expiry, so the reason string sent is deliberately
+  neutral ("call ended before it could be answered") rather than claiming
+  the caller hung up, which wouldn't be true of the latter.
+- **Local shutdown, while the callee's device is still ringing:** the same
+  hangup goes out, best-effort, for the same reason - otherwise a restart
+  leaves NosCall believing an abandoned call is still live. The relay
+  connection this call already opened is still up at this point even
+  though the shutdown `CancellationToken` is now cancelled, so the publish
+  attempt has a real chance of landing; if it doesn't, `SendHangupSafeAsync`
+  already logs and swallows the failure like every other caller of it.
 - **Once audio is bridged:** a `hangup` tears the bridge down and returns,
   which is what makes `CallHub`'s own `finally` hang the SIP leg up with a
   `BYE`. Without this the caller is left on a silent, still-connected
