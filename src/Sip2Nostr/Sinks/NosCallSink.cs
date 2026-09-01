@@ -16,7 +16,9 @@ namespace Sip2Nostr.Sinks;
 // ringing for that sink to answer; if unset, rings until the caller hangs
 // up. A hangup from the callee ends the call at either stage - declining
 // straight away if it arrives while their device is still ringing, ending
-// the SIP leg if it arrives mid-call.
+// the SIP leg if it arrives mid-call. The caller giving up first is
+// handled symmetrically: a Nostr hangup goes out so the callee's device
+// stops ringing too, the same as an explicit ring-timeout decline.
 public sealed class NosCallSink(
     NostrConfig nostrConfig,
     WebRtcConfig webRtcConfig,
@@ -111,6 +113,18 @@ public sealed class NosCallSink(
             {
                 logger.Information("Call {CallId} ended before a WebRTC SDP answer arrived.", call.CallId);
                 StopBridging();
+
+                // Only when the callee hasn't already ended it their own
+                // way - otherwise this is the mirror of the ring-timeout
+                // case below: without it, NosCall is left believing the
+                // call is still ringing (nothing else ever tells it
+                // otherwise), so the next call in can find NosCall already
+                // "busy" with an abandoned one.
+                if (!calleeHangup.IsCompleted)
+                {
+                    await SendHangupSafeAsync(signaling, call.CallId, "caller hung up before answering");
+                }
+
                 pc.close();
                 return true;
             }

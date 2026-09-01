@@ -96,6 +96,13 @@ both, at both stages of a call:
   declined call reaches `VoicemailSink` (or ends) straight away. sip2nostr
   doesn't send its own `hangup` back in that case — a device that just
   hung up doesn't need telling to stop ringing.
+- **The caller gives up first, while the callee's device is still
+  ringing:** sip2nostr sends its own `hangup`, the mirror of the
+  ring-timeout case (`docs/voicemail.md`) — without it, nothing ever tells
+  the callee's device the call is over, so it's left ringing at an empty
+  line. Skipped if the callee had already ended it their own way at
+  essentially the same moment, so as not to send a pointless hangup for a
+  call NosCall already knows is done.
 - **Once audio is bridged:** a `hangup` tears the bridge down and returns,
   which is what makes `CallHub`'s own `finally` hang the SIP leg up with a
   `BYE`. Without this the caller is left on a silent, still-connected
