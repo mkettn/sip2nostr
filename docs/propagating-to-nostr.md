@@ -108,16 +108,45 @@ both, at both stages of a call:
   neutral ("call ended before it could be answered") rather than claiming
   the caller hung up, which wouldn't be true of the latter.
 - **Local shutdown, while the callee's device is still ringing:** the same
-  hangup goes out, best-effort, for the same reason - otherwise a restart
-  leaves NosCall believing an abandoned call is still live. The relay
-  connection this call already opened is still up at this point even
-  though the shutdown `CancellationToken` is now cancelled, so the publish
-  attempt has a real chance of landing; if it doesn't, `SendHangupSafeAsync`
-  already logs and swallows the failure like every other caller of it.
-- **Once audio is bridged:** a `hangup` tears the bridge down and returns,
-  which is what makes `CallHub`'s own `finally` hang the SIP leg up with a
-  `BYE`. Without this the caller is left on a silent, still-connected
-  call.
+  hangup goes out, best-effort, for the same reason — otherwise a restart
+  leaves NosCall believing an abandoned call is still live. What decides
+  whether this lands isn't the relay connection (open regardless at this
+  point) but whether the publish gets to finish before the process exits —
+  see "Cancellation without a join" below for how that's bounded.
+- **Once audio is bridged, and the callee ends it:** a `hangup` tears the
+  bridge down and returns, which is what makes `CallHub`'s own `finally`
+  hang the SIP leg up with a `BYE`. Without this the caller is left on a
+  silent, still-connected call.
+- **Once audio is bridged, and the caller ends it:** the same hangup goes
+  out to NosCall, guarded the same way as every other case here. This was
+  the one remaining direction that stayed silent — relying on NosCall to
+  notice its `RTCPeerConnection` close on its own, the same assumption the
+  blind spots below decline to make in reverse.
+
+## Cancellation without a join
+
+Sending a hangup is only as reliable as the time it's given to run.
+`SipCallSource.HandleIncomingCall` discards the task for each inbound call
+(`_ = HandleIncomingCallSafeAsync(...)`) — necessarily, since a SIP event
+handler has to return promptly — and nothing downstream re-joins it:
+`AcceptAndRouteCallAsync` awaits `OnIncomingCall`'s handlers properly,
+which is `CallHub.HandleAsync`, which awaits each sink in turn. So the
+whole call, from ringing through whichever sink handles it through this
+sink's own shutdown-path hangup, hangs off that one discarded task -
+`Program.cs`'s `cts.Cancel()` tells it to stop via the shared
+`CancellationToken`, then proceeds straight to tearing down `source` and
+`voicemailSender` and flushing the log, whether or not that task has
+actually finished.
+
+`CallHub.DrainAsync(TimeSpan grace)` closes that gap: `Attach` now tracks
+every `HandleAsync` task it starts in a `ConcurrentDictionary`, and
+`Program.cs` calls `DrainAsync` right after its own shutdown `Task.Delay`
+returns - before `source`/`voicemailSender` are disposed, before the log
+is flushed - so an in-flight call gets up to `grace` (5s) to finish
+publishing its hangup, or a `VoicemailSink` recording gets a chance to
+finish saving, before the resources it depends on go away underneath it.
+A no-op when nothing's in flight, which is the common case for a shutdown
+that isn't racing an active call.
 
 The wrap/unwrap logic was first verified locally with a round-trip test
 (two throwaway keypairs, no network): build and sign an offer as the

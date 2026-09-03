@@ -109,9 +109,10 @@ public sealed class NosCallSink(
                 // Same reasoning as the two decision paths below: without
                 // this, a restart leaves NosCall believing a call it was
                 // never told about is still ringing. Best-effort like the
-                // others - the relay connection this call already opened
-                // is still live at this point, nothing has torn it down
-                // yet, even though ct itself is now cancelled.
+                // others - what makes this land isn't the relay
+                // connection (still open here regardless) but whether the
+                // publish gets to finish before the process exits, which
+                // is CallHub.DrainAsync's job, not this method's.
                 if (!calleeHangup.IsCompleted)
                 {
                     await SendHangupSafeAsync(signaling, call.CallId, "sip2nostr shutting down");
@@ -226,6 +227,17 @@ public sealed class NosCallSink(
         else
         {
             logger.Information("Call {CallId} ended; closing WebRTC session.", call.CallId);
+
+            // The caller ending a live, bridged call is the one hangup
+            // direction that was still silent: every ringing-stage exit
+            // notifies NosCall, but this one relied on it noticing the
+            // peer connection close on its own - the same assumption
+            // docs/propagating-to-nostr.md's blind spots declines to make
+            // in the other direction. Guarded the same way as the rest.
+            if (!calleeHangup.IsCompleted)
+            {
+                await SendHangupSafeAsync(signaling, call.CallId, "caller hung up");
+            }
         }
 
         StopBridging();
@@ -240,8 +252,13 @@ public sealed class NosCallSink(
     {
         try
         {
-            logger.Information("Sending WebRTC call hangup over Nostr for call {CallId} so the ringing device stops.", callId);
+            // Logged before and after, not just before: a shutdown that
+            // exits mid-publish leaves only the "attempting" line, which
+            // is the honest state of things rather than a claim the send
+            // succeeded.
+            logger.Information("Attempting to send WebRTC call hangup over Nostr for call {CallId} so the ringing device stops.", callId);
             await signaling.SendHangupAsync(reason);
+            logger.Information("Sent WebRTC call hangup over Nostr for call {CallId}.", callId);
         }
         catch (Exception exception)
         {

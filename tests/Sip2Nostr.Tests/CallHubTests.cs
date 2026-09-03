@@ -55,6 +55,54 @@ public class CallHubTests
         Assert.Equal(1, call.Hangups);
     }
 
+    [Fact]
+    public async Task DrainAsyncReturnsImmediatelyWhenNothingIsInFlight()
+    {
+        var hub = new CallHub([], new LoggerConfiguration().CreateLogger());
+
+        var drain = hub.DrainAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(drain.IsCompleted);
+        await drain;
+    }
+
+    [Fact]
+    public async Task DrainAsyncWaitsForAnInFlightCallToFinish()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var call = new FakeCall();
+        var source = new FakeSource();
+        var hub = new CallHub([new GatedSink(gate.Task)], new LoggerConfiguration().CreateLogger());
+        hub.Attach(source, CancellationToken.None);
+
+        var routing = source.RaiseIncomingCallAsync(call.Call);
+        var drain = hub.DrainAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(drain.IsCompleted);
+        gate.SetResult();
+        await drain;
+        await routing;
+    }
+
+    [Fact]
+    public async Task DrainAsyncGivesUpAfterTheGracePeriod()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var call = new FakeCall();
+        var source = new FakeSource();
+        var hub = new CallHub([new GatedSink(gate.Task)], new LoggerConfiguration().CreateLogger());
+        hub.Attach(source, CancellationToken.None);
+
+        var routing = source.RaiseIncomingCallAsync(call.Call);
+        await hub.DrainAsync(TimeSpan.FromMilliseconds(20));
+
+        // DrainAsync gave up on its own grace period; the call underneath
+        // is still running regardless.
+        Assert.False(routing.IsCompleted);
+        gate.SetResult();
+        await routing;
+    }
+
     private static Task RouteAsync(FakeCall call, params ICallSink[] sinks)
     {
         var source = new FakeSource();
@@ -87,6 +135,15 @@ public class CallHubTests
     {
         public Task<bool> TryHandleAsync(Call call, CancellationToken ct) =>
             throw new InvalidOperationException("sink failed");
+    }
+
+    private sealed class GatedSink(Task gate) : ICallSink
+    {
+        public async Task<bool> TryHandleAsync(Call call, CancellationToken ct)
+        {
+            await gate;
+            return true;
+        }
     }
 
     private sealed class FakeCall

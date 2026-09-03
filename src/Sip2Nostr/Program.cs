@@ -167,6 +167,13 @@ try
     {
         // Shutting down.
     }
+
+    // Runs before source/voicemailSender are disposed below, and before
+    // the log flush in the outer finally, so a call that's mid-hangup or
+    // mid-recording when shutdown starts gets a real chance to finish
+    // rather than being cut off the instant cts.Cancel() fires - see
+    // CallHub.DrainAsync and docs/propagating-to-nostr.md.
+    await hub.DrainAsync(TimeSpan.FromSeconds(5));
 }
 catch (Exception exception)
 {
