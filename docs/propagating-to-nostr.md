@@ -70,10 +70,83 @@ additional handshake step before the incoming-call UI appears.
   event with the bridge's real keys, wraps it with a freshly generated
   ephemeral keypair via `NostrSigner.Nip44Encrypt`, and publishes the outer
   event via `Client.SendEvent`. The receive path mirrors this in reverse
-  and dispatches `answer`/`candidate` events to the waiting call.
+  and dispatches `answer`/`candidate`/`hangup`/`reject` events to the
+  waiting call, after checking the inner event's `call-id` tag against the
+  one this client was constructed with (the relay subscription filters on
+  the bridge's pubkey, not on a call, so a second overlapping call's
+  signaling would otherwise land here too - and a `hangup` for the wrong
+  call now tears down a live one). An event with no `call-id` tag at all is
+  still accepted: only a mismatch is evidence it belongs elsewhere.
 - `Sip/SipCallSource.cs` — mints one `Guid.NewGuid()` call-id per inbound
   call (`Call.CallId`). `Sinks/NosCallSink.cs` passes it into
   `NostrSignalingClient`.
+
+## Either side can end the call
+
+A call ends when either leg says so, and the two legs learn about it
+differently. The SIP leg's hangup arrives as a `BYE`/`CANCEL` and
+completes `Call.WhenRemoteHungUp` (see `docs/receiving-calls.md`). The
+Nostr leg's arrives as a NIP-AC `hangup` (or a `reject`, if the callee
+never answered) and completes `NostrSignalingClient.WhenCalleeHungUp` —
+nothing on the WebRTC leg itself is watched for it. `NosCallSink` races
+both, at both stages of a call:
+
+- **While the callee's device is ringing:** a `hangup`/`reject` declines the
+  call immediately rather than waiting out `ring_timeout_seconds`, so a
+  declined call reaches `VoicemailSink` (or ends) straight away. sip2nostr
+  doesn't send its own `hangup` back in that case — a device that just
+  hung up doesn't need telling to stop ringing.
+- **The caller gives up first, while the callee's device is still
+  ringing:** sip2nostr sends its own `hangup`, the mirror of the
+  ring-timeout case (`docs/voicemail.md`) — without it, nothing ever tells
+  the callee's device the call is over, so it's left ringing at an empty
+  line. Skipped if the callee had already ended it their own way at
+  essentially the same moment, so as not to send a pointless hangup for a
+  call NosCall already knows is done. `Call.WhenRemoteHungUp` completing
+  doesn't distinguish a caller `CANCEL`/`BYE` from sipsorcery's own
+  `MAX_RING_TIME` expiry, so the reason string sent is deliberately
+  neutral ("call ended before it could be answered") rather than claiming
+  the caller hung up, which wouldn't be true of the latter.
+- **Local shutdown, while the callee's device is still ringing:** the same
+  hangup goes out, best-effort, for the same reason — otherwise a restart
+  leaves NosCall believing an abandoned call is still live. What decides
+  whether this lands isn't the relay connection (open regardless at this
+  point) but whether the publish gets to finish before the process exits —
+  see "Cancellation without a join" below for how that's bounded.
+- **Once audio is bridged, and the callee ends it:** a `hangup` tears the
+  bridge down and returns, which is what makes `CallHub`'s own `finally`
+  hang the SIP leg up with a `BYE`. Without this the caller is left on a
+  silent, still-connected call.
+- **Once audio is bridged, and the caller ends it:** the same hangup goes
+  out to NosCall, guarded the same way as every other case here. This was
+  the one remaining direction that stayed silent — relying on NosCall to
+  notice its `RTCPeerConnection` close on its own, the same assumption the
+  blind spots below decline to make in reverse.
+
+## Cancellation without a join
+
+Sending a hangup is only as reliable as the time it's given to run.
+`SipCallSource.HandleIncomingCall` discards the task for each inbound call
+(`_ = HandleIncomingCallSafeAsync(...)`) — necessarily, since a SIP event
+handler has to return promptly — and nothing downstream re-joins it:
+`AcceptAndRouteCallAsync` awaits `OnIncomingCall`'s handlers properly,
+which is `CallHub.HandleAsync`, which awaits each sink in turn. So the
+whole call, from ringing through whichever sink handles it through this
+sink's own shutdown-path hangup, hangs off that one discarded task -
+`Program.cs`'s `cts.Cancel()` tells it to stop via the shared
+`CancellationToken`, then proceeds straight to tearing down `source` and
+`voicemailSender` and flushing the log, whether or not that task has
+actually finished.
+
+`CallHub.DrainAsync(TimeSpan grace)` closes that gap: `Attach` now tracks
+every `HandleAsync` task it starts in a `ConcurrentDictionary`, and
+`Program.cs` calls `DrainAsync` right after its own shutdown `Task.Delay`
+returns - before `source`/`voicemailSender` are disposed, before the log
+is flushed - so an in-flight call gets up to `grace` (5s) to finish
+publishing its hangup, or a `VoicemailSink` recording gets a chance to
+finish saving, before the resources it depends on go away underneath it.
+A no-op when nothing's in flight, which is the common case for a shutdown
+that isn't racing an active call.
 
 The wrap/unwrap logic was first verified locally with a round-trip test
 (two throwaway keypairs, no network): build and sign an offer as the
@@ -96,6 +169,14 @@ ways.
   clients ignoring their own echoed ICE/hangup events and only accepting
   self-addressed answer/reject in specific states. Not relevant to a
   single-instance bridge today, but worth knowing if that ever changes.
+  (Events not authored by `target_npub` are dropped regardless, so the
+  bridge's own echoed events are never acted on.)
+- **A callee that vanishes without signaling isn't noticed.** The
+  Nostr-side hangup is the only thing that ends a bridged call from that
+  side; `RTCPeerConnection` connection-state changes aren't watched, so a
+  NosCall that force-quits or loses the network mid-call leaves the caller
+  connected until they hang up themselves. Watching ICE state instead
+  would need care not to drop calls on a transient blip.
 - **No busy/reject signaling sent.** If sip2nostr is somehow mid-call
   already, it doesn't auto-reject a second offer the way NIP-AC recommends.
 - **No multi-device self-notification.** Not applicable — sip2nostr is a

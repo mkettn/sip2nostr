@@ -14,6 +14,7 @@ namespace Sip2Nostr.Signaling;
 public sealed class NostrSignalingClient : IAsyncDisposable
 {
     private const string AltText = "NIP-AC signaling";
+    private const string CallIdTagName = "call-id";
     private const string CallTypeVoice = "voice";
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
 
@@ -22,9 +23,18 @@ public sealed class NostrSignalingClient : IAsyncDisposable
     private readonly List<RelayUrl> _relays;
     private readonly string _callId;
     private readonly ILogger _logger;
+    private readonly TaskCompletionSource<string> _calleeHangup = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Client? _client;
     private TaskCompletionSource<string>? _pendingAnswer;
     private Action<IceCandidatePayload>? _onIceCandidate;
+
+    // Completes with the reason string when target_npub ends the call from
+    // its side - a NIP-AC hangup, or a reject if it never answered. The
+    // callee hanging up is the only signal the SIP leg gets that the call
+    // is over: nothing on the WebRTC leg is watched for it, so without
+    // this the caller would sit on a dead call until they hang up
+    // themselves.
+    public Task<string> WhenCalleeHungUp => _calleeHangup.Task;
 
     public NostrSignalingClient(NostrConfig config, string callId, ILogger logger)
     {
@@ -117,7 +127,7 @@ public sealed class NostrSignalingClient : IAsyncDisposable
         var tags = new List<Tag>
         {
             Tag.PublicKey(_targetPubkey),
-            Tag.Parse(["call-id", _callId]),
+            Tag.Parse([CallIdTagName, _callId]),
             Tag.Parse(["alt", AltText]),
         };
         if (extraTags is not null)
@@ -164,6 +174,11 @@ public sealed class NostrSignalingClient : IAsyncDisposable
             return;
         }
 
+        if (!IsForThisCall(innerEvent))
+        {
+            return;
+        }
+
         var kind = innerEvent.Kind().AsU16();
         var content = innerEvent.Content();
 
@@ -179,6 +194,23 @@ public sealed class NostrSignalingClient : IAsyncDisposable
                 _onIceCandidate?.Invoke(candidate);
             }
         }
+        else if (kind is CallSignalKinds.Hangup or CallSignalKinds.Reject)
+        {
+            // Both mean the same thing to a bridge that only ever
+            // originates calls: target_npub isn't on this call any more.
+            _calleeHangup.TrySetResult(content);
+        }
+    }
+
+    // The relay subscription filters on our pubkey, not on this call, so a
+    // second overlapping call's signaling would otherwise be dispatched
+    // here too - and a hangup for the wrong call now tears down a live
+    // one. A missing call-id tag is accepted rather than dropped: only a
+    // mismatch is evidence the event belongs to another call.
+    private bool IsForThisCall(Event innerEvent)
+    {
+        var callIdTag = innerEvent.Tags().ToVec().FirstOrDefault(tag => tag.KindStr() == CallIdTagName);
+        return callIdTag is null || string.Equals(callIdTag.Content(), _callId, StringComparison.Ordinal);
     }
 
     public async ValueTask DisposeAsync()

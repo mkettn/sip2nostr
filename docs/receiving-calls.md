@@ -14,14 +14,18 @@ response looks like on this provider.
 ## Overview
 
 Since the hub-architecture refactor (see `docs/hub-architecture.md`),
-answering the SIP leg and deciding what to do with an answered call are two
-separate concerns. `SipCallSource` (an `ICallSource`) registers once for
-the whole SIP trunk (`[sip]` in `config.toml`), keeps a single
-`SIPUserAgent` listening for inbound `INVITE` requests on UDP port 5060,
-and answers every call itself — regardless of which configured `[[lines]]`
-DID it targets. Once answered, it raises `OnIncomingCall` with a
-transport-agnostic `Call`, which `CallHub` routes through the configured
-`ICallSink` chain (`NosCallSink`, `VoicemailSink`, `LocalTestAudioSink`).
+owning the SIP leg and deciding what to do with a call are two separate
+concerns. `SipCallSource` (an `ICallSource`) registers once for the whole
+SIP trunk (`[sip]` in `config.toml`), keeps a single `SIPUserAgent`
+listening for inbound `INVITE` requests on UDP port 5060, and accepts
+every call itself — regardless of which configured `[[lines]]` DID it
+targets. It raises `OnIncomingCall` with a transport-agnostic `Call` while
+the caller is still ringing, and `CallHub` routes that through the
+configured `ICallSink` chain (`NosCallSink`, `VoicemailSink`,
+`LocalTestAudioSink`). The `200 OK` goes out only when a sink calls
+`Call.AnswerAsync` — see "Who answers, and when" in
+`docs/hub-architecture.md` — so the caller hears normal ringback until
+something is actually ready to take the call.
 
 ```
  VoIP provider
@@ -29,8 +33,8 @@ transport-agnostic `Call`, which `CallHub` routes through the configured
       │  INVITE (per call)
       ▼
  SipCallSource               — registration, SIP transport, DNS/URI resolution,
-      │                         accepting/answering the SIP leg
-      │  OnIncomingCall(Call)
+      │                         accepting the SIP leg, answering it on request
+      │  OnIncomingCall(Call)  — ringing, not yet answered
       ▼
  CallHub                     — routes the Call through the sink chain
       │
@@ -41,7 +45,7 @@ transport-agnostic `Call`, which `CallHub` routes through the configured
            (verified: this doc)
 ```
 
-## Step by step: answering a call
+## Step by step: taking a call
 
 1. **Registration.** At startup, `SipCallSource.StartAsync` resolves the
    provider host through the configurable DNS resolver (see below),
@@ -55,7 +59,7 @@ transport-agnostic `Call`, which `CallHub` routes through the configured
    `INVITE`'s Request-URI user part against the configured `[[lines]]`
    entries — this becomes `Call.LineLabel`, which `LocalTestAudioSink` uses
    to pick a per-line sound; there is still no per-line routing decision for
-   the Nostr path (see Blind Spots). The call is then answered by
+   the Nostr path (see Blind Spots). The call is then handled by
    `SipCallSource.AcceptAndRouteCallAsync`.
 
 3. **Codec selection.** `SelectOfferedG711Format` scans the offered SDP's
@@ -66,20 +70,27 @@ transport-agnostic `Call`, which `CallHub` routes through the configured
    gateway offers, and sipsorcery supports it directly via
    `SDPWellKnownMediaFormatsEnum`, no supplementary codec package required.
 
-4. **Accepting and answering.** `ua.AcceptCall(inviteRequest)` creates the
-   `SIPServerUserAgent` for the transaction, and every call is answered the
-   same way regardless of what happens next: a plain `RTPSession` carrying
-   just the selected G.711 format, answered via
-   `SIPUserAgent.Answer(uas, mediaSession, customHeaders: null,
-   publicIpAddress: localMediaAddress)` — sipsorcery's own supported answer
-   path, not a hand-built response. The session is wrapped in
-   `RtpSessionCallAudio` (an `ICallAudio` adapter that relays inbound/
-   outbound RTP audio payloads unchanged — no decode/encode) and handed to
-   `CallHub` as part of a `Call`, which also carries the negotiated
-   `AudioFormat` so a sink can decode/negotiate against it if it needs to.
-   What happens to the audio from here is a sink's job, not the source's:
+4. **Accepting, ringing, and answering.** `ua.AcceptCall(inviteRequest)`
+   creates the `SIPServerUserAgent` for the transaction and sends
+   `100 Trying` and `180 Ringing` itself, which is what makes the caller's
+   own phone/provider generate ringback. The `INVITE` transaction is then
+   left open: a plain `RTPSession` carrying just the selected G.711 format
+   is built up front, wrapped in `RtpSessionCallAudio` (an `ICallAudio`
+   adapter that relays inbound/outbound RTP audio payloads unchanged — no
+   decode/encode) and handed to `CallHub` as part of a `Call`, which also
+   carries the negotiated `AudioFormat` so a sink can decode/negotiate
+   against it if it needs to. Every call is then answered the same way
+   regardless of what happens next, but only when a sink calls
+   `Call.AnswerAsync`: via `SIPUserAgent.Answer(uas, mediaSession,
+   customHeaders: null, publicIpAddress: localMediaAddress)` —
+   sipsorcery's own supported answer path, not a hand-built response.
+   Answering happens at most once per call, and a call nothing ever
+   answered has its media session closed and its `INVITE` transaction
+   turned down rather than being left pending. When and why each sink
+   answers is a sink's job, not the source's:
 
-   - **Local test audio (`LocalTestAudioSink`, verified):** plays either a
+   - **Local test audio (`LocalTestAudioSink`, verified):** answers
+     immediately, then plays either a
      configured sound file (`[[lines]].sound`, decoded to raw 8 kHz PCM
      in-process via `Sip/OpusCodec.cs` if it isn't already
      `.pcm`/`.raw`/`.s16le` - see `docs/sound-files.md` for what's
@@ -88,7 +99,9 @@ transport-agnostic `Call`, which `CallHub` routes through the configured
      `AudioExtrasSource` wired into `Call.Audio.SendEncodedSample`. Only
      wired in when `[nostr].enabled = false`.
    - **Nostr/WebRTC bridging (`NosCallSink`, implemented and verified end-
-     to-end):** creates an `RTCPeerConnection` for the WebRTC leg,
+     to-end):** rings for as long as the Nostr side does — it answers the
+     SIP leg only once a real SDP answer comes back. It creates an
+     `RTCPeerConnection` for the WebRTC leg,
      restricted to the same negotiated `Call.AudioFormat` as the SIP leg,
      wrapped in its own `RtpSessionCallAudio`, and bridges the two
      `ICallAudio` legs by forwarding RTP frames unchanged each way — a raw
@@ -109,11 +122,23 @@ transport-agnostic `Call`, which `CallHub` routes through the configured
    `Content-Length` explicitly rather than trusting sipsorcery's defaults.
 
 6. **Call teardown.** Every sink races its own work against
-   `Call.WhenRemoteHungUp` (completed by `ua.OnCallHungup` or the
-   passed-in shutdown `CancellationToken`), and `CallHub` calls
-   `Call.HangupAsync` unconditionally once a sink is done. A `BYE` from the
-   provider ends the call the normal way; a local shutdown just closes the
-   session without sending `BYE` itself (see Blind Spots).
+   `Call.WhenRemoteHungUp`, and `CallHub` calls `Call.HangupAsync`
+   unconditionally once a sink is done. `WhenRemoteHungUp` completes on
+   any of the four ways a call can end from the source's side: a `BYE`
+   from the provider on an answered call (`ua.OnCallHungup`), a `CANCEL`
+   while it's still ringing (`SIPServerUserAgent.CallCancelled` — the
+   dialogue-level hangup event never fires for a call that was never
+   answered), sipsorcery expiring an `INVITE` left ringing for
+   `SIPTimings.MAX_RING_TIME`/3 minutes (`NoRingTimeout`), or the
+   passed-in shutdown `CancellationToken`. A sink can also end a call
+   itself by returning — `NosCallSink` does exactly that when the Nostr
+   side hangs up (see `docs/propagating-to-nostr.md`). `Call.HangupAsync`
+   sends `BYE` for an answered call, and turns down one that was never
+   answered on its pending `INVITE` with `480 Temporarily Unavailable` —
+   skipped for a call the caller already cancelled, or one whose
+   transaction expired, since neither can take another final response. A
+   local shutdown still closes the session without sending `BYE` itself
+   (see Blind Spots).
 
 ## Why response routing needs the configurable DNS resolver to actually work
 
@@ -158,10 +183,18 @@ registrar.
   end-to-end.** `[voicemail].enabled` is `false` by default. If turned on
   and the Nostr side never answers within `ring_timeout_seconds` (default
   20s), the call is diverted to a local greeting + recording instead of
-  being left connected indefinitely, and the recording is sent to
+  ringing indefinitely, and the recording is sent to
   `target_npub` as a Nostr DM. See `docs/voicemail.md` for the flow and
   its own blind spots (notably: no file-hosting upload path, so large
   recordings can exceed a relay's max event size).
+- **Ringback until answer is implemented but not verified against a real
+  trunk.** The caller now hears ringing until a sink answers, but what a
+  provider does with an `INVITE` left ringing for a long time hasn't been
+  observed: whether it applies its own ring timeout and `CANCEL`s first,
+  and whether that lands before sipsorcery's `MAX_RING_TIME` (3 minutes)
+  expires the transaction. Only matters when nothing picks up for minutes
+  — with `[voicemail]` enabled, `ring_timeout_seconds` (default 20s) ends
+  the ringing long before either.
 - **Concurrent calls are untested.** Only one inbound call has been
   exercised at a time. Whether two simultaneous calls' `RTPSession`s
   collide, and whether the WebRTC path's per-call

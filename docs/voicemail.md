@@ -28,57 +28,67 @@ shares the same delivery code as the verified `VoicemailAudioJob` path.
 Since the hub-architecture refactor (see `docs/hub-architecture.md`), the
 ring-timeout race lives in `NosCallSink` and the recording flow lives in
 `VoicemailSink` - two `ICallSink`s tried in order by `CallHub` for the same
-already-answered `Call`, rather than one function doing both.
+`Call`, rather than one function doing both. The call is still ringing
+when `VoicemailSink` gets it: `NosCallSink` only answers on a real Nostr
+answer, so a caller who ends up at voicemail hears ringback right up to
+the moment the greeting starts.
 
 ```
  CallHub, routing a Call from SipCallSource (Nostr enabled)
       │
-      ├─ SIP call already answered by SipCallSource before CallHub sees it
+      ├─ SIP call ringing; nothing has answered it yet
       │
       ▼
  NosCallSink.TryHandleAsync
       ├─ WebRTC offer sent over Nostr, same as today
       │
       ▼
- Wait for: Nostr answer | ring_timeout_seconds elapses | caller hangs up | signaling fails
+ Wait for: Nostr answer | callee declines/hangs up | ring_timeout_seconds
+           elapses | caller hangs up | signaling fails
       │
       ├─ Nostr answers in time  → bridge audio, returns true (handled)
       ├─ Caller hangs up first  → tear down, returns true (handled)
       │
-      └─ Timeout or signaling failure → decline (return false); CallHub
+      └─ Callee declined, timeout, or signaling failure → decline (return
+         false); CallHub
          offers the Call to the next configured sink, VoicemailSink:
-           1. Close the WebRTC peer connection; the already-answered SIP
-              leg's Call.Audio stays up and is reused directly - no new
-              media session is created.
+           1. Close the WebRTC peer connection; the SIP leg's Call.Audio
+              is reused directly - no new media session is created.
            2. Send a NIP-AC `hangup` over Nostr so a ringing device (e.g.
               NosCall) stops ringing (best-effort; failure is logged, not
               fatal) - the bridge originated this call, so giving up on it
               is a hangup, not a reject (the callee's decline signal).
-           3. Play `greeting_sound` once (or a short tone if unset). If the
+              Skipped when the callee is the one who ended it: a device
+              that just hung up doesn't need telling to stop ringing.
+           3. Answer the SIP leg (`Call.AnswerAsync`) - this is where the
+              caller stops hearing ringback. If it returns false the
+              caller gave up while it was ringing: log it and enqueue a
+              MissedCallNoticeJob, same as a hangup during the greeting.
+           4. Play `greeting_sound` once (or a short tone if unset). If the
               caller hangs up here, log it (caller number included) and
               enqueue a MissedCallNoticeJob on VoicemailSender - nothing
               was recorded, but it's still a missed call.
-           4. Record caller audio for up to `max_recording_seconds`, or
+           5. Record caller audio for up to `max_recording_seconds`, or
               until they hang up.
-           5. Encode the recording to Opus (in-process via
+           6. Encode the recording to Opus (in-process via
               `Sip/OpusCodec.cs`) and save it under `recordings_dir`,
               named per `recording_filename` (always - this is the
               durability point, independent of whatever happens to the
               send afterward).
-           6. Return true (handled) - CallHub's own `finally` calls
+           7. Return true (handled) - CallHub's own `finally` calls
               `Call.HangupAsync` unconditionally once a sink is done, so
               VoicemailSink doesn't need to hang up the SIP call itself.
-              This always runs even if step 5 threw (e.g. a bad
+              This always runs even if step 6 threw (e.g. a bad
               `greeting_sound` path, a disk error), so a failure there
               can't leave the caller on a silent, still-connected call or
               leak the RTP session.
-           7. If the recording is long enough to be worth sending, enqueue
+           8. If the recording is long enough to be worth sending, enqueue
               a VoicemailAudioJob (the Opus path) on VoicemailSender
               and move on - delivery happens off this call's critical
               path, in a separate background worker. Otherwise (too
               short), log it and enqueue a MissedCallNoticeJob instead -
-              the same "exactly one job" rule as step 3.
-           8. If RunVoicemailAsync throws instead of reaching step 7 (a
+              the same "exactly one job" rule as step 4.
+           9. If RunVoicemailAsync throws instead of reaching step 8 (a
               bad greeting_sound path, a disk error or Opus encoding
               failure saving the recording), VoicemailSink.TryHandleAsync's
               own catch around the call enqueues a MissedCallNoticeJob -
@@ -194,7 +204,11 @@ string?`, `null` meaning nothing could be transcribed), selected by
 
 - `Sinks/NosCallSink.cs`:
   - `TryHandleAsync` races the existing `WaitForAnswerAsync` Nostr call
-    against `Task.Delay(ringTimeoutSeconds)` and `Call.WhenRemoteHungUp`.
+    against `Task.Delay(ringTimeoutSeconds)`, `Call.WhenRemoteHungUp`, and
+    `NostrSignalingClient.WhenCalleeHungUp` - a callee who declines or
+    hangs up while their device is ringing gets to voicemail immediately
+    instead of waiting out a timeout that, with `ringTimeoutSeconds`
+    unset, would never come (see `docs/propagating-to-nostr.md`).
     `ringTimeoutSeconds` is `null` unless `[voicemail].enabled` (wired up
     in `Program.cs`), so with voicemail disabled this sink rings
     indefinitely instead of timing out, matching pre-voicemail behavior.
@@ -229,8 +243,11 @@ string?`, `null` meaning nothing could be transcribed), selected by
     sink's own async flow; both sides go through the same lock, since
     without one there's no guarantee the receiving side ever observes the
     write.
-  - Reuses the **already-answered `Call.Audio`** directly instead of
-    building a second media session: a `SIPSorcery.Media.AudioExtrasSource`
+  - Answers the call itself (`Call.AnswerAsync`, see
+    `docs/hub-architecture.md`) right before playing the greeting, so the
+    caller rings rather than sitting on a silent connected call for
+    `ring_timeout_seconds` first, then reuses that **same `Call.Audio`**
+    directly instead of building a second media session: a `SIPSorcery.Media.AudioExtrasSource`
     plays the greeting/tone, wired via `OnAudioSourceEncodedSample +=
     call.Audio.SendEncodedSample` instead of the pre-hub code's `+=
     sipMediaSession.SendAudio` - same off-the-shelf player, same signature

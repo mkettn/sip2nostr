@@ -14,7 +14,7 @@ using Sip2Nostr.Hub;
 namespace Sip2Nostr.Sip;
 
 // Registers to the VoIP provider and raises OnIncomingCall for CallHub to
-// route once a call is answered. One REGISTER for the whole account (per
+// route while the caller is ringing. One REGISTER for the whole account (per
 // README: [sip] carries a single set of credentials for the trunk);
 // [[lines]] are the DIDs that can ring on it. In the MVP every line rings
 // the same target_npub (no per-line routing yet), so the matched line is
@@ -217,8 +217,9 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
         }
     }
 
-    // Answers the SIP/RTP leg and hands the resulting Call to CallHub - see
-    // Call.cs for why there's no separate "answer" step at the hub level.
+    // Hands a ringing SIP call to CallHub and answers it only once a sink
+    // says it's ready to take it - see Call.cs for the contract and
+    // docs/hub-architecture.md for why the decision lives there.
     private async Task AcceptAndRouteCallAsync(
         SIPUserAgent ua,
         SIPRequest inviteRequest,
@@ -229,6 +230,9 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
         LogInviteSdp(inviteRequest);
         var selectedAudioFormat = SelectOfferedG711Format(inviteRequest);
         logger.Information("Selected SIP audio codec {AudioCodec} for the SDP answer.", selectedAudioFormat);
+
+        // AcceptCall sends 100 Trying and 180 Ringing itself, so the caller
+        // hears ringback from here until a sink answers.
         var uas = ua.AcceptCall(inviteRequest);
         uas.ClientTransaction.OnAckReceived += (_, _, _, ackRequest) =>
         {
@@ -240,7 +244,9 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
                 ackRequest.Header.From?.FromTag);
             return Task.FromResult(SocketError.Success);
         };
-        logger.Information("Accepted SIP INVITE with local transaction tag {LocalTag}.", uas.ClientTransaction.LocalTag);
+        logger.Information(
+            "Accepted SIP INVITE with local transaction tag {LocalTag}; the caller is ringing.",
+            uas.ClientTransaction.LocalTag);
 
         var rawCallerNumber = inviteRequest.Header.From?.FromURI?.User ?? string.Empty;
         var callerNumber = PhoneNumberNormalizer.Normalize(rawCallerNumber);
@@ -259,18 +265,8 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
         var sipMediaSession = new RTPSession(false, false, false);
         sipMediaSession.addTrack(CreateAudioTrack(selectedAudioFormat, MediaStreamStatusEnum.SendRecv));
 
-        logger.Information("Answering SIP call.");
-        var answered = await ua.Answer(uas, sipMediaSession, null, _localMediaAddress);
-        LogFinalInviteResponse(uas);
-        if (!answered)
-        {
-            logger.Warning("SIP call answer failed; closing media session.");
-            sipMediaSession.Close("sip answer failed");
-            return;
-        }
-
         var callId = Guid.NewGuid().ToString();
-        logger.Information("SIP call answered with call-id {CallId}.", callId);
+        logger.Information("SIP call ringing with call-id {CallId}.", callId);
 
         // Wired up before OnIncomingCall is raised (not after) so a caller
         // hangup while a sink is still working on the call (waiting for a
@@ -278,8 +274,68 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
         // of only surfacing when the sink gives up on its own.
         var hangupTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void OnCallHungup(SIPDialogue _) => hangupTcs.TrySetResult();
+
+        // A caller who gives up while the call is still ringing CANCELs the
+        // INVITE rather than sending BYE, and OnCallHungup only ever fires
+        // for an established dialogue - so without this a sink would keep
+        // ringing Nostr (or start recording a voicemail) for a caller
+        // who's already gone.
+        void OnCallCancelled(ISIPServerUserAgent _, SIPRequest __)
+        {
+            logger.Information("Caller {CallerNumber} cancelled call {CallId} while it was ringing.", callerNumber, callId);
+            hangupTcs.TrySetResult();
+        }
+
+        // sipsorcery expires an INVITE transaction left ringing for
+        // SIPTimings.MAX_RING_TIME (3 minutes); past that the call can no
+        // longer be answered, so it's over as far as any sink is concerned.
+        void OnNoRingTimeout(ISIPServerUserAgent _)
+        {
+            logger.Warning("SIP INVITE for call {CallId} timed out while ringing; it can no longer be answered.", callId);
+            hangupTcs.TrySetResult();
+        }
+
         ua.OnCallHungup += OnCallHungup;
+        uas.CallCancelled += OnCallCancelled;
+        uas.NoRingTimeout += OnNoRingTimeout;
         using var ctReg = ct.Register(() => hangupTcs.TrySetResult());
+
+        var answered = false;
+
+        async Task<bool> AnswerCallAsync()
+        {
+            try
+            {
+                if (hangupTcs.Task.IsCompleted)
+                {
+                    logger.Information("Not answering call {CallId}; the caller is no longer on the line.", callId);
+                    return false;
+                }
+
+                logger.Information("Answering SIP call {CallId}.", callId);
+                var success = await ua.Answer(uas, sipMediaSession, null, _localMediaAddress);
+                LogFinalInviteResponse(uas);
+                if (!success)
+                {
+                    logger.Warning("SIP call answer failed for call {CallId}.", callId);
+                    return false;
+                }
+
+                answered = true;
+                logger.Information("SIP call answered with call-id {CallId}.", callId);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                logger.Error(exception, "Answering SIP call {CallId} failed.", callId);
+                return false;
+            }
+        }
+
+        // Lazy, not a plain call: the sink chain can offer the same call to
+        // more than one sink, and each has to see the same single answer
+        // outcome rather than a second 200 OK attempt.
+        var answerOnce = new Lazy<Task<bool>>(AnswerCallAsync, LazyThreadSafetyMode.ExecutionAndPublication);
 
         var call = new Call(
             callId,
@@ -287,9 +343,37 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
             matchedLine?.Label,
             new AudioFormat(selectedAudioFormat),
             new RtpSessionCallAudio(sipMediaSession),
+            () => answerOnce.Value,
             () =>
             {
-                ua.Hangup();
+                // ua.Hangup() only sends BYE for an established dialogue, so
+                // a call nothing ever answered has to be turned down on its
+                // still-pending INVITE transaction instead - otherwise the
+                // caller keeps ringing until the provider gives up. Two
+                // states can't take that 480 and aren't covered by
+                // IsUASAnswered (which is "some final response was sent"):
+                // a cancelled call, because sipsorcery raises CallCancelled
+                // before it sends its own 487, so this can run while that
+                // response is still in flight; and an expired transaction,
+                // which has no final response and can't take one - sending
+                // it re-registers the dead transaction with the transport
+                // to retransmit at a caller who left minutes ago.
+                if (uas.IsUASAnswered)
+                {
+                    ua.Hangup();
+                }
+                else if (uas.IsCancelled || uas.ClientTransaction.HasTimedOut)
+                {
+                    logger.Information(
+                        "Call {CallId} was already cancelled or timed out; nothing left to turn down.",
+                        callId);
+                }
+                else
+                {
+                    logger.Information("Nothing answered call {CallId}; turning it down.", callId);
+                    uas.Reject(SIPResponseStatusCodesEnum.TemporarilyUnavailable, null);
+                }
+
                 return Task.CompletedTask;
             },
             hangupTcs.Task);
@@ -312,6 +396,16 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
         finally
         {
             ua.OnCallHungup -= OnCallHungup;
+            uas.CallCancelled -= OnCallCancelled;
+            uas.NoRingTimeout -= OnNoRingTimeout;
+
+            // SIPUserAgent only takes ownership of the media session it's
+            // handed at answer time, so an unanswered call's session is
+            // still ours to close.
+            if (!answered)
+            {
+                sipMediaSession.Close("call was never answered");
+            }
         }
     }
 

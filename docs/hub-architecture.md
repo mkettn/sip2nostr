@@ -9,7 +9,7 @@ transport, so a future call source - a modem attached over D-Bus, say -
 can reuse the same sinks without reimplementing that logic.
 
 ```
- ICallSource            produces Calls (SipCallSource today)
+ ICallSource            produces ringing Calls (SipCallSource today)
       │  OnIncomingCall(Call)
       ▼
  CallHub                routes every Call through the same sink chain
@@ -19,18 +19,19 @@ can reuse the same sinks without reimplementing that logic.
    (NosCallSink, VoicemailSink, LocalTestAudioSink)
 ```
 
-- **`ICallSource`** (`Hub/ICallSource.cs`) is anything that can produce an
-  already-answered `Call` - today, `Sip/SipCallSource.cs`, which owns SIP
-  registration, transport, and answering the INVITE. A future source (a
-  modem's ALSA/D-Bus line, say) implements the same interface and needs no
-  changes anywhere else.
+- **`ICallSource`** (`Hub/ICallSource.cs`) is anything that can produce a
+  ringing `Call` - today, `Sip/SipCallSource.cs`, which owns SIP
+  registration, transport, and answering the INVITE once a sink asks it
+  to. A future source (a modem's ALSA/D-Bus line, say) implements the same
+  interface and needs no changes anywhere else.
 - **`Call`** (`Hub/Call.cs`) is the source-agnostic handle a sink works
   with: a call-id, the caller's number, the source's own line label (for
   per-line sink behavior, e.g. `LocalTestAudioSink`'s test sound), an
-  `ICallAudio`, a way to hang up, and a task that completes when the call
-  ends. There's no separate "answer" step at this level - a source only
-  ever raises `OnIncomingCall` once audio is actually flowing, so a `Call`
-  is always ready to bridge or record immediately.
+  `ICallAudio`, a way to answer, a way to hang up, and a task that
+  completes when the call ends. A `Call` arrives *ringing*: nothing is
+  answered until a sink calls `AnswerAsync`, so a sink has to answer
+  before it can bridge or record anything - see "Who answers, and when"
+  below.
 - **`ICallAudio`** (`Hub/ICallAudio.cs`) has two send paths. `Send(RtpAudioFrame
   frame)` relays an RTP payload plus just enough header (timestamp, marker
   bit, payload type) to resend it unchanged elsewhere - the hub's fixed
@@ -54,12 +55,14 @@ can reuse the same sinks without reimplementing that logic.
   (bridged it until hangup, or recorded a voicemail); `CallHub` won't try
   any further sinks. Returning `false` means it declined (e.g.
   `NosCallSink`'s ring timeout elapsed) and the next configured sink gets
-  a turn.
+  a turn - a sink that declines leaves the call unanswered, so the next
+  one is handed a call that's still ringing.
 - **`CallHub`** (`Hub/CallHub.cs`) ties a set of sources to one ordered
-  sink chain. If no sink handles a call, it's left connected until the
-  caller hangs up - which is also what happens with `[nostr].enabled =
-  false` or `[voicemail].enabled = false` with nothing else configured,
-  since neither condition puts a matching sink in the chain.
+  sink chain. It never answers a call itself. If no sink handles a call,
+  it's left ringing until the caller hangs up - which is also what happens
+  with `[nostr].enabled = false` or `[voicemail].enabled = false` with
+  nothing else configured, since neither condition puts a matching sink in
+  the chain.
 
 ## Sink wiring
 
@@ -78,6 +81,43 @@ can reuse the same sinks without reimplementing that logic.
 Each sink only receives the config it actually needs; none of them checks
 `nostrConfig.Enabled` or `voicemailConfig.Enabled` itself, since whether a
 sink is even in the chain already encodes that.
+
+## Who answers, and when
+
+The caller should hear their phone ring for as long as nothing has picked
+up, so the source deliberately does *not* answer before handing the call
+over: it sends `180 Ringing` (sipsorcery's `SIPUserAgent.AcceptCall` does
+this itself, along with `100 Trying`) and holds the `INVITE` transaction
+open. The `200 OK` goes out only when a sink calls `Call.AnswerAsync`,
+which is the point at which something is genuinely ready to take the
+call:
+
+- `NosCallSink` answers when a real WebRTC answer comes back over Nostr -
+  not when it sends the offer. A call it declines on ring timeout was
+  therefore never answered, and `VoicemailSink` inherits a call that's
+  still ringing.
+- `VoicemailSink` answers immediately before playing the greeting/tone,
+  so the caller hears ringback right up to the point the answering
+  machine picks up.
+- `LocalTestAudioSink` answers straight away - there's no ring/answer
+  decision to make on a dev/test path.
+
+`AnswerAsync` answers at most once per call and hands every sink the same
+outcome, so a call passed down the chain can't end up with two `200 OK`
+attempts. It returns `false` when the call can no longer be answered -
+the caller gave up while it was ringing, or the source's answer failed -
+which is why a sink checks it rather than assuming audio is flowing.
+
+A ringing call ends differently from a connected one, and the source has
+to watch for both: a caller who gives up mid-ring sends `CANCEL` on the
+pending `INVITE` rather than `BYE` on a dialogue, and sipsorcery expires
+an `INVITE` left ringing for `SIPTimings.MAX_RING_TIME` (3 minutes), past
+which the call can no longer be answered at all. `SipCallSource`
+completes `Call.WhenRemoteHungUp` for either, so a sink waiting on a
+Nostr answer stops on its own instead of ringing into a dead
+transaction. For the same reason `Call.HangupAsync` turns an unanswered
+call down on its `INVITE` transaction instead of sending `BYE`, which
+only applies to an established dialogue.
 
 ## Why RTP, not PCM, is the hub's exchange format
 
@@ -115,7 +155,7 @@ PSTN number.
 Concretely, that's why:
 
 - The call model is named `Call`, not `IncomingCall` - the record itself
-  (call-id, caller info, `ICallAudio`, hangup, hangup-signal) doesn't
+  (call-id, caller info, `ICallAudio`, answer, hangup, hangup-signal) doesn't
   assume a direction. An outbound call still needs the exact same shape:
   something to bridge audio through and a way to tear it down.
 - `ICallSource.OnIncomingCall` is deliberately not the interface's only
