@@ -25,6 +25,15 @@ public sealed class NosCallSink(
     int? ringTimeoutSeconds,
     ILogger logger) : ICallSink
 {
+    // How long a bridged call's WebRTC connection can sit in
+    // "disconnected" before ConnectionLossWatcher gives up on it
+    // recovering - long enough to ride out a brief network blip, short
+    // enough that a caller isn't stuck on dead air for minutes. A fixed
+    // judgment call, not configurable, matching this file's own
+    // ringTimeoutSeconds handling of "no answer" and NostrSignalingClient's
+    // connect timeout.
+    private const int ConnectionLossGraceSeconds = 15;
+
     public async Task<bool> TryHandleAsync(Call call, CancellationToken ct)
     {
         // Matched to the SIP leg's codec, not a fixed choice: RTP frames
@@ -216,7 +225,16 @@ public sealed class NosCallSink(
         // about a Nostr-side hangup from the signaling event - closing the
         // peer connection alone would leave the caller on a silent call.
         // CallHub's own finally hangs the SIP leg up once this returns.
-        await Task.WhenAny(call.WhenRemoteHungUp, calleeHangup);
+        // connectionLossWatcher covers the third way this can end: the
+        // callee's device is simply gone (no internet, force-quit) and
+        // never gets to send a hangup at all - see
+        // docs/propagating-to-nostr.md.
+        using var connectionLossWatcher = new ConnectionLossWatcher(TimeSpan.FromSeconds(ConnectionLossGraceSeconds));
+        pc.onconnectionstatechange += connectionLossWatcher.OnStateChange;
+
+        await Task.WhenAny(call.WhenRemoteHungUp, calleeHangup, connectionLossWatcher.WhenConnectionLost);
+        pc.onconnectionstatechange -= connectionLossWatcher.OnStateChange;
+
         if (calleeHangup.IsCompleted && !call.WhenRemoteHungUp.IsCompleted)
         {
             logger.Information(
@@ -224,7 +242,7 @@ public sealed class NosCallSink(
                 call.CallId,
                 DescribeReason(await calleeHangup));
         }
-        else
+        else if (call.WhenRemoteHungUp.IsCompleted)
         {
             logger.Information("Call {CallId} ended; closing WebRTC session.", call.CallId);
 
@@ -238,6 +256,19 @@ public sealed class NosCallSink(
             {
                 await SendHangupSafeAsync(signaling, call.CallId, "caller hung up");
             }
+        }
+        else
+        {
+            // Neither leg said anything - connectionLossWatcher is the
+            // only one of the three that can have completed here. Still
+            // worth a best-effort hangup: the WebRTC media path being
+            // down doesn't mean the Nostr relay connection is too (a
+            // TURN-reachability failure, say, wouldn't take a plain
+            // WebSocket down with it).
+            logger.Warning(
+                "WebRTC connection for call {CallId} was lost mid-call with no hangup from either side; ending it.",
+                call.CallId);
+            await SendHangupSafeAsync(signaling, call.CallId, "connection lost");
         }
 
         StopBridging();
