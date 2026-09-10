@@ -232,6 +232,15 @@ public sealed class NosCallSink(
         using var connectionLossWatcher = new ConnectionLossWatcher(TimeSpan.FromSeconds(ConnectionLossGraceSeconds));
         pc.onconnectionstatechange += connectionLossWatcher.OnStateChange;
 
+        // onconnectionstatechange is edge-triggered: it only fires on a
+        // transition, and call.AnswerAsync() above is a SIP round-trip -
+        // long enough for ICE to have already reached "failed" before
+        // anything was listening. Priming with the state as it stands
+        // right now catches a transition that already happened; safe to
+        // call unconditionally since every branch in
+        // ConnectionLossWatcher.OnStateChange is idempotent.
+        connectionLossWatcher.OnStateChange(pc.connectionState);
+
         await Task.WhenAny(call.WhenRemoteHungUp, calleeHangup, connectionLossWatcher.WhenConnectionLost);
         pc.onconnectionstatechange -= connectionLossWatcher.OnStateChange;
 
@@ -252,9 +261,13 @@ public sealed class NosCallSink(
             // peer connection close on its own - the same assumption
             // docs/propagating-to-nostr.md's blind spots declines to make
             // in the other direction. Guarded the same way as the rest.
+            // Call.WhenRemoteHungUp completing here doesn't distinguish
+            // the caller hanging up from a local shutdown (SipCallSource
+            // registers ct onto the same hangupTcs) - same ambiguity the
+            // pre-answer path already has, so the same neutral wording.
             if (!calleeHangup.IsCompleted)
             {
-                await SendHangupSafeAsync(signaling, call.CallId, "caller hung up");
+                await SendHangupSafeAsync(signaling, call.CallId, "call ended");
             }
         }
         else

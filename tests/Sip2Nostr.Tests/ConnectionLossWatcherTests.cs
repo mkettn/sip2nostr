@@ -40,6 +40,21 @@ public class ConnectionLossWatcherTests
     }
 
     [Fact]
+    public void PrimingWithConnectedIsANoOp()
+    {
+        // Simulates NosCallSink priming the watcher with the connection's
+        // current state right after subscribing, on a connection that
+        // was already healthy - the common case, since ICE having
+        // already failed before anything was listening is the rare one
+        // this priming exists for.
+        using var watcher = new ConnectionLossWatcher(TimeSpan.FromMilliseconds(20));
+
+        watcher.OnStateChange(RTCPeerConnectionState.connected);
+
+        Assert.False(watcher.WhenConnectionLost.IsCompleted);
+    }
+
+    [Fact]
     public void IgnoresUnrelatedStates()
     {
         using var watcher = new ConnectionLossWatcher(TimeSpan.FromMilliseconds(20));

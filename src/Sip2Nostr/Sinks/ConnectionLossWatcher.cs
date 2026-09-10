@@ -45,11 +45,23 @@ public sealed class ConnectionLossWatcher(TimeSpan grace) : IDisposable
                         var cts = new CancellationTokenSource();
                         _graceCts = cts;
                         _ = Task.Delay(grace, cts.Token).ContinueWith(
-                            t =>
+                            _ =>
                             {
-                                if (!t.IsCanceled)
+                                // Re-checked under the lock rather than
+                                // trusting the antecedent's own
+                                // IsCanceled: Cancel() can race the
+                                // delay's own completion narrowly enough
+                                // that the task reports RanToCompletion
+                                // even though CancelGraceTimer already
+                                // ran. cts.IsCancellationRequested and
+                                // "is this still the current timer" both
+                                // read _graceCts's actual state instead.
+                                lock (_gate)
                                 {
-                                    _lostTcs.TrySetResult();
+                                    if (!_disposed && ReferenceEquals(_graceCts, cts) && !cts.IsCancellationRequested)
+                                    {
+                                        _lostTcs.TrySetResult();
+                                    }
                                 }
                             },
                             CancellationToken.None,
@@ -63,6 +75,18 @@ public sealed class ConnectionLossWatcher(TimeSpan grace) : IDisposable
                     // Recovered from a prior "disconnected" - the call's
                     // still good.
                     CancelGraceTimer();
+                    break;
+
+                case RTCPeerConnectionState.@new:
+                case RTCPeerConnectionState.connecting:
+                case RTCPeerConnectionState.closed:
+                    // "closed" is reached via NosCallSink's own
+                    // pc.close() during ordinary teardown, not a failure
+                    // signal - treating it as connection loss would make
+                    // every normal hangup look like one. "new"/
+                    // "connecting" only matter before a connection is
+                    // ever established, which is before this watcher is
+                    // even subscribed.
                     break;
             }
         }

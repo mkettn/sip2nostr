@@ -135,9 +135,15 @@ whichever stage of a call applies:
 A callee whose device force-quits or loses its network entirely can't
 publish a `hangup` — there's nothing to react to. Once bridged,
 `NosCallSink` subscribes `RTCPeerConnection.onconnectionstatechange` to a
-`Sinks/ConnectionLossWatcher.cs` instance, which exposes a single
-`WhenConnectionLost` task and races it alongside `Call.WhenRemoteHungUp`
-and `WhenCalleeHungUp` in the same `Task.WhenAny`.
+`Sinks/ConnectionLossWatcher.cs` instance, then immediately primes it with
+`pc.connectionState` — `onconnectionstatechange` only fires on a
+transition, and `call.AnswerAsync()` just before this is a SIP round-trip,
+long enough for ICE to have already reached `failed` before anything was
+listening. Priming catches that case; every branch in
+`ConnectionLossWatcher.OnStateChange` is idempotent, so calling it once
+more with whatever the state already is costs nothing on the common path
+where nothing was missed. `WhenConnectionLost` is then raced alongside
+`Call.WhenRemoteHungUp` and `WhenCalleeHungUp` in the same `Task.WhenAny`.
 
 It isn't as simple as ending the call on the first `disconnected` state,
 though: `RTCPeerConnectionState` legitimately flaps to `disconnected` on a
