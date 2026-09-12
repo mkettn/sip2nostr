@@ -98,10 +98,12 @@ A configured (non-empty) `[[lines]].sound` or `[voicemail].greeting_sound`
 that doesn't exist, isn't `.pcm`/`.raw`/`.s16le`/`.opus`, or fails to
 decode (wrong codec, corrupt, etc.) is a **startup error**: `ConfigLoader`
 eagerly resolves every configured sound file via the same
-`SoundFileResolver.Resolve` the sinks use, and refuses to start if any of
-them come back unusable (see #26). The specific reason - missing file,
-unsupported extension, decode failure - is logged at `Warning` immediately
-before the fatal error that stops startup:
+`SoundFileResolver` the sinks use, and refuses to start if any of them come
+back unusable (see #26). The failure reason - missing file, unsupported
+extension, decode failure - is embedded directly in that startup error, not
+just logged separately: `ConfigLoader` runs before the "real" (run-file)
+logger exists, so a bare log line here would only ever reach the console.
+The possible reasons:
 
 - `Configured sound file {path} resolved to {resolvedPath}, but it does
   not exist.` - path/typo problem.
@@ -118,6 +120,14 @@ Leaving `sound`/`greeting_sound` unset entirely is fine - that's the
 for `[[lines]].sound`, a short tone before recording for
 `[voicemail].greeting_sound`), unrelated to the fail-fast check above,
 which only ever fires for a value that's actually set but broken.
+
+This check only runs for the sink that would actually play the file:
+`[[lines]].sound` only when `[nostr].enabled = false` (`LocalTestAudioSink`
+is the only reader), `[voicemail].greeting_sound` only when `[nostr]` *and*
+`[voicemail]` are both enabled (`VoicemailSink`'s the only reader) - see
+`Program.cs`'s sink wiring. A broken `sound`/`greeting_sound` left over
+from switching modes doesn't block startup in a mode where it's never
+read.
 
 ## Config reference
 

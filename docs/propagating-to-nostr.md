@@ -232,7 +232,13 @@ ways.
 - **Relay reachability at startup stays diagnostic-only, by choice.**
   `[nostr].bridge_nsec`/`target_npub`/`relays` (and `[voicemail].dm_relays`)
   are eagerly *parsed* at config load now (`ConfigLoader`) - a malformed
-  value never becomes valid, so it fails startup outright (see #26). Relay
+  value never becomes valid, so it fails startup outright (see #26).
+  `target_npub`/`relays`/`dm_relays` are only checked when `[nostr].enabled`
+  - unlike `bridge_nsec`, they're never even read otherwise
+  (`NosCallSink`/`VoicemailSender` aren't constructed - see `Program.cs`),
+  so validating their format would only block the documented
+  `[nostr].enabled = false` local SIP-test path
+  (`docs/receiving-calls.md`) over values it never uses. Relay
   *reachability* is a different kind of check: `CheckNostrConnectivityAsync`
   still only logs a `Warning` if none of the configured relays answer at
   boot, deliberately - a relay that's briefly down at boot isn't a

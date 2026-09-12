@@ -105,7 +105,7 @@ try
     var configPath = args.Length > 0 ? args[0] : "config.toml";
 
     Log.Information("Loading configuration from {ConfigPath}.", configPath);
-    var config = ConfigLoader.Load(configPath, Log.Logger);
+    var config = ConfigLoader.Load(configPath);
     Log.Logger = CreateLogger(config.Logging, config.ConfigDirectory, out var runLogPath);
     if (runLogPath is not null)
     {

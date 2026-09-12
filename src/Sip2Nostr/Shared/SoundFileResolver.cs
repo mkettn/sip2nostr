@@ -14,7 +14,19 @@ public static class SoundFileResolver
 {
     private const int PlaybackSampleRate = 8000;
 
-    public static string? Resolve(string soundPath, string configDirectory, ILogger logger)
+    public static string? Resolve(string soundPath, string configDirectory, ILogger logger) =>
+        TryResolve(soundPath, configDirectory, logger).ResolvedPath;
+
+    // Same resolution as Resolve, but always returns the failure reason
+    // alongside the null result, rather than only ever logging it -
+    // ConfigLoader validates sound files before the "real" (run-file)
+    // logger exists (see Program.cs), so a Warning logged there would only
+    // ever reach the console, never wherever an operator actually looks
+    // for it after a crashed startup. logger is optional: when given,
+    // Resolve's own behavior (Warning on failure, Information on a fresh
+    // Opus decode) is unchanged; ConfigLoader omits it and embeds
+    // FailureReason directly in its own exception message instead.
+    public static (string? ResolvedPath, string? FailureReason) TryResolve(string soundPath, string configDirectory, ILogger? logger = null)
     {
         var resolvedSoundPath = Path.IsPathRooted(soundPath)
             ? soundPath
@@ -22,36 +34,31 @@ public static class SoundFileResolver
 
         if (!File.Exists(resolvedSoundPath))
         {
-            logger.Warning(
-                "Configured sound file {SoundPath} resolved to {ResolvedSoundPath}, but it does not exist.",
-                soundPath,
-                resolvedSoundPath);
-            return null;
+            return Fail(logger, $"Configured sound file {soundPath} resolved to {resolvedSoundPath}, but it does not exist.");
         }
 
         if (IsRawPcmPath(resolvedSoundPath))
         {
-            return resolvedSoundPath;
+            return (resolvedSoundPath, null);
         }
 
         if (!IsOpusPath(resolvedSoundPath))
         {
-            logger.Warning(
-                "Configured sound file {SoundPath} is not a supported format; only raw 8 kHz 16-bit PCM " +
-                "(.pcm/.raw/.s16le) and mono Opus (.opus) files are supported.",
-                soundPath);
-            return null;
+            return Fail(
+                logger,
+                $"Configured sound file {soundPath} is not a supported format; only raw 8 kHz 16-bit PCM " +
+                "(.pcm/.raw/.s16le) and mono Opus (.opus) files are supported.");
         }
 
         return DecodeOpusToRawPcm(resolvedSoundPath, logger);
     }
 
-    private static string? DecodeOpusToRawPcm(string soundPath, ILogger logger)
+    private static (string? ResolvedPath, string? FailureReason) DecodeOpusToRawPcm(string soundPath, ILogger? logger)
     {
         var cachePath = GetConvertedSoundPath(soundPath);
         if (File.Exists(cachePath) && File.GetLastWriteTimeUtc(cachePath) >= File.GetLastWriteTimeUtc(soundPath))
         {
-            return cachePath;
+            return (cachePath, null);
         }
 
         try
@@ -65,14 +72,21 @@ public static class SoundFileResolver
             Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
             File.WriteAllBytes(cachePath, pcmBytes);
 
-            logger.Information("Decoded {SoundPath} to raw 8 kHz PCM at {ConvertedSoundPath}.", soundPath, cachePath);
-            return cachePath;
+            logger?.Information("Decoded {SoundPath} to raw 8 kHz PCM at {ConvertedSoundPath}.", soundPath, cachePath);
+            return (cachePath, null);
         }
         catch (Exception exception)
         {
-            logger.Warning(exception, "Could not decode {SoundPath}; provide a mono Opus file or raw 8 kHz 16-bit PCM.", soundPath);
-            return null;
+            var reason = $"Could not decode {soundPath}; provide a mono Opus file or raw 8 kHz 16-bit PCM.";
+            logger?.Warning(exception, "{FailureReason}", reason);
+            return (null, $"{reason} ({exception.Message})");
         }
+    }
+
+    private static (string? ResolvedPath, string? FailureReason) Fail(ILogger? logger, string reason)
+    {
+        logger?.Warning("{FailureReason}", reason);
+        return (null, reason);
     }
 
     private static bool IsRawPcmPath(string soundPath)

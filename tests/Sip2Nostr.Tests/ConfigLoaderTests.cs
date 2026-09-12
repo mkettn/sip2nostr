@@ -1,4 +1,3 @@
-using Serilog;
 using Sip2Nostr.Config;
 using Sip2Nostr.Shared;
 using Xunit;
@@ -7,13 +6,21 @@ namespace Sip2Nostr.Tests;
 
 public class ConfigLoaderTests
 {
-    private static readonly ILogger TestLogger = new LoggerConfiguration().CreateLogger();
-
     // Arbitrary, freshly generated for this test file only - not tied to
     // any real Nostr identity or relay. Needs to actually parse (unlike
     // the old "nsec1...""/"npub1..." placeholders) now that ConfigLoader
     // validates them eagerly - see issue #26.
-    private const string MinimalValidToml = """
+    private const string BridgeNsec = "nsec1wlhduv429l0ggtp36zqv9jm767898l40hd62kyspgclhklzdthss37hrv3";
+    private const string TargetNpub = "npub1mn44lshdqvxmrulx0xveghc4w0jwwl6dxl5vd8hvayt342ehxcrssmgts5";
+
+    // [nostr].enabled = false here on purpose: target_npub/relays/dm_relays
+    // and [[lines]].sound are only ever read when Nostr is enabled (or, for
+    // greeting_sound, when voicemail is also enabled - see Program.cs), so
+    // ConfigLoader only validates their *format* in that case; this fixture
+    // exercises everything that's validated regardless (bridge_nsec, the
+    // voicemail numeric/filename checks, [[lines]].sound). NostrEnabledToml
+    // below covers the gated checks.
+    private const string MinimalValidToml = $"""
         [sip]
         provider_host = "sip.example.com"
         username = "user"
@@ -26,8 +33,25 @@ public class ConfigLoaderTests
         [nostr]
         enabled = false
         relays = ["wss://relay.example.com"]
-        bridge_nsec = "nsec1wlhduv429l0ggtp36zqv9jm767898l40hd62kyspgclhklzdthss37hrv3"
-        target_npub = "npub1mn44lshdqvxmrulx0xveghc4w0jwwl6dxl5vd8hvayt342ehxcrssmgts5"
+        bridge_nsec = "{BridgeNsec}"
+        target_npub = "{TargetNpub}"
+        """;
+
+    private const string NostrEnabledToml = $"""
+        [sip]
+        provider_host = "sip.example.com"
+        username = "user"
+        password = "pass"
+
+        [[lines]]
+        uri = "sip:+15551234@sip.example.com"
+        label = "main"
+
+        [nostr]
+        enabled = true
+        relays = ["wss://relay.example.com"]
+        bridge_nsec = "{BridgeNsec}"
+        target_npub = "{TargetNpub}"
         """;
 
     [Fact]
@@ -36,7 +60,7 @@ public class ConfigLoaderTests
         var path = WriteTempConfig(MinimalValidToml);
         try
         {
-            var config = ConfigLoader.Load(path, TestLogger);
+            var config = ConfigLoader.Load(path);
             Assert.False(config.Voicemail.Enabled);
             Assert.Equal("audio", config.Voicemail.Delivery);
             Assert.Equal("{timestamp}-{caller}.opus", config.Voicemail.RecordingFilename);
@@ -59,7 +83,7 @@ public class ConfigLoaderTests
         var path = WriteTempConfig(toml);
         try
         {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains("connection_loss_grace_seconds", exception.Message);
         }
         finally
@@ -75,7 +99,7 @@ public class ConfigLoaderTests
         var path = WriteTempConfig(toml);
         try
         {
-            var config = ConfigLoader.Load(path, TestLogger);
+            var config = ConfigLoader.Load(path);
             Assert.Equal(30, config.WebRtc.ConnectionLossGraceSeconds);
         }
         finally
@@ -91,7 +115,7 @@ public class ConfigLoaderTests
         var path = WriteTempConfig(toml);
         try
         {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains("delivery", exception.Message);
         }
         finally
@@ -107,7 +131,7 @@ public class ConfigLoaderTests
         var path = WriteTempConfig(toml);
         try
         {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains("model_path", exception.Message);
         }
         finally
@@ -124,7 +148,7 @@ public class ConfigLoaderTests
         var path = WriteTempConfig(toml);
         try
         {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains("model_path", exception.Message);
         }
         finally
@@ -144,7 +168,7 @@ public class ConfigLoaderTests
             var path = WriteTempConfig(toml);
             try
             {
-                var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+                var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
                 Assert.Contains("engine", exception.Message);
             }
             finally
@@ -169,7 +193,7 @@ public class ConfigLoaderTests
             var path = WriteTempConfig(toml);
             try
             {
-                var config = ConfigLoader.Load(path, TestLogger);
+                var config = ConfigLoader.Load(path);
                 Assert.Equal("text", config.Voicemail.Delivery);
                 Assert.Equal("whisper", config.Voicemail.Transcription.Engine);
                 Assert.Equal("en", config.Voicemail.Transcription.Language);
@@ -199,7 +223,7 @@ public class ConfigLoaderTests
             var path = WriteTempConfig(toml);
             try
             {
-                var config = ConfigLoader.Load(path, TestLogger);
+                var config = ConfigLoader.Load(path);
                 Assert.Equal(overBudget, config.Voicemail.MaxRecordingSeconds);
             }
             finally
@@ -225,7 +249,7 @@ public class ConfigLoaderTests
             var path = WriteTempConfig(toml);
             try
             {
-                var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+                var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
                 Assert.Contains("max_recording_seconds", exception.Message);
             }
             finally
@@ -253,7 +277,7 @@ public class ConfigLoaderTests
         var path = WriteTempConfig(toml);
         try
         {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains(expectedKeyInMessage, exception.Message);
         }
         finally
@@ -269,7 +293,7 @@ public class ConfigLoaderTests
         var path = WriteTempConfig(toml);
         try
         {
-            var config = ConfigLoader.Load(path, TestLogger);
+            var config = ConfigLoader.Load(path);
             Assert.Equal(VoicemailBudget.MaxTextRecordingSecondsCeiling, config.Voicemail.MaxTextRecordingSeconds);
         }
         finally
@@ -288,7 +312,7 @@ public class ConfigLoaderTests
         var path = WriteTempConfig(toml);
         try
         {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains("recording_filename", exception.Message);
         }
         finally
@@ -304,7 +328,7 @@ public class ConfigLoaderTests
         var path = WriteTempConfig(toml);
         try
         {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains("max_recording_seconds", exception.Message);
         }
         finally
@@ -322,7 +346,7 @@ public class ConfigLoaderTests
         var path = WriteTempConfig(toml);
         try
         {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains("opus_resampler_quality", exception.Message);
         }
         finally
@@ -340,7 +364,7 @@ public class ConfigLoaderTests
         var path = WriteTempConfig(toml);
         try
         {
-            var config = ConfigLoader.Load(path, TestLogger);
+            var config = ConfigLoader.Load(path);
             Assert.Equal(quality, config.Voicemail.OpusResamplerQuality);
         }
         finally
@@ -364,7 +388,7 @@ public class ConfigLoaderTests
             var path = WriteTempConfig(toml);
             try
             {
-                var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+                var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
                 Assert.Contains("max_recording_seconds", exception.Message);
             }
             finally
@@ -393,7 +417,7 @@ public class ConfigLoaderTests
             var path = WriteTempConfig(toml);
             try
             {
-                var config = ConfigLoader.Load(path, TestLogger);
+                var config = ConfigLoader.Load(path);
                 Assert.Equal(raisedCeiling, config.Voicemail.MaxTextRecordingSeconds);
                 Assert.Equal(raisedCeiling, config.Voicemail.MaxRecordingSeconds);
             }
@@ -415,7 +439,7 @@ public class ConfigLoaderTests
         var path = WriteTempConfig(toml);
         try
         {
-            var config = ConfigLoader.Load(path, TestLogger);
+            var config = ConfigLoader.Load(path);
             Assert.Equal(VoicemailBudget.MaxRecordingSeconds, config.Voicemail.MaxRecordingSeconds);
         }
         finally
@@ -434,7 +458,7 @@ public class ConfigLoaderTests
         var path = WriteTempConfig(toml);
         try
         {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains("recording_filename", exception.Message);
         }
         finally
@@ -453,7 +477,7 @@ public class ConfigLoaderTests
         var path = WriteTempConfig(toml);
         try
         {
-            var config = ConfigLoader.Load(path, TestLogger);
+            var config = ConfigLoader.Load(path);
             Assert.Equal(recordingFilename, config.Voicemail.RecordingFilename);
         }
         finally
@@ -466,7 +490,7 @@ public class ConfigLoaderTests
     public void Load_MissingConfigFile_ThrowsConfigurationException()
     {
         var path = Path.Combine(Path.GetTempPath(), $"sip2nostr-test-{Guid.NewGuid():N}.toml");
-        var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+        var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
         Assert.Contains(path, exception.Message);
     }
 
@@ -476,7 +500,7 @@ public class ConfigLoaderTests
         var path = WriteTempConfig("[sip\nbroken");
         try
         {
-            Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+            Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
         }
         finally
         {
@@ -487,32 +511,60 @@ public class ConfigLoaderTests
     [Theory]
     [InlineData("bridge_nsec = \"\"", "bridge_nsec")]
     [InlineData("bridge_nsec = \"not-a-valid-key\"", "bridge_nsec")]
-    [InlineData("target_npub = \"\"", "target_npub")]
-    [InlineData("target_npub = \"not-a-valid-key\"", "target_npub")]
-    public void Load_InvalidNostrIdentity_Throws(string nostrOverride, string expectedKeyInMessage)
+    public void Load_InvalidBridgeNsec_Throws(string bridgeNsecLine, string expectedKeyInMessage)
     {
-        var toml = $"""
-            [sip]
-            provider_host = "sip.example.com"
-            username = "user"
-            password = "pass"
-
-            [[lines]]
-            uri = "sip:+15551234@sip.example.com"
-            label = "main"
-
-            [nostr]
-            enabled = false
-            relays = ["wss://relay.example.com"]
-            bridge_nsec = "nsec1wlhduv429l0ggtp36zqv9jm767898l40hd62kyspgclhklzdthss37hrv3"
-            target_npub = "npub1mn44lshdqvxmrulx0xveghc4w0jwwl6dxl5vd8hvayt342ehxcrssmgts5"
-            {nostrOverride}
-            """;
+        // bridge_nsec is validated regardless of [nostr].enabled (matching
+        // Program.cs's existing unconditional parse), so this uses the
+        // enabled = false fixture - .Replace, not append, since appending
+        // a second bridge_nsec under the same [nostr] table is a duplicate
+        // TOML key and fails at the parse step, never reaching the check
+        // this test means to exercise.
+        var toml = MinimalValidToml.Replace($"bridge_nsec = \"{BridgeNsec}\"", bridgeNsecLine);
         var path = WriteTempConfig(toml);
         try
         {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains(expectedKeyInMessage, exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("target_npub = \"\"", "target_npub")]
+    [InlineData("target_npub = \"not-a-valid-key\"", "target_npub")]
+    public void Load_InvalidTargetNpub_Throws(string targetNpubLine, string expectedKeyInMessage)
+    {
+        // target_npub is only validated when [nostr].enabled - see
+        // NostrEnabledToml's own comment.
+        var toml = NostrEnabledToml.Replace($"target_npub = \"{TargetNpub}\"", targetNpubLine);
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains(expectedKeyInMessage, exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_InvalidTargetNpubWhenNostrDisabled_Succeeds()
+    {
+        // The documented [nostr].enabled = false local SIP-test path
+        // (docs/receiving-calls.md) never touches target_npub - NosCallSink
+        // isn't even constructed - so a garbage value there shouldn't block
+        // startup.
+        var toml = MinimalValidToml.Replace($"target_npub = \"{TargetNpub}\"", "target_npub = \"not-a-valid-key\"");
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal("not-a-valid-key", config.Nostr.TargetNpub);
         }
         finally
         {
@@ -523,11 +575,11 @@ public class ConfigLoaderTests
     [Fact]
     public void Load_EmptyRelays_Throws()
     {
-        var toml = MinimalValidToml.Replace("relays = [\"wss://relay.example.com\"]", "relays = []");
+        var toml = NostrEnabledToml.Replace("relays = [\"wss://relay.example.com\"]", "relays = []");
         var path = WriteTempConfig(toml);
         try
         {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains("relays", exception.Message);
         }
         finally
@@ -539,13 +591,13 @@ public class ConfigLoaderTests
     [Theory]
     [InlineData("relays = [\"not a url\"]", "relays")]
     [InlineData("relays = [\"http://relay.example.com\"]", "relays")]
-    public void Load_InvalidRelayUrl_Throws(string nostrOverride, string expectedKeyInMessage)
+    public void Load_InvalidRelayUrl_Throws(string relaysLine, string expectedKeyInMessage)
     {
-        var toml = $"{MinimalValidToml}\n{nostrOverride}\n";
+        var toml = NostrEnabledToml.Replace("relays = [\"wss://relay.example.com\"]", relaysLine);
         var path = WriteTempConfig(toml);
         try
         {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains(expectedKeyInMessage, exception.Message);
         }
         finally
@@ -557,11 +609,11 @@ public class ConfigLoaderTests
     [Fact]
     public void Load_InvalidDmRelay_Throws()
     {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndm_relays = [\"not a url\"]\n";
+        var toml = $"{NostrEnabledToml}\n\n[voicemail]\ndm_relays = [\"not a url\"]\n";
         var path = WriteTempConfig(toml);
         try
         {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains("dm_relays", exception.Message);
         }
         finally
@@ -573,11 +625,11 @@ public class ConfigLoaderTests
     [Fact]
     public void Load_ValidDmRelay_Succeeds()
     {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndm_relays = [\"wss://dm-relay.example.com\"]\n";
+        var toml = $"{NostrEnabledToml}\n\n[voicemail]\ndm_relays = [\"wss://dm-relay.example.com\"]\n";
         var path = WriteTempConfig(toml);
         try
         {
-            var config = ConfigLoader.Load(path, TestLogger);
+            var config = ConfigLoader.Load(path);
             Assert.Equal(["wss://dm-relay.example.com"], config.Voicemail.DmRelays);
         }
         finally
@@ -589,12 +641,32 @@ public class ConfigLoaderTests
     [Fact]
     public void Load_MissingGreetingSoundFile_Throws()
     {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\ngreeting_sound = \"does-not-exist.opus\"\n";
+        // greeting_sound only matters to VoicemailSink, wired in only when
+        // both [nostr] and [voicemail] are enabled - see Program.cs.
+        var toml = $"{NostrEnabledToml}\n\n[voicemail]\nenabled = true\ngreeting_sound = \"does-not-exist.opus\"\n";
         var path = WriteTempConfig(toml);
         try
         {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains("greeting_sound", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_GreetingSoundUnusedWhenVoicemailDisabled_Succeeds()
+    {
+        // [voicemail].enabled defaults to false - a broken greeting_sound
+        // shouldn't block startup when VoicemailSink is never constructed.
+        var toml = $"{NostrEnabledToml}\n\n[voicemail]\ngreeting_sound = \"does-not-exist.opus\"\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal("does-not-exist.opus", config.Voicemail.GreetingSound);
         }
         finally
         {
@@ -608,11 +680,11 @@ public class ConfigLoaderTests
         var soundPath = WriteTempFile("not-a-sound-file", ".mp3");
         try
         {
-            var toml = $"{MinimalValidToml}\n\n[voicemail]\ngreeting_sound = \"{EscapeTomlString(soundPath)}\"\n";
+            var toml = $"{NostrEnabledToml}\n\n[voicemail]\nenabled = true\ngreeting_sound = \"{EscapeTomlString(soundPath)}\"\n";
             var path = WriteTempConfig(toml);
             try
             {
-                var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
+                var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
                 Assert.Contains("greeting_sound", exception.Message);
             }
             finally
@@ -632,11 +704,11 @@ public class ConfigLoaderTests
         var soundPath = WriteTempFile("raw-pcm-bytes", ".pcm");
         try
         {
-            var toml = $"{MinimalValidToml}\n\n[voicemail]\ngreeting_sound = \"{EscapeTomlString(soundPath)}\"\n";
+            var toml = $"{NostrEnabledToml}\n\n[voicemail]\nenabled = true\ngreeting_sound = \"{EscapeTomlString(soundPath)}\"\n";
             var path = WriteTempConfig(toml);
             try
             {
-                var config = ConfigLoader.Load(path, TestLogger);
+                var config = ConfigLoader.Load(path);
                 Assert.Equal(soundPath, config.Voicemail.GreetingSound);
             }
             finally
@@ -653,6 +725,51 @@ public class ConfigLoaderTests
     [Fact]
     public void Load_MissingLineSoundFile_ThrowsWithLineLabel()
     {
+        // [[lines]].sound only matters to LocalTestAudioSink, wired in only
+        // when [nostr] is disabled - see Program.cs - so this uses
+        // MinimalValidToml (enabled = false), not NostrEnabledToml.
+        var toml = MinimalValidToml.Replace(
+            "label = \"main\"",
+            "label = \"main\"\nsound = \"does-not-exist.opus\"");
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains("main", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_InvalidLineSoundWhenNostrEnabled_Succeeds()
+    {
+        // The inverse of Load_MissingLineSoundFile_ThrowsWithLineLabel:
+        // LocalTestAudioSink never runs when [nostr] is enabled, so a
+        // broken [[lines]].sound shouldn't block startup in that mode.
+        var toml = NostrEnabledToml.Replace(
+            "label = \"main\"",
+            "label = \"main\"\nsound = \"does-not-exist.opus\"");
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal("does-not-exist.opus", config.Lines[0].Sound);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_MissingNostrSection_ThrowsConfigurationException()
+    {
+        // AppConfig.Nostr is [TomlRequired] precisely so a missing [nostr]
+        // section fails here, cleanly, instead of ConfigLoader
+        // dereferencing a null config.Nostr with a NullReferenceException.
         var toml = """
             [sip]
             provider_host = "sip.example.com"
@@ -662,19 +779,30 @@ public class ConfigLoaderTests
             [[lines]]
             uri = "sip:+15551234@sip.example.com"
             label = "main"
-            sound = "does-not-exist.opus"
-
-            [nostr]
-            enabled = false
-            relays = ["wss://relay.example.com"]
-            bridge_nsec = "nsec1wlhduv429l0ggtp36zqv9jm767898l40hd62kyspgclhklzdthss37hrv3"
-            target_npub = "npub1mn44lshdqvxmrulx0xveghc4w0jwwl6dxl5vd8hvayt342ehxcrssmgts5"
             """;
         var path = WriteTempConfig(toml);
         try
         {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path, TestLogger));
-            Assert.Contains("main", exception.Message);
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains("nostr", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_MissingRequiredSipField_ThrowsConfigurationException()
+    {
+        // Same [TomlRequired] mechanism, on a nested required string field
+        // rather than a whole required section.
+        var toml = MinimalValidToml.Replace("username = \"user\"\n", "");
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains("username", exception.Message);
         }
         finally
         {

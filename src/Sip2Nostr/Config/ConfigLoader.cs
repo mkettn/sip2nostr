@@ -1,5 +1,4 @@
 using Nostr.Sdk;
-using Serilog;
 using Tomlyn;
 using Sip2Nostr.Shared;
 
@@ -7,12 +6,7 @@ namespace Sip2Nostr.Config;
 
 public static class ConfigLoader
 {
-    // logger is a bootstrap, console-only Serilog logger built before this
-    // config is loaded (see Program.cs) - the real one, with the run-file
-    // sink this config itself configures, doesn't exist yet. Needed here
-    // because eagerly resolving [[lines]].sound / [voicemail].greeting_sound
-    // (SoundFileResolver.Resolve) logs its own diagnostics.
-    public static AppConfig Load(string path, ILogger logger)
+    public static AppConfig Load(string path)
     {
         if (!File.Exists(path))
         {
@@ -29,6 +23,10 @@ public static class ConfigLoader
         {
             throw new ConfigurationException($"Config file '{path}' could not be parsed: {exception.Message}", exception);
         }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new ConfigurationException($"Config file '{path}' could not be read: {exception.Message}", exception);
+        }
 
         if (config is null)
         {
@@ -36,12 +34,12 @@ public static class ConfigLoader
         }
 
         config.ConfigDirectory = Path.GetDirectoryName(Path.GetFullPath(path)) ?? Directory.GetCurrentDirectory();
-        Validate(config, logger);
+        Validate(config);
         return config;
     }
 
     // See docs/voicemail.md for why these fail fast here.
-    private static void Validate(AppConfig config, ILogger logger)
+    private static void Validate(AppConfig config)
     {
         if (config.Voicemail.RingTimeoutSeconds <= 0)
         {
@@ -158,22 +156,42 @@ public static class ConfigLoader
             }
         }
 
-        ValidateNostrIdentity(config);
-        ValidateSoundFiles(config, logger);
+        // [nostr].bridge_nsec is parsed regardless of enabled - Program.cs
+        // already does this unconditionally to log the bridge's npub, so
+        // this just makes that existing requirement deliberate rather than
+        // a side effect. target_npub/relays/dm_relays, unlike bridge_nsec,
+        // are never even read when disabled (NosCallSink/VoicemailSender
+        // aren't constructed - see Program.cs), so validating their format
+        // then would block the zero-Nostr local test path
+        // (docs/receiving-calls.md) over values that are never used.
+        ValidateBridgeIdentity(config);
+        if (config.Nostr.Enabled)
+        {
+            ValidateTargetAndRelays(config);
+        }
+
+        // Same reasoning as above, the other way around: [[lines]].sound
+        // only matters to LocalTestAudioSink, which only exists when Nostr
+        // is disabled; [voicemail].greeting_sound only matters to
+        // VoicemailSink, which is only wired in when both Nostr and
+        // voicemail are enabled (see Program.cs).
+        if (!config.Nostr.Enabled)
+        {
+            ValidateLineSoundFiles(config);
+        }
+
+        if (config.Nostr.Enabled && config.Voicemail.Enabled)
+        {
+            ValidateGreetingSoundFile(config);
+        }
     }
 
-    // [nostr].bridge_nsec/target_npub/relays and [voicemail].dm_relays are
-    // otherwise only ever parsed deep inside NostrSignalingClient/
-    // VoicemailSender, the first time a real call or voicemail actually
-    // needs them - so a malformed value (there's no way to fix a bad key
-    // by waiting; unlike a relay being briefly unreachable, this never
-    // becomes valid) previously went unnoticed until then. See issue #26.
-    // .required on these AppConfig properties is a compile-time-only
-    // signal - Tomlyn leaves a missing key as null rather than failing
-    // deserialization, so a null/empty check is needed before handing
-    // these to Nostr.Sdk, which throws ArgumentNullException (not the
-    // NostrSdkException a genuinely malformed value throws) for null.
-    private static void ValidateNostrIdentity(AppConfig config)
+    // Previously only parsed inside NostrSignalingClient, which
+    // NosCallSink constructs per-call - so a malformed bridge_nsec went
+    // unnoticed until the first real inbound call. There's no way to fix
+    // a bad key by waiting, unlike a relay being briefly unreachable, so
+    // this fails fast here instead. See issue #26.
+    private static void ValidateBridgeIdentity(AppConfig config)
     {
         if (string.IsNullOrWhiteSpace(config.Nostr.BridgeNsec))
         {
@@ -189,7 +207,10 @@ public static class ConfigLoader
             throw new ConfigurationException(
                 $"[nostr].bridge_nsec is not a valid Nostr private key (nsec or hex): {exception.Message}", exception);
         }
+    }
 
+    private static void ValidateTargetAndRelays(AppConfig config)
+    {
         if (string.IsNullOrWhiteSpace(config.Nostr.TargetNpub))
         {
             throw new ConfigurationException("[nostr].target_npub must not be empty.");
@@ -205,7 +226,11 @@ public static class ConfigLoader
                 $"[nostr].target_npub is not a valid Nostr public key (npub or hex): {exception.Message}", exception);
         }
 
-        if (config.Nostr.Relays is null or { Count: 0 })
+        // config.Nostr.Relays can't be null here - AppConfig marks it
+        // [TomlRequired], so Load already failed on a missing key - but an
+        // explicit empty list (relays = []) is still valid TOML and needs
+        // its own check.
+        if (config.Nostr.Relays.Count == 0)
         {
             throw new ConfigurationException("[nostr].relays must contain at least one relay URL.");
         }
@@ -229,31 +254,42 @@ public static class ConfigLoader
         }
     }
 
-    // [[lines]].sound and [voicemail].greeting_sound used to be resolved
-    // lazily, the first time a sink actually needed to play the file - a
-    // bad path/format/decode failure just fell back to a sine-wave tone,
-    // logged at Warning, discoverable only by placing a call. Resolving
-    // eagerly here reuses that same Warning-logging Resolve rather than a
-    // separate non-logging check, so the specific reason (missing file,
-    // unsupported format, decode failure) is still in the log immediately
-    // above the exception that stops startup.
-    private static void ValidateSoundFiles(AppConfig config, ILogger logger)
+    // [[lines]].sound used to be resolved lazily, the first time
+    // LocalTestAudioSink actually needed to play the file - a bad
+    // path/format/decode failure just fell back to a sine-wave tone,
+    // logged at Warning, discoverable only by placing a call.
+    // SoundFileResolver.TryResolve embeds the specific reason (missing
+    // file, unsupported format, decode failure) directly in the exception
+    // below, rather than relying on it having been logged separately - see
+    // docs/sound-files.md.
+    private static void ValidateLineSoundFiles(AppConfig config)
     {
-        foreach (var line in config.Lines ?? [])
+        foreach (var line in config.Lines)
         {
-            if (!string.IsNullOrWhiteSpace(line.Sound) &&
-                SoundFileResolver.Resolve(line.Sound, config.ConfigDirectory, logger) is null)
+            if (string.IsNullOrWhiteSpace(line.Sound))
             {
-                throw new ConfigurationException(
-                    $"[[lines]] \"{line.Label}\" sound \"{line.Sound}\" could not be resolved as a playable sound file - see the warning above for why.");
+                continue;
+            }
+
+            var (_, failureReason) = SoundFileResolver.TryResolve(line.Sound, config.ConfigDirectory);
+            if (failureReason is not null)
+            {
+                throw new ConfigurationException($"[[lines]] \"{line.Label}\" sound \"{line.Sound}\": {failureReason}");
             }
         }
+    }
 
-        if (!string.IsNullOrWhiteSpace(config.Voicemail.GreetingSound) &&
-            SoundFileResolver.Resolve(config.Voicemail.GreetingSound, config.ConfigDirectory, logger) is null)
+    private static void ValidateGreetingSoundFile(AppConfig config)
+    {
+        if (string.IsNullOrWhiteSpace(config.Voicemail.GreetingSound))
         {
-            throw new ConfigurationException(
-                $"[voicemail].greeting_sound \"{config.Voicemail.GreetingSound}\" could not be resolved as a playable sound file - see the warning above for why.");
+            return;
+        }
+
+        var (_, failureReason) = SoundFileResolver.TryResolve(config.Voicemail.GreetingSound, config.ConfigDirectory);
+        if (failureReason is not null)
+        {
+            throw new ConfigurationException($"[voicemail].greeting_sound \"{config.Voicemail.GreetingSound}\": {failureReason}");
         }
     }
 }

@@ -2,21 +2,33 @@ using Tomlyn.Serialization;
 
 namespace Sip2Nostr.Config;
 
+// Every `required` property below also carries `[TomlRequired]` - C#'s
+// `required` is a compile-time-only signal to callers who construct an
+// AppConfig directly (nobody does; Tomlyn deserializes it via reflection,
+// bypassing that check entirely). Without `[TomlRequired]`, a missing key
+// deserializes to a silent null instead of failing, and ConfigLoader
+// dereferencing it crashes with a NullReferenceException - confirmed by
+// testing directly against Tomlyn 2.10.1. `[TomlRequired]` makes Tomlyn
+// itself throw a clear TomlException (already caught and wrapped by
+// ConfigLoader.Load) for a missing key, before any of that.
 public sealed class AppConfig
 {
     [property: TomlIgnore]
     public string ConfigDirectory { get; set; } = Directory.GetCurrentDirectory();
 
     [property: TomlPropertyName("sip")]
+    [property: TomlRequired]
     public required SipConfig Sip { get; init; }
 
     [property: TomlPropertyName("dns")]
     public DnsConfig? Dns { get; init; }
 
     [property: TomlPropertyName("lines")]
+    [property: TomlRequired]
     public required List<LineConfig> Lines { get; init; }
 
     [property: TomlPropertyName("nostr")]
+    [property: TomlRequired]
     public required NostrConfig Nostr { get; init; }
 
     [property: TomlPropertyName("webrtc")]
@@ -35,12 +47,15 @@ public sealed class AppConfig
 public sealed class SipConfig
 {
     [property: TomlPropertyName("provider_host")]
+    [property: TomlRequired]
     public required string ProviderHost { get; init; }
 
     [property: TomlPropertyName("username")]
+    [property: TomlRequired]
     public required string Username { get; init; }
 
     [property: TomlPropertyName("password")]
+    [property: TomlRequired]
     public required string Password { get; init; }
 
     [property: TomlPropertyName("contact_host")]
@@ -56,6 +71,7 @@ public sealed class SipConfig
 public sealed class DnsConfig
 {
     [property: TomlPropertyName("resolver")]
+    [property: TomlRequired]
     public required string Resolver { get; init; }
 
     [property: TomlPropertyName("resolver_fallback")]
@@ -68,9 +84,11 @@ public sealed class DnsConfig
 public sealed class LineConfig
 {
     [property: TomlPropertyName("uri")]
+    [property: TomlRequired]
     public required string Uri { get; init; }
 
     [property: TomlPropertyName("label")]
+    [property: TomlRequired]
     public required string Label { get; init; }
 
     [property: TomlPropertyName("sound")]
@@ -83,12 +101,15 @@ public sealed class NostrConfig
     public bool Enabled { get; init; } = true;
 
     [property: TomlPropertyName("relays")]
+    [property: TomlRequired]
     public required List<string> Relays { get; init; }
 
     [property: TomlPropertyName("bridge_nsec")]
+    [property: TomlRequired]
     public required string BridgeNsec { get; init; }
 
     [property: TomlPropertyName("target_npub")]
+    [property: TomlRequired]
     public required string TargetNpub { get; init; }
 }
 
