@@ -2,6 +2,7 @@ using System.Text.Json;
 using Nostr.Sdk;
 using Serilog;
 using Sip2Nostr.Config;
+using Sip2Nostr.Shared;
 
 namespace Sip2Nostr.Signaling;
 
@@ -79,10 +80,15 @@ public sealed class NostrSignalingClient : IAsyncDisposable
         await _client.Subscribe(filter, null);
     }
 
-    // Startup-time diagnostic: confirms the configured relays are actually
-    // reachable before any call arrives, instead of only finding out deep
-    // into a live call. Uses a throwaway connection - the real per-call
-    // NostrSignalingClient always connects fresh in ConnectAsync above.
+    // Startup-time gate, not just a diagnostic: without at least one
+    // reachable relay, sip2nostr can't do the one thing it exists to do
+    // (bridge a call to Nostr), so this is fatal rather than a Warning a
+    // call answers only much later - awaited directly from Program.cs's
+    // top level, before SIP registration starts. Uses a throwaway
+    // connection - the real per-call NostrSignalingClient always connects
+    // fresh in ConnectAsync above, and a relay dropping out *after* this
+    // check (or an individual relay never coming up while at least one
+    // other is reachable) stays a per-call Warning there, not fatal here.
     public static async Task CheckConnectivityAsync(NostrConfig config, ILogger logger)
     {
         // See the constructor above - only ever called from Program.cs
@@ -91,21 +97,25 @@ public sealed class NostrSignalingClient : IAsyncDisposable
         var relays = config.Relays.Select(RelayUrl.Parse).ToList();
         var client = new ClientBuilder().Signer(NostrSigner.Keys(bridgeKeys)).Build();
 
-        var connectedRelays = await RelayConnector.ConnectAsync(client, relays, ConnectTimeout, logger);
-        if (connectedRelays.Count > 0)
+        try
         {
+            var connectedRelays = await RelayConnector.ConnectAsync(client, relays, ConnectTimeout, logger);
+            if (connectedRelays.Count == 0)
+            {
+                // RelayConnector already logged each relay's own failure
+                // reason above - this is the fatal summary Program.cs's
+                // top-level catch renders as a single clean line.
+                throw new ConfigurationException(
+                    $"None of the {relays.Count} configured [nostr].relays are reachable - check the relay URLs and network access.");
+            }
+
             logger.Information("Nostr connected: {ConnectedCount}/{TotalCount} relay(s) reachable.", connectedRelays.Count, relays.Count);
         }
-        else
+        finally
         {
-            logger.Warning(
-                "Nostr not connected: none of the {TotalCount} configured relay(s) are reachable. " +
-                "Calls will not propagate to Nostr until this is fixed - check the relay URLs and network access.",
-                relays.Count);
+            await client.Shutdown();
+            client.Dispose();
         }
-
-        await client.Shutdown();
-        client.Dispose();
     }
 
     // Content is the raw SDP offer string; call-type is required by

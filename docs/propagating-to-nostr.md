@@ -204,6 +204,28 @@ third key cannot decrypt the payload. It has since been confirmed against
 a real relay and a real NosCall install, ringing and carrying audio both
 ways.
 
+## Startup requires a reachable relay
+
+`[nostr].bridge_nsec`/`target_npub`/`relays` are eagerly *parsed* at
+config load (`ConfigLoader`) whenever `[nostr].enabled` - a malformed
+value never becomes valid, so it fails startup outright (see #26). Relay
+*reachability* used to be a separate, softer check; it isn't anymore:
+`NostrSignalingClient.CheckConnectivityAsync`, awaited directly from
+`Program.cs` before SIP registration starts, throws if none of the
+configured relays are reachable, and that's fatal - sip2nostr can't do
+the one thing it exists to do (bridge a call to Nostr) without at least
+one, so there's no reason to come up "successfully" into a state where
+every call is guaranteed to fail. Each relay's own connection failure is
+logged individually (`RelayConnector`) before the fatal summary.
+
+This is a startup-time gate only, not a standing requirement that a relay
+stay reachable forever: a relay dropping out *after* this check passes,
+or an individual relay never coming up while at least one other is, is
+still just a `Warning` from the real per-call connection
+(`NostrSignalingClient.ConnectAsync`) - crashing an already-running bridge
+over one relay hiccup, mid-call, would be a worse outcome than the call
+itself failing to reach that one relay.
+
 ## Blind spots
 
 - **TURN/NAT behavior for the WebRTC leg is untested** beyond the local
@@ -229,24 +251,21 @@ ways.
   of promptness for not dropping calls on a transient blip, not a claim
   that its default (15s) is the right number for every network this runs
   on — hence it being configurable.
-- **Relay reachability at startup stays diagnostic-only, by choice.**
-  `[nostr].bridge_nsec`/`target_npub`/`relays` (and `[voicemail].dm_relays`)
-  are eagerly *parsed* at config load now (`ConfigLoader`) - a malformed
-  value never becomes valid, so it fails startup outright (see #26). All
-  of these are only checked when `[nostr].enabled` - none of them are
-  read otherwise (`NosCallSink`/`VoicemailSender` aren't constructed, and
+- **`[nostr].bridge_nsec`/`target_npub`/`relays` (and `[voicemail].dm_relays`)
+  are only checked when `[nostr].enabled`** - none of them are read
+  otherwise (`NosCallSink`/`VoicemailSender` aren't constructed, and
   `Program.cs` skips logging the bridge's npub too - see there), so
-  validating their format would only block the documented
+  validating them would only block the documented
   `[nostr].enabled = false` local SIP-test path
-  (`docs/receiving-calls.md`) over values it never uses. Relay
-  *reachability* is a different kind of check: `CheckNostrConnectivityAsync`
-  still only logs a `Warning` if none of the configured relays answer at
-  boot, deliberately - a relay that's briefly down at boot isn't a
-  misconfiguration, and every real call connects fresh anyway
-  (`NostrSignalingClient.ConnectAsync`). Same reasoning applies to SIP
-  registrar reachability (`SipCallSource`'s soft, retrying
-  `SIPRegistrationUserAgent`) - a bad username/password never stops the
-  process starting, only registering.
+  (`docs/receiving-calls.md`) over values it never uses.
+- **SIP registrar reachability stays soft, unlike Nostr relay
+  reachability** (see "Startup requires a reachable relay" above) - a bad
+  username/password against the SIP provider never stops the process
+  starting, only registering (`SipCallSource`'s `SIPRegistrationUserAgent`
+  retries every 30s indefinitely on its own). An open asymmetry, not a
+  principled distinction: nothing here says a SIP registrar being
+  unreachable is any less fatal to sip2nostr's one job than a Nostr relay
+  being unreachable is - it just hasn't been asked for.
 - **No busy/reject signaling sent.** If sip2nostr is somehow mid-call
   already, it doesn't auto-reject a second offer the way NIP-AC recommends.
 - **No multi-device self-notification.** Not applicable — sip2nostr is a

@@ -32,22 +32,6 @@ static Serilog.Core.Logger CreateLogger(
     return logger.CreateLogger();
 }
 
-// Runs at startup, in parallel with SIP registration, so relay
-// reachability is known up front instead of only surfacing when the
-// first call tries to publish. Failures here are diagnostic only -
-// NostrSignalingClient.ConnectAsync connects fresh per call regardless.
-static async Task CheckNostrConnectivitySafeAsync(NostrConfig nostrConfig, ILogger logger)
-{
-    try
-    {
-        await NostrSignalingClient.CheckConnectivityAsync(nostrConfig, logger.ForContext<NostrSignalingClient>());
-    }
-    catch (Exception exception)
-    {
-        logger.Warning(exception, "Nostr startup connectivity check failed unexpectedly.");
-    }
-}
-
 // Only loads a transcriber (and its GGML model) when it'll actually be
 // used - voicemail disabled, or [voicemail].delivery = "audio" (the
 // default), stays as cheap to start up as before this existed.
@@ -156,7 +140,12 @@ try
                 Log.Logger.ForContext<VoicemailSink>()));
         }
 
-        _ = CheckNostrConnectivitySafeAsync(config.Nostr, Log.Logger);
+        // Fatal, not fire-and-forget: without at least one reachable
+        // relay, sip2nostr can't bridge a call at all, so this is awaited
+        // before SIP registration starts rather than left to surface a
+        // Warning sometime after the process is already "running" - see
+        // NostrSignalingClient.CheckConnectivityAsync.
+        await NostrSignalingClient.CheckConnectivityAsync(config.Nostr, Log.Logger.ForContext<NostrSignalingClient>());
     }
     else
     {
