@@ -112,8 +112,15 @@ try
         Log.Information("Writing this run's log to {RunLogPath}.", runLogPath);
     }
 
-    var bridgeNpub = Keys.Parse(config.Nostr.BridgeNsec).PublicKey().ToBech32();
-    Log.Information("Bridge Nostr identity: {BridgeNpub}", bridgeNpub);
+    // Only meaningful (and only validated - see ConfigLoader) when Nostr
+    // is actually in use: the local SIP-test path ([nostr].enabled =
+    // false, see docs/receiving-calls.md) never touches bridge_nsec at
+    // all, and needs no Nostr identity to run.
+    if (config.Nostr.Enabled)
+    {
+        var bridgeNpub = Keys.Parse(config.Nostr.BridgeNsec).PublicKey().ToBech32();
+        Log.Information("Bridge Nostr identity: {BridgeNpub}", bridgeNpub);
+    }
 
     using var cts = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) =>

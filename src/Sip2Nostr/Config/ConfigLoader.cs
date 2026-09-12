@@ -156,17 +156,15 @@ public static class ConfigLoader
             }
         }
 
-        // [nostr].bridge_nsec is parsed regardless of enabled - Program.cs
-        // already does this unconditionally to log the bridge's npub, so
-        // this just makes that existing requirement deliberate rather than
-        // a side effect. target_npub/relays/dm_relays, unlike bridge_nsec,
-        // are never even read when disabled (NosCallSink/VoicemailSender
-        // aren't constructed - see Program.cs), so validating their format
-        // then would block the zero-Nostr local test path
-        // (docs/receiving-calls.md) over values that are never used.
-        ValidateBridgeIdentity(config);
+        // bridge_nsec/target_npub/relays/dm_relays are never read at all
+        // when Nostr is disabled - NosCallSink/VoicemailSender aren't
+        // constructed, and Program.cs skips logging the bridge's npub too
+        // (see there) - so validating their format then would block the
+        // zero-Nostr local test path (docs/receiving-calls.md) over values
+        // that are never used.
         if (config.Nostr.Enabled)
         {
+            ValidateBridgeIdentity(config);
             ValidateTargetAndRelays(config);
         }
 
@@ -187,10 +185,11 @@ public static class ConfigLoader
     }
 
     // Previously only parsed inside NostrSignalingClient, which
-    // NosCallSink constructs per-call - so a malformed bridge_nsec went
-    // unnoticed until the first real inbound call. There's no way to fix
-    // a bad key by waiting, unlike a relay being briefly unreachable, so
-    // this fails fast here instead. See issue #26.
+    // NosCallSink constructs per-call (and, before that, as a side effect
+    // of Program.cs logging the bridge's npub) - so a malformed
+    // bridge_nsec went unnoticed until the first real inbound call. There's
+    // no way to fix a bad key by waiting, unlike a relay being briefly
+    // unreachable, so this fails fast here instead. See issue #26.
     private static void ValidateBridgeIdentity(AppConfig config)
     {
         if (string.IsNullOrWhiteSpace(config.Nostr.BridgeNsec))

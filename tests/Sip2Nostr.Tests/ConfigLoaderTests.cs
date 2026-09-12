@@ -513,18 +513,41 @@ public class ConfigLoaderTests
     [InlineData("bridge_nsec = \"not-a-valid-key\"", "bridge_nsec")]
     public void Load_InvalidBridgeNsec_Throws(string bridgeNsecLine, string expectedKeyInMessage)
     {
-        // bridge_nsec is validated regardless of [nostr].enabled (matching
-        // Program.cs's existing unconditional parse), so this uses the
-        // enabled = false fixture - .Replace, not append, since appending
-        // a second bridge_nsec under the same [nostr] table is a duplicate
-        // TOML key and fails at the parse step, never reaching the check
-        // this test means to exercise.
-        var toml = MinimalValidToml.Replace($"bridge_nsec = \"{BridgeNsec}\"", bridgeNsecLine);
+        // bridge_nsec is only validated when [nostr].enabled - same
+        // reasoning as target_npub/relays below: Program.cs only parses it
+        // (to log the bridge's npub) in that case too, so this needs
+        // NostrEnabledToml, not the enabled = false fixture. .Replace, not
+        // append: appending a second bridge_nsec under the same [nostr]
+        // table is a duplicate TOML key and fails at the parse step, never
+        // reaching the check this test means to exercise.
+        var toml = NostrEnabledToml.Replace($"bridge_nsec = \"{BridgeNsec}\"", bridgeNsecLine);
         var path = WriteTempConfig(toml);
         try
         {
             var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains(expectedKeyInMessage, exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_InvalidBridgeNsecWhenNostrDisabled_Succeeds()
+    {
+        // The documented [nostr].enabled = false local SIP-test path
+        // (docs/receiving-calls.md) never touches bridge_nsec either -
+        // Program.cs skips logging the bridge's npub in that mode too - so
+        // a garbage value there shouldn't block startup. Copying
+        // config.example.toml's bridge_nsec = "nsec1..." placeholder
+        // verbatim into that mode is exactly this case.
+        var toml = MinimalValidToml.Replace($"bridge_nsec = \"{BridgeNsec}\"", "bridge_nsec = \"nsec1...\"");
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal("nsec1...", config.Nostr.BridgeNsec);
         }
         finally
         {
