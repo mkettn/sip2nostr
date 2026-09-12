@@ -10,6 +10,7 @@ using Sip2Nostr.CallerList;
 using Sip2Nostr.Config;
 using Sip2Nostr.Dns;
 using Sip2Nostr.Hub;
+using Sip2Nostr.Shared;
 
 namespace Sip2Nostr.Sip;
 
@@ -59,7 +60,7 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
         }
         catch (ApplicationException exception) when (exception.Message.Contains("Unable to bind socket"))
         {
-            throw new InvalidOperationException(
+            throw new ConfigurationException(
                 "Could not bind UDP port 5060 - it's likely already in use by another process " +
                 "(a previous sip2nostr run that didn't exit cleanly, or another SIP application " +
                 "such as a softphone still registered to the provider). Free the port and try again.",

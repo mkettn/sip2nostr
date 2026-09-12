@@ -2,6 +2,7 @@ using Nostr.Sdk;
 using Serilog;
 using Sip2Nostr.Config;
 using Sip2Nostr.Hub;
+using Sip2Nostr.Shared;
 using Sip2Nostr.Signaling;
 using Sip2Nostr.Sinks;
 using Sip2Nostr.Sip;
@@ -104,7 +105,7 @@ try
     var configPath = args.Length > 0 ? args[0] : "config.toml";
 
     Log.Information("Loading configuration from {ConfigPath}.", configPath);
-    var config = ConfigLoader.Load(configPath);
+    var config = ConfigLoader.Load(configPath, Log.Logger);
     Log.Logger = CreateLogger(config.Logging, config.ConfigDirectory, out var runLogPath);
     if (runLogPath is not null)
     {
@@ -174,6 +175,14 @@ try
     // rather than being cut off the instant cts.Cancel() fires - see
     // CallHub.DrainAsync and docs/propagating-to-nostr.md.
     await hub.DrainAsync(TimeSpan.FromSeconds(5));
+}
+catch (ConfigurationException exception)
+{
+    // A bad config value or a busy port is the operator's to fix, not a
+    // bug - a single clean line says so; the stack trace below would only
+    // bury that under noise. See ConfigurationException.
+    Log.Fatal("{Message}", exception.Message);
+    Environment.ExitCode = 1;
 }
 catch (Exception exception)
 {

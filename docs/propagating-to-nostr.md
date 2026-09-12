@@ -229,6 +229,18 @@ ways.
   of promptness for not dropping calls on a transient blip, not a claim
   that its default (15s) is the right number for every network this runs
   on — hence it being configurable.
+- **Relay reachability at startup stays diagnostic-only, by choice.**
+  `[nostr].bridge_nsec`/`target_npub`/`relays` (and `[voicemail].dm_relays`)
+  are eagerly *parsed* at config load now (`ConfigLoader`) - a malformed
+  value never becomes valid, so it fails startup outright (see #26). Relay
+  *reachability* is a different kind of check: `CheckNostrConnectivityAsync`
+  still only logs a `Warning` if none of the configured relays answer at
+  boot, deliberately - a relay that's briefly down at boot isn't a
+  misconfiguration, and every real call connects fresh anyway
+  (`NostrSignalingClient.ConnectAsync`). Same reasoning applies to SIP
+  registrar reachability (`SipCallSource`'s soft, retrying
+  `SIPRegistrationUserAgent`) - a bad username/password never stops the
+  process starting, only registering.
 - **No busy/reject signaling sent.** If sip2nostr is somehow mid-call
   already, it doesn't auto-reject a second offer the way NIP-AC recommends.
 - **No multi-device self-notification.** Not applicable — sip2nostr is a
