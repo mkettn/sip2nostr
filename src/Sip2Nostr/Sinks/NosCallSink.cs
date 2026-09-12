@@ -25,15 +25,6 @@ public sealed class NosCallSink(
     int? ringTimeoutSeconds,
     ILogger logger) : ICallSink
 {
-    // How long a bridged call's WebRTC connection can sit in
-    // "disconnected" before ConnectionLossWatcher gives up on it
-    // recovering - long enough to ride out a brief network blip, short
-    // enough that a caller isn't stuck on dead air for minutes. A fixed
-    // judgment call, not configurable, matching this file's own
-    // ringTimeoutSeconds handling of "no answer" and NostrSignalingClient's
-    // connect timeout.
-    private const int ConnectionLossGraceSeconds = 15;
-
     public async Task<bool> TryHandleAsync(Call call, CancellationToken ct)
     {
         // Matched to the SIP leg's codec, not a fixed choice: RTP frames
@@ -229,7 +220,7 @@ public sealed class NosCallSink(
         // callee's device is simply gone (no internet, force-quit) and
         // never gets to send a hangup at all - see
         // docs/propagating-to-nostr.md.
-        using var connectionLossWatcher = new ConnectionLossWatcher(TimeSpan.FromSeconds(ConnectionLossGraceSeconds));
+        using var connectionLossWatcher = new ConnectionLossWatcher(TimeSpan.FromSeconds(webRtcConfig.ConnectionLossGraceSeconds));
         pc.onconnectionstatechange += connectionLossWatcher.OnStateChange;
 
         // onconnectionstatechange is edge-triggered: it only fires on a

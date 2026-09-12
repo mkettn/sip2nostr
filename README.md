@@ -162,6 +162,7 @@ target_npub = "npub1..."      # your identity — every call latches here in the
 [webrtc]
 stun_servers = ["stun:stun.l.google.com:19302"]
 turn_server = ""               # optional, recommended for NAT traversal
+connection_loss_grace_seconds = 15  # how long a bridged call's WebRTC connection can sit "disconnected" before it's ended
 
 [voicemail]
 enabled = false                # opt-in: falls back to a greeting + recording if target_npub doesn't answer

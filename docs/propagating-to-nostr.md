@@ -152,9 +152,9 @@ STUN consent-freshness check failing per RFC 7675) and often recovers to
 `connected` again on its own. Reacting to that immediately would end calls
 that would've been fine. So `ConnectionLossWatcher` debounces:
 
-- **`disconnected`** starts a `ConnectionLossGraceSeconds` (15s) grace
-  timer, unless one's already running — the state can flap several times
-  in a row without restarting the clock.
+- **`disconnected`** starts a `[webrtc].connection_loss_grace_seconds`
+  (default 15s) grace timer, unless one's already running — the state can
+  flap several times in a row without restarting the clock.
 - **`connected`** cancels a running grace timer — the connection
   recovered, nothing to see.
 - **`failed`** completes `WhenConnectionLost` immediately, no grace
@@ -225,9 +225,10 @@ ways.
   itself a local, best-effort judgment sipsorcery makes from ICE
   connectivity checks — a callee that stays technically reachable but
   stops sending/receiving media wouldn't necessarily trip it. And the
-  `ConnectionLossGraceSeconds` debounce is a deliberate trade of
-  promptness for not dropping calls on a transient blip, not a claim that
-  15s is the right number for every network this runs on.
+  `[webrtc].connection_loss_grace_seconds` debounce is a deliberate trade
+  of promptness for not dropping calls on a transient blip, not a claim
+  that its default (15s) is the right number for every network this runs
+  on — hence it being configurable.
 - **No busy/reject signaling sent.** If sip2nostr is somehow mid-call
   already, it doesn't auto-reject a second offer the way NIP-AC recommends.
 - **No multi-device self-notification.** Not applicable — sip2nostr is a

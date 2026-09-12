@@ -35,6 +35,41 @@ public class ConfigLoaderTests
             Assert.Equal("{timestamp}-{caller}.opus", config.Voicemail.RecordingFilename);
             Assert.Equal(VoicemailBudget.MaxTextRecordingSeconds, config.Voicemail.MaxTextRecordingSeconds);
             Assert.Equal(VoicemailBudget.OpusResamplerQuality, config.Voicemail.OpusResamplerQuality);
+            Assert.Equal(15, config.WebRtc.ConnectionLossGraceSeconds);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public void Load_InvalidConnectionLossGraceSeconds_Throws(int graceSeconds)
+    {
+        var toml = $"{MinimalValidToml}\n\n[webrtc]\nconnection_loss_grace_seconds = {graceSeconds}\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<InvalidDataException>(() => ConfigLoader.Load(path));
+            Assert.Contains("connection_loss_grace_seconds", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_CustomConnectionLossGraceSeconds_Succeeds()
+    {
+        var toml = $"{MinimalValidToml}\n\n[webrtc]\nconnection_loss_grace_seconds = 30\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal(30, config.WebRtc.ConnectionLossGraceSeconds);
         }
         finally
         {
