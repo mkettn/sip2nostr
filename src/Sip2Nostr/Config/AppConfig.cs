@@ -99,6 +99,14 @@ public sealed class WebRtcConfig
 
     [property: TomlPropertyName("turn_server")]
     public string? TurnServer { get; init; }
+
+    // How long a bridged call's WebRTC connection can sit in
+    // "disconnected" before NosCallSink's ConnectionLossWatcher gives up
+    // on it recovering - long enough to ride out a brief network blip,
+    // short enough that a caller isn't stuck on dead air for minutes. See
+    // docs/propagating-to-nostr.md.
+    [property: TomlPropertyName("connection_loss_grace_seconds")]
+    public int ConnectionLossGraceSeconds { get; init; } = 15;
 }
 
 public sealed class LoggingConfig

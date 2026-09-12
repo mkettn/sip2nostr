@@ -80,16 +80,23 @@ additional handshake step before the incoming-call UI appears.
 - `Sip/SipCallSource.cs` — mints one `Guid.NewGuid()` call-id per inbound
   call (`Call.CallId`). `Sinks/NosCallSink.cs` passes it into
   `NostrSignalingClient`.
+- `Sinks/ConnectionLossWatcher.cs` — a small, independently-testable class
+  (no Nostr/SIP dependencies of its own) that debounces
+  `RTCPeerConnectionState` into a single `WhenConnectionLost` task; see
+  "Noticing a callee that vanishes mid-call" below for what it does with
+  each state.
 
 ## Either side can end the call
 
-A call ends when either leg says so, and the two legs learn about it
+A call ends when either leg says so, and the legs learn about it
 differently. The SIP leg's hangup arrives as a `BYE`/`CANCEL` and
 completes `Call.WhenRemoteHungUp` (see `docs/receiving-calls.md`). The
 Nostr leg's arrives as a NIP-AC `hangup` (or a `reject`, if the callee
-never answered) and completes `NostrSignalingClient.WhenCalleeHungUp` —
-nothing on the WebRTC leg itself is watched for it. `NosCallSink` races
-both, at both stages of a call:
+never answered) and completes `NostrSignalingClient.WhenCalleeHungUp`.
+Once bridged, a third possibility is watched too: the WebRTC leg itself
+going quiet with no signaling from either side, via
+`ConnectionLossWatcher` (below). `NosCallSink` races all of these, at
+whichever stage of a call applies:
 
 - **While the callee's device is ringing:** a `hangup`/`reject` declines the
   call immediately rather than waiting out `ring_timeout_seconds`, so a
@@ -118,10 +125,51 @@ both, at both stages of a call:
   hang the SIP leg up with a `BYE`. Without this the caller is left on a
   silent, still-connected call.
 - **Once audio is bridged, and the caller ends it:** the same hangup goes
-  out to NosCall, guarded the same way as every other case here. This was
-  the one remaining direction that stayed silent — relying on NosCall to
-  notice its `RTCPeerConnection` close on its own, the same assumption the
-  blind spots below decline to make in reverse.
+  out to NosCall, guarded the same way as every other case here.
+- **Once audio is bridged, and the callee's connection is simply lost —
+  no `BYE`, no `hangup`, nothing:** `ConnectionLossWatcher` ends the call
+  instead. See "Noticing a callee that vanishes mid-call" below.
+
+## Noticing a callee that vanishes mid-call
+
+A callee whose device force-quits or loses its network entirely can't
+publish a `hangup` — there's nothing to react to. Once bridged,
+`NosCallSink` subscribes `RTCPeerConnection.onconnectionstatechange` to a
+`Sinks/ConnectionLossWatcher.cs` instance, then immediately primes it with
+`pc.connectionState` — `onconnectionstatechange` only fires on a
+transition, and `call.AnswerAsync()` just before this is a SIP round-trip,
+long enough for ICE to have already reached `failed` before anything was
+listening. Priming catches that case; every branch in
+`ConnectionLossWatcher.OnStateChange` is idempotent, so calling it once
+more with whatever the state already is costs nothing on the common path
+where nothing was missed. `WhenConnectionLost` is then raced alongside
+`Call.WhenRemoteHungUp` and `WhenCalleeHungUp` in the same `Task.WhenAny`.
+
+It isn't as simple as ending the call on the first `disconnected` state,
+though: `RTCPeerConnectionState` legitimately flaps to `disconnected` on a
+transient network hiccup (a brief Wi-Fi drop, a NAT rebind, a momentary
+STUN consent-freshness check failing per RFC 7675) and often recovers to
+`connected` again on its own. Reacting to that immediately would end calls
+that would've been fine. So `ConnectionLossWatcher` debounces:
+
+- **`disconnected`** starts a `[webrtc].connection_loss_grace_seconds`
+  (default 15s) grace timer, unless one's already running — the state can
+  flap several times in a row without restarting the clock.
+- **`connected`** cancels a running grace timer — the connection
+  recovered, nothing to see.
+- **`failed`** completes `WhenConnectionLost` immediately, no grace
+  needed. Per the WebRTC spec this state is only reached once the ICE
+  agent has already exhausted its own connectivity checks and concluded
+  it won't connect — it's sipsorcery's own terminal give-up, not a
+  transient blip to wait out.
+- The grace timer elapsing without a recovery also completes
+  `WhenConnectionLost`.
+
+When it fires, `NosCallSink` logs a warning (this is the one ending
+neither leg announced) and still makes a best-effort attempt to publish a
+`hangup` over Nostr — the WebRTC media path being unreachable doesn't
+necessarily mean the Nostr relay connection is too; a TURN-specific
+failure, say, wouldn't take a plain relay WebSocket down with it.
 
 ## Cancellation without a join
 
@@ -171,12 +219,16 @@ ways.
   single-instance bridge today, but worth knowing if that ever changes.
   (Events not authored by `target_npub` are dropped regardless, so the
   bridge's own echoed events are never acted on.)
-- **A callee that vanishes without signaling isn't noticed.** The
-  Nostr-side hangup is the only thing that ends a bridged call from that
-  side; `RTCPeerConnection` connection-state changes aren't watched, so a
-  NosCall that force-quits or loses the network mid-call leaves the caller
-  connected until they hang up themselves. Watching ICE state instead
-  would need care not to drop calls on a transient blip.
+- **A callee vanishing without signaling is noticed with a delay, not
+  instantly.** `ConnectionLossWatcher` (see "Noticing a callee that
+  vanishes mid-call") only reacts to `RTCPeerConnectionState`, which is
+  itself a local, best-effort judgment sipsorcery makes from ICE
+  connectivity checks — a callee that stays technically reachable but
+  stops sending/receiving media wouldn't necessarily trip it. And the
+  `[webrtc].connection_loss_grace_seconds` debounce is a deliberate trade
+  of promptness for not dropping calls on a transient blip, not a claim
+  that its default (15s) is the right number for every network this runs
+  on — hence it being configurable.
 - **No busy/reject signaling sent.** If sip2nostr is somehow mid-call
   already, it doesn't auto-reject a second offer the way NIP-AC recommends.
 - **No multi-device self-notification.** Not applicable — sip2nostr is a

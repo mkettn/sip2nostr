@@ -29,6 +29,13 @@ public static class ConfigLoader
                 $"[voicemail].ring_timeout_seconds must be greater than 0, got {config.Voicemail.RingTimeoutSeconds}.");
         }
 
+        if (config.WebRtc.ConnectionLossGraceSeconds <= 0)
+        {
+            throw new InvalidDataException(
+                "[webrtc].connection_loss_grace_seconds must be greater than 0, got " +
+                $"{config.WebRtc.ConnectionLossGraceSeconds}.");
+        }
+
         if (config.Voicemail.MaxRecordingSeconds <= 0)
         {
             throw new InvalidDataException(
