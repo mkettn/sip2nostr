@@ -833,6 +833,82 @@ public class ConfigLoaderTests
         }
     }
 
+    [Fact]
+    public void Load_MinimalConfigWithNostrDisabled_Succeeds()
+    {
+        // Unlike [sip]/[[lines]], NostrConfig's bridge_nsec/target_npub/
+        // relays are deliberately NOT [TomlRequired] - they're only needed
+        // when [nostr].enabled, so a config that disables Nostr shouldn't
+        // have to provide even a placeholder for any of them. This is the
+        // actual minimal viable config: a SIP connection plus Nostr turned
+        // off, nothing else.
+        var toml = """
+            [sip]
+            provider_host = "sip.example.com"
+            username = "user"
+            password = "pass"
+
+            [[lines]]
+            uri = "sip:+15551234@sip.example.com"
+            label = "main"
+
+            [nostr]
+            enabled = false
+            """;
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Empty(config.Nostr.Relays);
+            Assert.Null(config.Nostr.BridgeNsec);
+            Assert.Null(config.Nostr.TargetNpub);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("bridge_nsec")]
+    [InlineData("target_npub")]
+    public void Load_OmittedNostrIdentityFieldWhenEnabled_Throws(string omittedKey)
+    {
+        // The inverse of Load_MinimalConfigWithNostrDisabled_Succeeds:
+        // omitting these entirely (not just leaving them blank) still has
+        // to be rejected once [nostr].enabled makes them load-bearing.
+        // Removes the preceding newline, not a trailing one - target_npub
+        // is NostrEnabledToml's last line, with nothing after it to eat.
+        var value = omittedKey == "bridge_nsec" ? BridgeNsec : TargetNpub;
+        var toml = NostrEnabledToml.Replace($"\n{omittedKey} = \"{value}\"", "");
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains(omittedKey, exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_OmittedRelaysWhenNostrEnabled_Throws()
+    {
+        var toml = NostrEnabledToml.Replace("relays = [\"wss://relay.example.com\"]\n", "");
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains("relays", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     private static string WriteTempConfig(string toml)
     {
         var path = Path.Combine(Path.GetTempPath(), $"sip2nostr-test-{Guid.NewGuid():N}.toml");

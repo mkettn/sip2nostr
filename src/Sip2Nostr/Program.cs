@@ -118,7 +118,11 @@ try
     // all, and needs no Nostr identity to run.
     if (config.Nostr.Enabled)
     {
-        var bridgeNpub = Keys.Parse(config.Nostr.BridgeNsec).PublicKey().ToBech32();
+        // Non-null here: ConfigLoader.ValidateBridgeIdentity already
+        // rejected a null/blank bridge_nsec whenever [nostr].enabled - the
+        // property itself is nullable only because it's optional when
+        // disabled.
+        var bridgeNpub = Keys.Parse(config.Nostr.BridgeNsec!).PublicKey().ToBech32();
         Log.Information("Bridge Nostr identity: {BridgeNpub}", bridgeNpub);
     }
 

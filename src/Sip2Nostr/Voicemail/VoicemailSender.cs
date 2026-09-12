@@ -128,8 +128,12 @@ public sealed class VoicemailSender : IAsyncDisposable
             return;
         }
 
-        var bridgeKeys = Keys.Parse(_nostrConfig.BridgeNsec);
-        var targetPubkey = PublicKey.Parse(_nostrConfig.TargetNpub);
+        // Non-null here: a job only ever reaches this queue via
+        // VoicemailSink/NosCallSink, both only constructed when
+        // [nostr].enabled (see Program.cs) - the same condition
+        // ConfigLoader validated bridge_nsec/target_npub under.
+        var bridgeKeys = Keys.Parse(_nostrConfig.BridgeNsec!);
+        var targetPubkey = PublicKey.Parse(_nostrConfig.TargetNpub!);
         var relayUrls = (_voicemailConfig.DmRelays.Count > 0 ? _voicemailConfig.DmRelays : _nostrConfig.Relays)
             .Select(RelayUrl.Parse)
             .ToList();

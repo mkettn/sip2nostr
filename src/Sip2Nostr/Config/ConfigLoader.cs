@@ -194,7 +194,7 @@ public static class ConfigLoader
     {
         if (string.IsNullOrWhiteSpace(config.Nostr.BridgeNsec))
         {
-            throw new ConfigurationException("[nostr].bridge_nsec must not be empty.");
+            throw new ConfigurationException("[nostr].bridge_nsec must not be empty when [nostr].enabled = true.");
         }
 
         try
@@ -212,7 +212,7 @@ public static class ConfigLoader
     {
         if (string.IsNullOrWhiteSpace(config.Nostr.TargetNpub))
         {
-            throw new ConfigurationException("[nostr].target_npub must not be empty.");
+            throw new ConfigurationException("[nostr].target_npub must not be empty when [nostr].enabled = true.");
         }
 
         try
@@ -225,13 +225,13 @@ public static class ConfigLoader
                 $"[nostr].target_npub is not a valid Nostr public key (npub or hex): {exception.Message}", exception);
         }
 
-        // config.Nostr.Relays can't be null here - AppConfig marks it
-        // [TomlRequired], so Load already failed on a missing key - but an
-        // explicit empty list (relays = []) is still valid TOML and needs
-        // its own check.
+        // config.Nostr.Relays is never null - it defaults to [] rather
+        // than being required, so a config that leaves it out entirely
+        // (nostr disabled) doesn't have to provide one - but an empty
+        // list still needs to be rejected here, when Nostr is enabled.
         if (config.Nostr.Relays.Count == 0)
         {
-            throw new ConfigurationException("[nostr].relays must contain at least one relay URL.");
+            throw new ConfigurationException("[nostr].relays must contain at least one relay URL when [nostr].enabled = true.");
         }
 
         ValidateRelayUrls(config.Nostr.Relays, "[nostr].relays");

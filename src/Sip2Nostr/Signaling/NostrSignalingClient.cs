@@ -38,8 +38,14 @@ public sealed class NostrSignalingClient : IAsyncDisposable
 
     public NostrSignalingClient(NostrConfig config, string callId, ILogger logger)
     {
-        _bridgeKeys = Keys.Parse(config.BridgeNsec);
-        _targetPubkey = PublicKey.Parse(config.TargetNpub);
+        // BridgeNsec/TargetNpub are non-null here: only NosCallSink
+        // constructs this, and only when [nostr].enabled - the same
+        // condition ConfigLoader.ValidateBridgeIdentity/
+        // ValidateTargetAndRelays already validated both under. They're
+        // nullable on NostrConfig only because they're optional when
+        // Nostr is disabled.
+        _bridgeKeys = Keys.Parse(config.BridgeNsec!);
+        _targetPubkey = PublicKey.Parse(config.TargetNpub!);
         _relays = config.Relays.Select(RelayUrl.Parse).ToList();
         _callId = callId;
         _logger = logger;
@@ -79,7 +85,9 @@ public sealed class NostrSignalingClient : IAsyncDisposable
     // NostrSignalingClient always connects fresh in ConnectAsync above.
     public static async Task CheckConnectivityAsync(NostrConfig config, ILogger logger)
     {
-        var bridgeKeys = Keys.Parse(config.BridgeNsec);
+        // See the constructor above - only ever called from Program.cs
+        // inside its own [nostr].enabled check.
+        var bridgeKeys = Keys.Parse(config.BridgeNsec!);
         var relays = config.Relays.Select(RelayUrl.Parse).ToList();
         var client = new ClientBuilder().Signer(NostrSigner.Keys(bridgeKeys)).Build();
 

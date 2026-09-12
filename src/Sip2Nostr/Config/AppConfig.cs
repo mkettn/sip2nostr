@@ -11,6 +11,17 @@ namespace Sip2Nostr.Config;
 // testing directly against Tomlyn 2.10.1. `[TomlRequired]` makes Tomlyn
 // itself throw a clear TomlException (already caught and wrapped by
 // ConfigLoader.Load) for a missing key, before any of that.
+//
+// `required`/`[TomlRequired]` is only for a value every config needs
+// regardless of which features are turned on - [sip]/[[lines]] are the
+// only genuine examples of that here. A value that's only needed when
+// some other setting enables it (NostrConfig's own bridge_nsec/
+// target_npub/relays, needed only when [nostr].enabled) is deliberately
+// NOT required at this level - it gets a normal optional/defaulted
+// property instead, with ConfigLoader.Validate enforcing the dependency
+// at runtime, conditioned on the setting that creates it. Marking it
+// required here instead would force it to be present even in a config
+// that never uses it.
 public sealed class AppConfig
 {
     [property: TomlIgnore]
@@ -100,17 +111,22 @@ public sealed class NostrConfig
     [property: TomlPropertyName("enabled")]
     public bool Enabled { get; init; } = true;
 
+    // Deliberately NOT [TomlRequired]/required, unlike [sip]/[[lines]]
+    // above: these three are only needed when enabled is true (NosCallSink
+    // isn't even constructed otherwise - see Program.cs), so a config that
+    // disables Nostr shouldn't have to provide them at all - not even a
+    // placeholder. ConfigLoader.ValidateBridgeIdentity/ValidateTargetAndRelays
+    // (both gated on Enabled) are what actually enforce "required when
+    // Nostr is on," including rejecting these when left at their empty
+    // defaults.
     [property: TomlPropertyName("relays")]
-    [property: TomlRequired]
-    public required List<string> Relays { get; init; }
+    public List<string> Relays { get; init; } = [];
 
     [property: TomlPropertyName("bridge_nsec")]
-    [property: TomlRequired]
-    public required string BridgeNsec { get; init; }
+    public string? BridgeNsec { get; init; }
 
     [property: TomlPropertyName("target_npub")]
-    [property: TomlRequired]
-    public required string TargetNpub { get; init; }
+    public string? TargetNpub { get; init; }
 }
 
 public sealed class WebRtcConfig
