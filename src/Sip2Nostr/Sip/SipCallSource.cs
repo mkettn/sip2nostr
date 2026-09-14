@@ -10,7 +10,6 @@ using Sip2Nostr.CallerList;
 using Sip2Nostr.Config;
 using Sip2Nostr.Dns;
 using Sip2Nostr.Hub;
-using Sip2Nostr.Shared;
 
 namespace Sip2Nostr.Sip;
 

@@ -7,9 +7,13 @@ namespace Sip2Nostr.Shared;
 
 // Resolves a configured sound path (relative to the config file's
 // directory unless rooted) to a playable raw 8 kHz mono 16-bit PCM file,
-// decoding mono Opus in-process via OpusCodec and caching the result if
-// needed. Shared by [[lines]].sound (LocalTestAudioSink) and
-// [voicemail].greeting_sound (VoicemailSink) - see docs/voicemail.md.
+// decoding Opus in-process via OpusCodec and caching the result if
+// needed. Stereo Opus decodes fine too (OpusCodec.Decode downmixes it via
+// a mono decoder) - not what's recommended/tested (see
+// docs/sound-files.md), but not rejected either; nothing here actually
+// inspects channel count, only the .opus extension. Shared by
+// [[lines]].sound (LocalTestAudioSink) and [voicemail].greeting_sound
+// (VoicemailSink) - see docs/voicemail.md.
 public static class SoundFileResolver
 {
     private const int PlaybackSampleRate = 8000;
@@ -47,7 +51,7 @@ public static class SoundFileResolver
             return Fail(
                 logger,
                 $"Configured sound file {soundPath} is not a supported format; only raw 8 kHz 16-bit PCM " +
-                "(.pcm/.raw/.s16le) and mono Opus (.opus) files are supported.");
+                "(.pcm/.raw/.s16le) and Opus (.opus) files are supported.");
         }
 
         return DecodeOpusToRawPcm(resolvedSoundPath, logger);
@@ -77,7 +81,7 @@ public static class SoundFileResolver
         }
         catch (Exception exception)
         {
-            var reason = $"Could not decode {soundPath}; provide a mono Opus file or raw 8 kHz 16-bit PCM.";
+            var reason = $"Could not decode {soundPath}; provide an Opus file or raw 8 kHz 16-bit PCM.";
             logger?.Warning(exception, "{FailureReason}", reason);
             return (null, $"{reason} ({exception.Message})");
         }

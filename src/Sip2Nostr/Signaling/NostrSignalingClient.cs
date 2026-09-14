@@ -2,7 +2,6 @@ using System.Text.Json;
 using Nostr.Sdk;
 using Serilog;
 using Sip2Nostr.Config;
-using Sip2Nostr.Shared;
 
 namespace Sip2Nostr.Signaling;
 

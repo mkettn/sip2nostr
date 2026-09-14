@@ -208,12 +208,12 @@ ways.
 
 `[nostr].bridge_nsec`/`target_npub`/`relays` are eagerly *parsed* at
 config load (`ConfigLoader`) whenever `[nostr].enabled` - a malformed
-value never becomes valid, so it fails startup outright (see #26). Relay
-*reachability* used to be a separate, softer check; it isn't anymore:
+value never becomes valid, so it fails startup outright. Relay
+*reachability* is a separate check, and a fatal one:
 `NostrSignalingClient.CheckConnectivityAsync`, awaited directly from
 `Program.cs` before SIP registration starts, throws if none of the
-configured relays are reachable, and that's fatal - sip2nostr can't do
-the one thing it exists to do (bridge a call to Nostr) without at least
+configured relays are reachable - sip2nostr can't do the one thing it
+exists to do (bridge a call to Nostr) without at least
 one, so there's no reason to come up "successfully" into a state where
 every call is guaranteed to fail. Each relay's own connection failure is
 logged individually (`RelayConnector`) before the fatal summary.

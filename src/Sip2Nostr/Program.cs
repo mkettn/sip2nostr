@@ -2,7 +2,6 @@ using Nostr.Sdk;
 using Serilog;
 using Sip2Nostr.Config;
 using Sip2Nostr.Hub;
-using Sip2Nostr.Shared;
 using Sip2Nostr.Signaling;
 using Sip2Nostr.Sinks;
 using Sip2Nostr.Sip;

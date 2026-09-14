@@ -99,7 +99,7 @@ that doesn't exist, isn't `.pcm`/`.raw`/`.s16le`/`.opus`, or fails to
 decode (wrong codec, corrupt, etc.) is a **startup error**: `ConfigLoader`
 eagerly resolves every configured sound file via the same
 `SoundFileResolver` the sinks use, and refuses to start if any of them come
-back unusable (see #26). The failure reason - missing file, unsupported
+back unusable. The failure reason - missing file, unsupported
 extension, decode failure - is embedded directly in that startup error, not
 just logged separately: `ConfigLoader` runs before the "real" (run-file)
 logger exists, so a bare log line here would only ever reach the console.
@@ -108,9 +108,9 @@ The possible reasons:
 - `Configured sound file {path} resolved to {resolvedPath}, but it does
   not exist.` - path/typo problem.
 - `Configured sound file {path} is not a supported format; only raw 8
-  kHz 16-bit PCM (.pcm/.raw/.s16le) and mono Opus (.opus) files are
+  kHz 16-bit PCM (.pcm/.raw/.s16le) and Opus (.opus) files are
   supported.` - wrong extension (a `.ogg` file included - see above).
-- `Could not decode {path}; provide a mono Opus file or raw 8 kHz
+- `Could not decode {path}; provide an Opus file or raw 8 kHz
   16-bit PCM.` - `.opus` extension, but the file isn't actually a
   decodable Opus stream (see "Why only `.opus`, not `.ogg`" above) or is
   genuinely corrupt.

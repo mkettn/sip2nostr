@@ -45,7 +45,7 @@ See `docs/hub-architecture.md` for the full design.
 ### Config validates fail-fast at load, not at first use
 
 New `[section]` config values go through `ConfigLoader.Validate`, which
-throws `Sip2Nostr.Shared.ConfigurationException` with a specific message
+throws `Sip2Nostr.Config.ConfigurationException` with a specific message
 at startup. Check cheap/structural things (enum values, required-when-X
 fields) before anything that depends on them. New defaults preserve
 today's behavior.
