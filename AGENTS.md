@@ -45,9 +45,17 @@ See `docs/hub-architecture.md` for the full design.
 ### Config validates fail-fast at load, not at first use
 
 New `[section]` config values go through `ConfigLoader.Validate`, which
-throws `InvalidDataException` with a specific message at startup. Check
-cheap/structural things (enum values, required-when-X fields) before
-anything that depends on them. New defaults preserve today's behavior.
+throws `Sip2Nostr.Config.ConfigurationException` with a specific message
+at startup. Check cheap/structural things (enum values, required-when-X
+fields) before anything that depends on them. New defaults preserve
+today's behavior.
+
+`ConfigurationException` is also how any other startup failure the
+operator can actually fix - not just a bad config value - reaches
+`Program.cs`'s top-level catch: it logs the message alone, no stack
+trace, and exits non-zero, instead of the full-trace crash dump an
+unexpected bug gets. Use it for that kind of failure wherever it's
+raised, not only inside `ConfigLoader` itself.
 
 ### Never trust a duration/count heuristic for an output-size budget
 

@@ -31,22 +31,6 @@ static Serilog.Core.Logger CreateLogger(
     return logger.CreateLogger();
 }
 
-// Runs at startup, in parallel with SIP registration, so relay
-// reachability is known up front instead of only surfacing when the
-// first call tries to publish. Failures here are diagnostic only -
-// NostrSignalingClient.ConnectAsync connects fresh per call regardless.
-static async Task CheckNostrConnectivitySafeAsync(NostrConfig nostrConfig, ILogger logger)
-{
-    try
-    {
-        await NostrSignalingClient.CheckConnectivityAsync(nostrConfig, logger.ForContext<NostrSignalingClient>());
-    }
-    catch (Exception exception)
-    {
-        logger.Warning(exception, "Nostr startup connectivity check failed unexpectedly.");
-    }
-}
-
 // Only loads a transcriber (and its GGML model) when it'll actually be
 // used - voicemail disabled, or [voicemail].delivery = "audio" (the
 // default), stays as cheap to start up as before this existed.
@@ -111,8 +95,19 @@ try
         Log.Information("Writing this run's log to {RunLogPath}.", runLogPath);
     }
 
-    var bridgeNpub = Keys.Parse(config.Nostr.BridgeNsec).PublicKey().ToBech32();
-    Log.Information("Bridge Nostr identity: {BridgeNpub}", bridgeNpub);
+    // Only meaningful (and only validated - see ConfigLoader) when Nostr
+    // is actually in use: the local SIP-test path ([nostr].enabled =
+    // false, see docs/receiving-calls.md) never touches bridge_nsec at
+    // all, and needs no Nostr identity to run.
+    if (config.Nostr.Enabled)
+    {
+        // Non-null here: ConfigLoader.ValidateBridgeIdentity already
+        // rejected a null/blank bridge_nsec whenever [nostr].enabled - the
+        // property itself is nullable only because it's optional when
+        // disabled.
+        var bridgeNpub = Keys.Parse(config.Nostr.BridgeNsec!).PublicKey().ToBech32();
+        Log.Information("Bridge Nostr identity: {BridgeNpub}", bridgeNpub);
+    }
 
     using var cts = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) =>
@@ -144,7 +139,12 @@ try
                 Log.Logger.ForContext<VoicemailSink>()));
         }
 
-        _ = CheckNostrConnectivitySafeAsync(config.Nostr, Log.Logger);
+        // Fatal, not fire-and-forget: without at least one reachable
+        // relay, sip2nostr can't bridge a call at all, so this is awaited
+        // before SIP registration starts rather than left to surface a
+        // Warning sometime after the process is already "running" - see
+        // NostrSignalingClient.CheckConnectivityAsync.
+        await NostrSignalingClient.CheckConnectivityAsync(config.Nostr, Log.Logger.ForContext<NostrSignalingClient>());
     }
     else
     {
@@ -174,6 +174,14 @@ try
     // rather than being cut off the instant cts.Cancel() fires - see
     // CallHub.DrainAsync and docs/propagating-to-nostr.md.
     await hub.DrainAsync(TimeSpan.FromSeconds(5));
+}
+catch (ConfigurationException exception)
+{
+    // A bad config value or a busy port is the operator's to fix, not a
+    // bug - a single clean line says so; the stack trace below would only
+    // bury that under noise. See ConfigurationException.
+    Log.Fatal("{Message}", exception.Message);
+    Environment.ExitCode = 1;
 }
 catch (Exception exception)
 {

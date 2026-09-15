@@ -94,33 +94,40 @@ $ ffmpeg -i greeting.wav -ac 1 -ar 8000 -f s16le greeting.pcm
 
 ## What happens if a file can't be used
 
-A file that doesn't exist, isn't `.pcm`/`.raw`/`.s16le`/`.opus`, or
-fails to decode (wrong codec, corrupt, etc.) is **not a startup error** -
-`SoundFileResolver.Resolve` logs a `Warning` and returns `null`, and the
-caller falls back to a short sine-wave tone instead (see #26 on making
-this fail fast at config load instead). Concretely:
-
-- `[voicemail].greeting_sound` unset *or* unusable → the same ~1.5s tone
-  plays before recording starts either way; there's no way to tell from
-  behavior alone which case you're in.
-- `[[lines]].sound` unset *or* unusable → a looping sine wave test tone
-  plays instead, logged as `Configured sound file {path} for line
-  {label} could not be used; sending sine wave instead.`
-
-**So: if a configured greeting/test sound isn't playing, check the logs
-at `Warning` level**, not just for errors - a bad file degrades silently
-into the fallback tone rather than crashing or refusing to start. Look
-for one of:
+A configured (non-empty) `[[lines]].sound` or `[voicemail].greeting_sound`
+that doesn't exist, isn't `.pcm`/`.raw`/`.s16le`/`.opus`, or fails to
+decode (wrong codec, corrupt, etc.) is a **startup error**: `ConfigLoader`
+eagerly resolves every configured sound file via the same
+`SoundFileResolver` the sinks use, and refuses to start if any of them come
+back unusable. The failure reason - missing file, unsupported
+extension, decode failure - is embedded directly in that startup error, not
+just logged separately: `ConfigLoader` runs before the "real" (run-file)
+logger exists, so a bare log line here would only ever reach the console.
+The possible reasons:
 
 - `Configured sound file {path} resolved to {resolvedPath}, but it does
   not exist.` - path/typo problem.
 - `Configured sound file {path} is not a supported format; only raw 8
-  kHz 16-bit PCM (.pcm/.raw/.s16le) and mono Opus (.opus) files are
+  kHz 16-bit PCM (.pcm/.raw/.s16le) and Opus (.opus) files are
   supported.` - wrong extension (a `.ogg` file included - see above).
-- `Could not decode {path}; provide a mono Opus file or raw 8 kHz
+- `Could not decode {path}; provide an Opus file or raw 8 kHz
   16-bit PCM.` - `.opus` extension, but the file isn't actually a
   decodable Opus stream (see "Why only `.opus`, not `.ogg`" above) or is
   genuinely corrupt.
+
+Leaving `sound`/`greeting_sound` unset entirely is fine - that's the
+"no sound file configured, play a tone instead" case (a looping sine wave
+for `[[lines]].sound`, a short tone before recording for
+`[voicemail].greeting_sound`), unrelated to the fail-fast check above,
+which only ever fires for a value that's actually set but broken.
+
+This check only runs for the sink that would actually play the file:
+`[[lines]].sound` only when `[nostr].enabled = false` (`LocalTestAudioSink`
+is the only reader), `[voicemail].greeting_sound` only when `[nostr]` *and*
+`[voicemail]` are both enabled (`VoicemailSink`'s the only reader) - see
+`Program.cs`'s sink wiring. A broken `sound`/`greeting_sound` left over
+from switching modes doesn't block startup in a mode where it's never
+read.
 
 ## Config reference
 
