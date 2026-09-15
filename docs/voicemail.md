@@ -16,15 +16,17 @@ Verified end-to-end against a real SIP trunk and a real NIP-17 client for
 `delivery = "text"`: a call that falls back to voicemail plays the
 greeting/tone, records the caller, saves the recording as Opus,
 transcribes it, and delivers the transcript as DM text. `delivery =
-"audio"` (the default) is new and, per the Blind spots below, not yet
-verified against a real Blossom server or a real NIP-17 client's
-handling of a kind 15 file message - only exercised against a local fake
-server in `tests/Sip2Nostr.Tests/AudioDeliveryBackendTests.cs`. The
+"file"` (the default) shares the same recording/notice code path, so
+it's covered by the same verification as far as that goes, but hasn't
+specifically been exercised against a real call itself. `delivery =
+"audio"` is new and, per the Blind spots below, not yet verified against
+a real Blossom server or a real NIP-17 client's handling of a kind 15
+file message - only exercised against a local fake server in
+`tests/Sip2Nostr.Tests/AudioDeliveryBackendTests.cs`. The
 `MissedCallNoticeJob` path (recording too short / caller hangs up before
-anything is captured) and the local-only fallback (see Delivery backends
-below) haven't specifically been exercised against a real call either,
-though both share code paths with the verified `VoicemailAudioJob`/kind
-14 send path.
+anything is captured) hasn't specifically been exercised against a real
+call either, though it shares code with the verified `VoicemailAudioJob`
+send path.
 
 ## Flow
 
@@ -141,14 +143,21 @@ VoicemailSender then, independently of any particular call:
 ## Delivery backends
 
 How a recorded voicemail becomes DM content is pluggable via
-`[voicemail].delivery`, which is either `"audio"` or `"text"` - each
-mode has a requirement, and if it isn't configured, sip2nostr degrades
-to a local-only notice rather than failing to start or trying to inline
-the recording:
+`[voicemail].delivery`: `"file"`, `"audio"`, or `"text"`. `"audio"` and
+`"text"` each have a requirement; if it isn't configured, sip2nostr
+degrades to `"file"`'s own behavior with a startup warning rather than
+failing to start or trying to inline the recording:
 
-- `"audio"` (default) - `Voicemail/AudioDeliveryBackend.cs` reads the
-  recording (already Opus - `VoicemailSink` encodes it when saving, not
-  this backend), AES-256-GCM encrypts it with a freshly generated key and
+- `"file"` (default) - `Voicemail/FileDeliveryBackend.cs` does nothing
+  with the recording beyond what already happened before any delivery
+  backend runs: `VoicemailSink` always saves it to `recordings_dir`,
+  regardless of `delivery`. This backend just sends a plain-text notice
+  naming the caller, and points at the bridge for retrieval - the
+  zero-setup option, needing neither `[voicemail.blossom]` nor
+  `[voicemail.transcription]`.
+- `"audio"` - `Voicemail/AudioDeliveryBackend.cs` reads the recording
+  (already Opus - `VoicemailSink` encodes it when saving, not this
+  backend), AES-256-GCM encrypts it with a freshly generated key and
   nonce, and uploads only the ciphertext (the server never sees the
   plaintext, or the bridge's actual Nostr key beyond a signed auth event)
   to a [Blossom](https://github.com/hzrd149/blossom) (BUD-01/BUD-02)
@@ -179,29 +188,25 @@ the recording:
   than being trusted to never trigger. If nothing could be transcribed
   (silence, an engine failure), the backend falls back to
   `[voicemail.blossom]` (the same encrypted upload `"audio"` uses) when
-  it's configured, or a local-only notice otherwise; a failure in the
-  fallback itself falls through to the notice too, so a transcription
-  failure never ends up with nothing sent at all. Requires
+  it's configured, or `"file"`'s plain-text notice otherwise; a failure
+  in the fallback itself falls through to that same notice too, so a
+  transcription failure never ends up with nothing sent at all. Requires
   `[voicemail.transcription].model_path`.
 
-If the active mode's requirement isn't configured, `Program.cs` logs a
-startup warning and uses `Voicemail/LocalOnlyDeliveryBackend.cs` instead:
-a plain-text notice naming the caller and pointing at `recordings_dir`,
-where the recording is already saved regardless (`VoicemailSink` writes
-it unconditionally, before any delivery backend ever runs) - the operator
-is expected to fetch and play it by hand. Recording length is no longer bound by what fits inside a single NIP-17
+Recording length is no longer bound by what fits inside a single NIP-17
 message the way it would be if the recording were inlined as a base64
 `data:` URI directly in the DM content - that approach isn't attempted at
-all here, configured or not; both delivery modes work by reference (a
-transcript, or an uploaded file's URL) instead.
+all here, configured or not; all three modes work by reference (a local
+file, a transcript, or an uploaded file's URL) instead of inlining
+anything.
 
 `AudioDeliveryBackend` sends a kind 15 file message; the other two
-(`TranscribedTextDeliveryBackend`, `LocalOnlyDeliveryBackend`) send a
-kind 14 private message. All three implement
+(`FileDeliveryBackend`, `TranscribedTextDeliveryBackend`) send a kind 14
+private message. All three implement
 `Voicemail/IVoicemailDeliveryBackend.cs` (`BuildContentAsync(VoicemailAudioJob,
 CancellationToken) -> (Content, Tags, Description, Kind)`, plus a
-`RequiresPcm` property - `false` for `AudioDeliveryBackend`/
-`LocalOnlyDeliveryBackend`, `true` for `TranscribedTextDeliveryBackend` -
+`RequiresPcm` property - `false` for `FileDeliveryBackend`/
+`AudioDeliveryBackend`, `true` for `TranscribedTextDeliveryBackend` -
 that `VoicemailSink` reads to decide whether to populate
 `VoicemailAudioJob.Samples`, so that decision lives with the backend
 that actually knows its own needs rather than being re-derived from
@@ -372,7 +377,7 @@ string?`, `null` meaning nothing could be transcribed), selected by
     (`[voicemail.transcription].model_path` for `"text"`,
     `[voicemail.blossom].servers` for `"audio"`) is actually configured
     is deliberately *not* checked here - `Program.cs` handles that with a
-    warning and `LocalOnlyDeliveryBackend`, not a startup failure, since
+    warning and `FileDeliveryBackend`, not a startup failure, since
     leaving a mode's requirement unset is a valid choice, not a mistake
     (see Delivery backends above). `[voicemail].opus_resampler_quality` (default
     `VoicemailBudget.OpusResamplerQuality`, 5) is validated against the
@@ -396,7 +401,7 @@ string?`, `null` meaning nothing could be transcribed), selected by
     reads whichever it actually needs; `VoicemailSink` only populates
     `Samples` when the configured backend's `IVoicemailDeliveryBackend.RequiresPcm`
     says so (`true` for `TranscribedTextDeliveryBackend`, `false` for
-    `AudioDeliveryBackend`/`LocalOnlyDeliveryBackend`, neither of which
+    `AudioDeliveryBackend`/`FileDeliveryBackend`, neither of which
     reads it and would otherwise carry the full recording in memory for
     every "audio" job unread) - and writes it to an unbounded `System.Threading.Channels.Channel<SendJob>`, returning
     immediately. It's a plain in-memory queue (multiple calls can enqueue
@@ -436,7 +441,7 @@ string?`, `null` meaning nothing could be transcribed), selected by
     process, keeping the whole feature working in a self-contained
     single-file binary with nothing to install on the host). The
     backend's result `Kind` decides how it's sent: `PrivateMessage`
-    (`TranscribedTextDeliveryBackend`, `LocalOnlyDeliveryBackend`) calls
+    (`TranscribedTextDeliveryBackend`, `FileDeliveryBackend`) calls
     `Client.SendPrivateMsgTo(relayUrls, ...)` - NIP-17: rumor, seal, gift
     wrap, and publish all handled by `Nostr.Sdk`; `FileMessage`
     (`AudioDeliveryBackend`) instead builds a kind 15 `EventBuilder`
@@ -545,13 +550,11 @@ string?`, `null` meaning nothing could be transcribed), selected by
   (either pruning the unused `runtimes/*` folders as a post-publish
   build step, or finding whether a newer `Whisper.net.Runtime` version
   fixes the packaging) before shipping this in a release build.
-- **`delivery = "audio"` (the default) hasn't been verified against a
-  real Blossom server or a real NIP-17 client.** This is the highest-
-  impact gap in this document, since it's what a default install now
-  actually depends on. `AudioDeliveryBackendTests.cs` exercises the
-  encryption, BUD-02 auth event, and upload request/response handling
-  against a local fake HTTP server - real protocol-level details (a
-  specific server's exact error responses, whether Amethyst or another
+- **`delivery = "audio"` hasn't been verified against a real Blossom
+  server or a real NIP-17 client.** `AudioDeliveryBackendTests.cs`
+  exercises the encryption, BUD-02 auth event, and upload request/response
+  handling against a local fake HTTP server - real protocol-level details
+  (a specific server's exact error responses, whether Amethyst or another
   client actually renders a kind 15 `audio/ogg` attachment the way this
   implementation expects) are unverified.
 - **No BUD-06 `HEAD /upload` preflight.** A client MAY ask a server

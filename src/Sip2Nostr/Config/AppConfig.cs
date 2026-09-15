@@ -221,15 +221,17 @@ public sealed class VoicemailConfig
     [property: TomlPropertyName("dm_relays")]
     public List<string> DmRelays { get; init; } = [];
 
-    // "audio" (default) uploads an encrypted copy of the recording to a
-    // Blossom server and sends a file message with the link - requires
-    // [voicemail.blossom] below; "text" sends a transcript instead -
-    // requires [voicemail.transcription] below. If the selected mode's
-    // requirement isn't configured, Program.cs logs a startup warning and
-    // falls back to saving the recording locally only, with a plain-text
-    // notice instead of the recording itself - see docs/voicemail.md.
+    // "file" (default) - no upload, no transcription: the recording is
+    // just saved to recordings_dir and a plain-text notice is sent
+    // instead, the zero-setup option. "audio" uploads an encrypted copy
+    // of the recording to a Blossom server and sends a file message with
+    // the link - requires [voicemail.blossom] below. "text" sends a
+    // transcript instead - requires [voicemail.transcription] below. If
+    // "audio"/"text"'s own requirement isn't configured, Program.cs logs
+    // a startup warning and falls back to "file"'s behavior instead of
+    // failing to start - see docs/voicemail.md.
     [property: TomlPropertyName("delivery")]
-    public string Delivery { get; init; } = "audio";
+    public string Delivery { get; init; } = "file";
 
     [property: TomlPropertyName("transcription")]
     public TranscriptionConfig Transcription { get; init; } = new();
@@ -249,8 +251,8 @@ public sealed class TranscriptionConfig
     // Path to a GGML model file (e.g. downloaded via whisper.cpp's
     // models/download-ggml-model.sh) - the "whisper" engine needs one to
     // do anything. Left unset isn't itself an error: Program.cs logs a
-    // warning and falls back to local-only delivery instead (see
-    // docs/voicemail.md).
+    // warning and falls back to [voicemail].delivery = "file"'s behavior
+    // instead (see docs/voicemail.md).
     [property: TomlPropertyName("model_path")]
     public string? ModelPath { get; init; }
 
@@ -260,8 +262,8 @@ public sealed class TranscriptionConfig
     public string? Language { get; init; }
 }
 
-// Consulted when [voicemail].delivery = "audio" (the default), and also
-// when delivery = "text" and transcription produces nothing (see
+// Consulted when [voicemail].delivery = "audio", and also when delivery
+// = "text" and transcription produces nothing (see
 // Voicemail/TranscribedTextDeliveryBackend.cs) - see docs/voicemail.md.
 public sealed class BlossomConfig
 {
@@ -269,7 +271,8 @@ public sealed class BlossomConfig
     // accepts the upload. Every entry present must be an absolute
     // http(s) URL - ConfigLoader rejects a malformed one at startup - but
     // an empty list isn't itself an error: Program.cs logs a warning and
-    // falls back to local-only delivery instead (see docs/voicemail.md).
+    // falls back to [voicemail].delivery = "file"'s behavior instead
+    // (see docs/voicemail.md).
     [property: TomlPropertyName("servers")]
     public List<string> Servers { get; init; } = [];
 }

@@ -67,10 +67,11 @@ public static class ConfigLoader
                 $"[voicemail].opus_resampler_quality must be between 0 and 10, got {config.Voicemail.OpusResamplerQuality}.");
         }
 
-        if (config.Voicemail.Delivery is not ("audio" or "text"))
+        if (config.Voicemail.Delivery is not ("file" or "audio" or "text"))
         {
             throw new ConfigurationException(
-                $"[voicemail].delivery must be \"audio\" or \"text\", got \"{config.Voicemail.Delivery}\".");
+                "[voicemail].delivery must be \"file\", \"audio\", or \"text\", got " +
+                $"\"{config.Voicemail.Delivery}\".");
         }
 
         if (string.IsNullOrWhiteSpace(config.Voicemail.RecordingFilename))

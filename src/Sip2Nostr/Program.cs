@@ -32,17 +32,18 @@ static Serilog.Core.Logger CreateLogger(
 }
 
 // Only loads a transcriber (and its GGML model) when it'll actually be
-// used - voicemail disabled stays as cheap to start up as before this
-// existed. Neither delivery mode's requirement being configured is a
-// startup failure (see ConfigLoader.Validate) - it degrades to
-// LocalOnlyDeliveryBackend with a warning instead, so a voicemail still
-// gets saved to recordings_dir and the caller still gets a notice, just
-// without the recording/transcript itself. See docs/voicemail.md.
+// used - voicemail disabled, or delivery = "file" (the default), stays
+// as cheap to start up as before this existed. Neither "audio" nor
+// "text"'s own requirement being configured is a startup failure (see
+// ConfigLoader.Validate) - it degrades to FileDeliveryBackend with a
+// warning instead, so a voicemail still gets saved to recordings_dir and
+// the caller still gets a notice, just without the recording/transcript
+// itself. See docs/voicemail.md.
 static IVoicemailDeliveryBackend CreateVoicemailDeliveryBackend(AppConfig config, ILogger logger)
 {
     if (!config.Voicemail.Enabled)
     {
-        return new LocalOnlyDeliveryBackend();
+        return new FileDeliveryBackend();
     }
 
     if (config.Voicemail.Delivery == "text")
@@ -52,22 +53,28 @@ static IVoicemailDeliveryBackend CreateVoicemailDeliveryBackend(AppConfig config
             logger.Warning(
                 "[voicemail].delivery is \"text\" but [voicemail.transcription].model_path is not set; " +
                 "voicemails will be saved to recordings_dir only, not delivered over Nostr.");
-            return new LocalOnlyDeliveryBackend();
+            return new FileDeliveryBackend();
         }
 
         return CreateTextDeliveryBackend(config, logger);
     }
 
-    // "audio" - ConfigLoader.Validate already rejected any other value.
-    if (config.Voicemail.Blossom.Servers.Count == 0)
+    if (config.Voicemail.Delivery == "audio")
     {
-        logger.Warning(
-            "[voicemail].delivery is \"audio\" but [voicemail.blossom].servers is empty; " +
-            "voicemails will be saved to recordings_dir only, not delivered over Nostr.");
-        return new LocalOnlyDeliveryBackend();
+        if (config.Voicemail.Blossom.Servers.Count == 0)
+        {
+            logger.Warning(
+                "[voicemail].delivery is \"audio\" but [voicemail.blossom].servers is empty; " +
+                "voicemails will be saved to recordings_dir only, not delivered over Nostr.");
+            return new FileDeliveryBackend();
+        }
+
+        return CreateAudioDeliveryBackend(config, logger);
     }
 
-    return CreateAudioDeliveryBackend(config, logger);
+    // "file" - ConfigLoader.Validate already restricted Delivery to
+    // "file"/"audio"/"text", so this is the only value left.
+    return new FileDeliveryBackend();
 }
 
 static AudioDeliveryBackend CreateAudioDeliveryBackend(AppConfig config, ILogger logger)

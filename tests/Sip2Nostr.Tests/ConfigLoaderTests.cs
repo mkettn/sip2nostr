@@ -62,7 +62,7 @@ public class ConfigLoaderTests
         {
             var config = ConfigLoader.Load(path);
             Assert.False(config.Voicemail.Enabled);
-            Assert.Equal("audio", config.Voicemail.Delivery);
+            Assert.Equal("file", config.Voicemail.Delivery);
             Assert.Equal("{timestamp}-{caller}.opus", config.Voicemail.RecordingFilename);
             Assert.Equal(VoicemailBudget.MaxRecordingSeconds, config.Voicemail.MaxRecordingSeconds);
             Assert.Equal(VoicemailBudget.OpusResamplerQuality, config.Voicemail.OpusResamplerQuality);
@@ -132,7 +132,7 @@ public class ConfigLoaderTests
         // delivery = "text" isn't a ConfigLoader-level mistake - it's a
         // valid choice not to set transcription up. Program.cs is what
         // reacts to it (a startup warning, falling back to
-        // LocalOnlyDeliveryBackend) - see docs/voicemail.md.
+        // FileDeliveryBackend) - see docs/voicemail.md.
         var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"text\"\n";
         var path = WriteTempConfig(toml);
         try
@@ -269,13 +269,32 @@ public class ConfigLoaderTests
     }
 
     [Fact]
+    public void Load_DefaultDeliveryIsFile_Succeeds()
+    {
+        // "file" needs nothing beyond [voicemail].enabled - no
+        // transcription model, no Blossom servers - so it's the
+        // zero-setup default.
+        var path = WriteTempConfig(MinimalValidToml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal("file", config.Voicemail.Delivery);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Load_AudioDeliveryWithoutBlossomServers_Succeeds()
     {
         // Same reasoning as Load_TextDeliveryWithoutModelPath_Succeeds:
         // an empty [voicemail.blossom].servers under delivery = "audio"
-        // (the default) isn't a mistake ConfigLoader should block startup
-        // over - Program.cs degrades to LocalOnlyDeliveryBackend instead.
-        var path = WriteTempConfig(MinimalValidToml);
+        // isn't a mistake ConfigLoader should block startup over -
+        // Program.cs degrades to FileDeliveryBackend instead.
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"audio\"\n";
+        var path = WriteTempConfig(toml);
         try
         {
             var config = ConfigLoader.Load(path);
@@ -291,12 +310,13 @@ public class ConfigLoaderTests
     [Fact]
     public void Load_AudioDeliveryWithBlossomServers_Succeeds()
     {
-        var toml = $"{MinimalValidToml}\n\n[voicemail.blossom]\n" +
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"audio\"\n\n[voicemail.blossom]\n" +
             "servers = [\"https://blossom.example.com\", \"https://blossom2.example.com\"]\n";
         var path = WriteTempConfig(toml);
         try
         {
             var config = ConfigLoader.Load(path);
+            Assert.Equal("audio", config.Voicemail.Delivery);
             Assert.Equal(["https://blossom.example.com", "https://blossom2.example.com"], config.Voicemail.Blossom.Servers);
         }
         finally

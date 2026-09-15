@@ -16,7 +16,7 @@ public interface IVoicemailDeliveryBackend : IAsyncDisposable
 
     // Kind says whether Content/Tags describe a kind 14 private-message
     // rumor (VoicemailSender sends it via Client.SendPrivateMsgTo, as
-    // TranscribedTextDeliveryBackend/LocalOnlyDeliveryBackend do) or a
+    // TranscribedTextDeliveryBackend/FileDeliveryBackend do) or a
     // kind 15 file-message rumor it has to build and gift-wrap itself
     // instead (Content is a file URL, not message text - see
     // Voicemail/AudioDeliveryBackend.cs). It's part of the result rather

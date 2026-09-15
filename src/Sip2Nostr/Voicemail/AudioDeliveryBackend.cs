@@ -11,9 +11,9 @@ using HttpMethod = System.Net.Http.HttpMethod;
 
 namespace Sip2Nostr.Voicemail;
 
-// [voicemail].delivery = "audio" (the default): AES-256-GCM encrypts the
-// recording, uploads the ciphertext to a Blossom (BUD-01/BUD-02) server -
-// never the plaintext - and sends a NIP-17 kind 15 file message whose
+// [voicemail].delivery = "audio": AES-256-GCM encrypts the recording,
+// uploads the ciphertext to a Blossom (BUD-01/BUD-02) server - never
+// the plaintext - and sends a NIP-17 kind 15 file message whose
 // content is the file's URL and whose tags carry the decryption key. No
 // recording-length cap beyond the shared max_recording_seconds sanity
 // limit, since the DM itself only ever carries a URL, never the audio.
