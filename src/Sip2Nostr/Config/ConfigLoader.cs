@@ -116,32 +116,40 @@ public static class ConfigLoader
         // choice, not a mistake. What ConfigLoader still rejects is a
         // value that *is* present but broken - that's always a typo the
         // operator should fix immediately, delivery mode notwithstanding.
-        if (config.Voicemail.Transcription.Engine != "whisper")
+        // Gated on Enabled, same as bridge_nsec/target_npub/relays below
+        // are gated on [nostr].enabled: neither Transcription nor Blossom
+        // is read at all when voicemail is off (Program.cs never
+        // constructs a delivery backend that would need them), so a
+        // stale or half-filled-in value there shouldn't block startup.
+        if (config.Voicemail.Enabled)
         {
-            throw new ConfigurationException(
-                $"[voicemail.transcription].engine \"{config.Voicemail.Transcription.Engine}\" is not supported - only \"whisper\" is available today.");
-        }
-
-        if (!string.IsNullOrWhiteSpace(config.Voicemail.Transcription.ModelPath))
-        {
-            var resolvedModelPath = Path.IsPathRooted(config.Voicemail.Transcription.ModelPath)
-                ? config.Voicemail.Transcription.ModelPath
-                : Path.GetFullPath(Path.Combine(config.ConfigDirectory, config.Voicemail.Transcription.ModelPath));
-            if (!File.Exists(resolvedModelPath))
+            if (config.Voicemail.Transcription.Engine != "whisper")
             {
                 throw new ConfigurationException(
-                    $"[voicemail.transcription].model_path \"{config.Voicemail.Transcription.ModelPath}\" resolved to " +
-                    $"\"{resolvedModelPath}\", but no file exists there.");
+                    $"[voicemail.transcription].engine \"{config.Voicemail.Transcription.Engine}\" is not supported - only \"whisper\" is available today.");
             }
-        }
 
-        foreach (var server in config.Voicemail.Blossom.Servers)
-        {
-            if (!Uri.TryCreate(server, UriKind.Absolute, out var serverUri) ||
-                (serverUri.Scheme != Uri.UriSchemeHttp && serverUri.Scheme != Uri.UriSchemeHttps))
+            if (!string.IsNullOrWhiteSpace(config.Voicemail.Transcription.ModelPath))
             {
-                throw new ConfigurationException(
-                    $"[voicemail.blossom].servers entry \"{server}\" is not a valid absolute http(s) URL.");
+                var resolvedModelPath = Path.IsPathRooted(config.Voicemail.Transcription.ModelPath)
+                    ? config.Voicemail.Transcription.ModelPath
+                    : Path.GetFullPath(Path.Combine(config.ConfigDirectory, config.Voicemail.Transcription.ModelPath));
+                if (!File.Exists(resolvedModelPath))
+                {
+                    throw new ConfigurationException(
+                        $"[voicemail.transcription].model_path \"{config.Voicemail.Transcription.ModelPath}\" resolved to " +
+                        $"\"{resolvedModelPath}\", but no file exists there.");
+                }
+            }
+
+            foreach (var server in config.Voicemail.Blossom.Servers)
+            {
+                if (!Uri.TryCreate(server, UriKind.Absolute, out var serverUri) ||
+                    (serverUri.Scheme != Uri.UriSchemeHttp && serverUri.Scheme != Uri.UriSchemeHttps))
+                {
+                    throw new ConfigurationException(
+                        $"[voicemail.blossom].servers entry \"{server}\" is not a valid absolute http(s) URL.");
+                }
             }
         }
 

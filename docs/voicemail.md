@@ -171,9 +171,12 @@ failing to start or trying to inline the recording:
   - no separate identity or credential for the storage server. Because
   the DM itself only ever carries a URL, this mode has no
   recording-length cap beyond the shared `max_recording_seconds` sanity
-  limit below; if every configured server rejects the upload, the job
-  fails (the recording stays on disk, same as any other delivery
-  failure). Requires at least one entry in `[voicemail.blossom].servers`.
+  limit below; if every configured server rejects the upload, it falls
+  back to `"file"`'s plain-text notice instead of dropping the job -
+  a failed upload is a routine failure to plan for here (a third-party
+  HTTP server, DNS, and TLS are all now in the path), not the rare edge
+  case a dropped job would suggest. Requires at least one entry in
+  `[voicemail.blossom].servers`.
 - `"text"` - `Voicemail/TranscribedTextDeliveryBackend.cs` transcribes
   `VoicemailAudioJob.Samples` - the original recorded PCM, carried on the
   job alongside `OpusPath` rather than decoded back out of the saved
@@ -379,7 +382,24 @@ string?`, `null` meaning nothing could be transcribed), selected by
     is deliberately *not* checked here - `Program.cs` handles that with a
     warning and `FileDeliveryBackend`, not a startup failure, since
     leaving a mode's requirement unset is a valid choice, not a mistake
-    (see Delivery backends above). `[voicemail].opus_resampler_quality` (default
+    (see Delivery backends above). What *is* still checked here - whether
+    a present `[voicemail.transcription].engine`/`model_path` or
+    `[voicemail.blossom].servers` entry is itself well-formed - is gated
+    on `[voicemail].enabled`, the same way `ValidateBridgeIdentity`/
+    `ValidateTargetAndRelays` below are gated on `[nostr].enabled`: with
+    voicemail off, `Program.cs` never constructs a delivery backend that
+    would read either section, so a stale or half-filled-in value there
+    shouldn't block startup. There's a migration note worth calling out
+    here too: an older config's `max_text_recording_seconds` (removed
+    when the per-mode recording-length split collapsed into the single
+    `max_recording_seconds` above) is silently ignored by Tomlyn rather
+    than rejected - deserializing an unmapped TOML key is a no-op, not a
+    parse error. A config still carrying both keys keeps working, but
+    only `max_recording_seconds` has any effect now; if it was left at
+    the old audio-mode default (27s) while `max_text_recording_seconds`
+    held a longer value, every delivery mode is now capped at 27s until
+    `max_recording_seconds` itself is raised to the ceiling actually
+    wanted. `[voicemail].opus_resampler_quality` (default
     `VoicemailBudget.OpusResamplerQuality`, 5) is validated against the
     `0`-`10` range Concentus itself enforces (see the `VoicemailSink.cs`
     bullet above) - checking it here means a bad value fails at startup,
@@ -470,16 +490,16 @@ string?`, `null` meaning nothing could be transcribed), selected by
   falling back to a notice.** `VoicemailSender.PrepareJobSafeAsync`
   catches any exception from `BuildContentAsync`, logs it, and returns
   `null` - the job is simply never sent, not even as a plain-text notice.
-  This applies to `AudioDeliveryBackend` when every configured Blossom
-  server rejects the upload, and to `TranscribedTextDeliveryBackend` when
-  transcription *succeeds* but the transcript itself exceeds
-  `MaxTranscriptBytes` (the transcription-*fails* path is already fully
-  handled - see Delivery backends above - and never throws this far).
-  Either way the recording is still safe on
-  disk (logged in the error), but `target_npub` gets nothing over Nostr
-  for that call at all - the "exactly one DM per missed call, never
-  neither" invariant stated at the top of this document doesn't actually
-  hold for this specific failure path.
+  `AudioDeliveryBackend` (total Blossom upload failure) and
+  `TranscribedTextDeliveryBackend`'s transcription-failure path both
+  fall back to a notice instead of reaching this - see Delivery backends
+  above - but `TranscribedTextDeliveryBackend` still throws this far when
+  transcription *succeeds* and the transcript itself exceeds
+  `MaxTranscriptBytes`. The recording is still safe on disk (logged in
+  the error) when this happens, but `target_npub` gets nothing over
+  Nostr for that call at all - the "exactly one DM per missed call,
+  never neither" invariant stated at the top of this document doesn't
+  actually hold for this specific failure path.
 - **No fallback if Opus encoding fails when a recording is saved.**
   The recording is encoded to Opus at record time
   (`VoicemailSink.SaveRecordingAsync`, via `Sip/OpusCodec.Encode`), so

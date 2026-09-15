@@ -115,7 +115,7 @@ public class AudioDeliveryBackendTests
     }
 
     [Fact]
-    public async Task BuildContentAsync_AllServersReject_Throws()
+    public async Task BuildContentAsync_AllServersReject_FallsBackToFileNotice()
     {
         var opusPath = Path.GetTempFileName();
         await File.WriteAllBytesAsync(opusPath, "irrelevant"u8.ToArray());
@@ -129,7 +129,14 @@ public class AudioDeliveryBackendTests
                 Log.Logger);
 
             var job = new VoicemailAudioJob(opusPath, [], 8000, 3, "+15551234567", "call-3");
-            await Assert.ThrowsAsync<InvalidOperationException>(() => backend.BuildContentAsync(job, CancellationToken.None));
+            var (content, _, _, kind) = await backend.BuildContentAsync(job, CancellationToken.None);
+
+            // A rejected upload degrades to the same plain-text notice
+            // FileDeliveryBackend sends, rather than dropping the job -
+            // see docs/voicemail.md.
+            Assert.Equal(VoicemailContentKind.PrivateMessage, kind);
+            Assert.Contains("+15551234567", content);
+            Assert.Contains("saved on the bridge", content);
         }
         finally
         {

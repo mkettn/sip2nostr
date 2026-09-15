@@ -150,7 +150,7 @@ public class ConfigLoaderTests
     [Fact]
     public void Load_TextDeliveryWithMissingModelFile_Throws()
     {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"text\"\n\n" +
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\ndelivery = \"text\"\n\n" +
             "[voicemail.transcription]\nmodel_path = \"does-not-exist.bin\"\n";
         var path = WriteTempConfig(toml);
         try
@@ -170,7 +170,7 @@ public class ConfigLoaderTests
         var modelPath = WriteTempFile("fake-model-bytes");
         try
         {
-            var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"text\"\n\n" +
+            var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\ndelivery = \"text\"\n\n" +
                 $"[voicemail.transcription]\nengine = \"bogus\"\nmodel_path = \"{EscapeTomlString(modelPath)}\"\n";
             var path = WriteTempConfig(toml);
             try
@@ -196,7 +196,7 @@ public class ConfigLoaderTests
         // to something, regardless of the active [voicemail].delivery -
         // unlike an unconfigured model_path, a bogus engine name is
         // always a typo, never a legitimate "not set up" choice.
-        var toml = $"{MinimalValidToml}\n\n[voicemail.transcription]\nengine = \"bogus\"\n";
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\n\n[voicemail.transcription]\nengine = \"bogus\"\n";
         var path = WriteTempConfig(toml);
         try
         {
@@ -331,7 +331,8 @@ public class ConfigLoaderTests
     [InlineData("blossom.example.com")]
     public void Load_BlossomServerInvalidUrl_Throws(string server)
     {
-        var toml = $"{MinimalValidToml}\n\n[voicemail.blossom]\nservers = [\"{EscapeTomlString(server)}\"]\n";
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\n\n" +
+            $"[voicemail.blossom]\nservers = [\"{EscapeTomlString(server)}\"]\n";
         var path = WriteTempConfig(toml);
         try
         {
@@ -353,7 +354,7 @@ public class ConfigLoaderTests
         var modelPath = WriteTempFile("fake-model-bytes");
         try
         {
-            var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"text\"\n\n" +
+            var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\ndelivery = \"text\"\n\n" +
                 $"[voicemail.transcription]\nmodel_path = \"{EscapeTomlString(modelPath)}\"\n\n" +
                 "[voicemail.blossom]\nservers = [\"not a url\"]\n";
             var path = WriteTempConfig(toml);

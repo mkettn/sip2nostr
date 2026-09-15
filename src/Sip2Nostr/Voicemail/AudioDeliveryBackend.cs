@@ -17,6 +17,12 @@ namespace Sip2Nostr.Voicemail;
 // content is the file's URL and whose tags carry the decryption key. No
 // recording-length cap beyond the shared max_recording_seconds sanity
 // limit, since the DM itself only ever carries a URL, never the audio.
+//
+// If every configured server rejects the upload, falls back to
+// FileDeliveryBackend's plain-text notice rather than dropping the job -
+// this depends on a third-party HTTP server (DNS, TLS, rate limits all
+// included) in a way the old inline-base64 approach never did, so a
+// failed upload is a routine failure to plan for, not a rare edge case.
 // See docs/voicemail.md.
 public sealed class AudioDeliveryBackend(
     IReadOnlyList<Uri> servers,
@@ -25,6 +31,7 @@ public sealed class AudioDeliveryBackend(
 {
     private static readonly TimeSpan UploadTimeout = TimeSpan.FromSeconds(30);
     private static readonly HttpClient Http = new() { Timeout = UploadTimeout };
+    private readonly FileDeliveryBackend _fallback = new();
 
     public bool RequiresPcm => false;
 
@@ -78,8 +85,12 @@ public sealed class AudioDeliveryBackend(
 
         if (uploadedUrl is null)
         {
-            throw new InvalidOperationException(
-                $"All {servers.Count} configured [voicemail.blossom].servers rejected the upload.", lastFailure);
+            logger.Warning(
+                lastFailure,
+                "All {Count} configured [voicemail.blossom].servers rejected the upload for call {CallId}; sending a notice instead.",
+                servers.Count,
+                job.CallId);
+            return await _fallback.BuildContentAsync(job, ct);
         }
 
         var tags = new List<Tag>
@@ -152,5 +163,5 @@ public sealed class AudioDeliveryBackend(
         return new EventBuilder(new Kind(24242), "sip2nostr voicemail upload").Tags(tags).SignWithKeys(bridgeKeys);
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public ValueTask DisposeAsync() => _fallback.DisposeAsync();
 }

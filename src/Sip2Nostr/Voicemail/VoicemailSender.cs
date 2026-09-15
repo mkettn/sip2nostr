@@ -208,12 +208,19 @@ public sealed class VoicemailSender : IAsyncDisposable
             // FileMessage (AudioDeliveryBackend) needs a kind 15 rumor
             // built and gift-wrapped directly - Content is a file URL,
             // not message text, so SendPrivateMsgTo's kind 14 rumor (used
-            // for every other backend) doesn't apply here.
+            // for every other backend) doesn't apply here. NIP-17 requires
+            // a "p" tag naming the receiver on the rumor itself (both kind
+            // 14 and kind 15) so a client can tell which conversation a
+            // decrypted rumor belongs to - SendPrivateMsgTo's own rumor
+            // builder adds that for us, but building the kind 15 rumor by
+            // hand means adding it explicitly here instead.
             var output = prepared.Kind == VoicemailContentKind.FileMessage
                 ? await client.GiftWrapTo(
                     connectedRelays,
                     targetPubkey,
-                    new EventBuilder(new Kind(15), prepared.Content).Tags(prepared.Tags).Build(bridgePublicKey),
+                    new EventBuilder(new Kind(15), prepared.Content)
+                        .Tags([.. prepared.Tags, Tag.PublicKey(targetPubkey)])
+                        .Build(bridgePublicKey),
                     [])
                 : await client.SendPrivateMsgTo(connectedRelays, targetPubkey, prepared.Content, prepared.Tags);
             PublishOutcome.ThrowIfFailed(_logger, prepared.Description, output);
