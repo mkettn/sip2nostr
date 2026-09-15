@@ -1,11 +1,10 @@
 namespace Sip2Nostr.Shared;
 
-// Shared by VoicemailSink (encodes against these), the voicemail delivery
-// backends (check against these), Config/AppConfig.cs (default values for
-// the configurable settings below), and ConfigLoader (validates
-// max_recording_seconds against MaxRecordingSeconds - not configurable,
-// derived from the NIP-17/Opus size budget - at startup). See
-// docs/voicemail.md for the full derivation.
+// Shared by VoicemailSink (encodes against OpusBitrateBps/OpusResamplerQuality),
+// the voicemail delivery backends (check against MaxTranscriptBytes),
+// Config/AppConfig.cs (default values for the configurable settings
+// below), and ConfigLoader (validates max_recording_seconds against
+// MaxRecordingSecondsCeiling at startup). See docs/voicemail.md.
 public static class VoicemailBudget
 {
     public const int OpusBitrateBps = 8000;
@@ -18,40 +17,31 @@ public static class VoicemailBudget
     // Unrelated to the sample-rate conversion Sip/OpusCodec.Decode does.
     public const int OpusResamplerQuality = 5;
 
-    public const int MaxAudioBytes = 30_400;
-
-    private const int ReservedAudioBytes = MaxAudioBytes * 9 / 10;
-    public const int MaxRecordingSeconds = ReservedAudioBytes / (OpusBitrateBps / 8);
-
-    // Default for the configurable [voicemail].max_text_recording_seconds
-    // (see Config/AppConfig.cs) - ConfigLoader validates against the
-    // configured value, not this constant directly. Decoupled from the
-    // Opus/NIP-17 budget above - text delivery's real enforcement is
-    // MaxTranscriptBytes, checked against the actual transcript at send
-    // time. This just bounds how much PCM VoicemailSink buffers in memory
-    // while recording, regardless of what the transcript ends up being.
-    // See docs/voicemail.md.
-    public const int MaxTextRecordingSeconds = 600;
+    // Default for the configurable [voicemail].max_recording_seconds (see
+    // Config/AppConfig.cs). Not derived from anything - neither delivery
+    // mode inlines the recording in the DM itself ("text" sends a
+    // transcript, "audio" sends a Blossom upload's URL - see
+    // docs/voicemail.md), so this is just a sanity limit on how much PCM
+    // VoicemailSink buffers in memory while recording, not a size budget.
+    public const int MaxRecordingSeconds = 600;
 
     // Hard ceiling ConfigLoader enforces on the configurable
-    // max_text_recording_seconds, so raising that sanity limit can't
-    // itself become unbounded. Picked as an order-of-magnitude memory
-    // budget, not a precise derivation: at 8 kHz mono 16-bit PCM
-    // (16,000 bytes/sec), 3,600s of buffered audio is ~57.6 MB in
+    // max_recording_seconds, so raising that sanity limit can't itself
+    // become unbounded. Picked as an order-of-magnitude memory budget,
+    // not a precise derivation: at 8 kHz mono 16-bit PCM (16,000
+    // bytes/sec), 3,600s of buffered audio is ~57.6 MB in
     // VoicemailSink's List<short> alone, before List growth/ToArray()
     // transients or VoicemailAudioJob.Samples keeping a copy alive in
     // the send queue - comfortably bounded even accounting for those,
     // but well past any real voicemail's length.
-    public const int MaxTextRecordingSecondsCeiling = 3600;
+    public const int MaxRecordingSecondsCeiling = 3600;
 
-    // The rumor's JSON has ~40,960 bytes of padded-length budget after the
-    // seal layer's own NIP-44 plaintext cap and overhead - see
-    // MaxAudioBytes' derivation in docs/voicemail.md, which covers that
-    // part of the math (it's the same regardless of what the rumor's
-    // content actually is). A transcript isn't base64-embedded like
-    // inlined audio, so - unlike MaxAudioBytes - no 4/3 base64 inflation
-    // needs undoing here: this is a direct UTF-8 byte budget for the
-    // transcript text itself, after rumor JSON overhead.
+    // The rumor's JSON has ~40,960 bytes of padded-length budget after
+    // NIP-44's own plaintext cap and the seal layer's overhead - see
+    // docs/voicemail.md for the full derivation. A transcript isn't
+    // base64-embedded the way inlined audio used to be, so this is a
+    // direct UTF-8 byte budget for the transcript text itself, after
+    // rumor JSON overhead.
     //
     // 40,000 + the surrounding prose/tags in
     // TranscribedTextDeliveryBackend (~92 bytes) + rumor JSON overhead

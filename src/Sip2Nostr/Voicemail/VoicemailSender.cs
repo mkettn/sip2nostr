@@ -205,10 +205,10 @@ public sealed class VoicemailSender : IAsyncDisposable
     {
         try
         {
-            // FileMessage (AudioBlossomDeliveryBackend) needs a kind 15
-            // rumor built and gift-wrapped directly - Content is a file
-            // URL, not message text, so SendPrivateMsgTo's kind 14 rumor
-            // (used for every other backend) doesn't apply here.
+            // FileMessage (AudioDeliveryBackend) needs a kind 15 rumor
+            // built and gift-wrapped directly - Content is a file URL,
+            // not message text, so SendPrivateMsgTo's kind 14 rumor (used
+            // for every other backend) doesn't apply here.
             var output = prepared.Kind == VoicemailContentKind.FileMessage
                 ? await client.GiftWrapTo(
                     connectedRelays,

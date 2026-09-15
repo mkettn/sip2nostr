@@ -64,8 +64,9 @@ public class ConfigLoaderTests
             Assert.False(config.Voicemail.Enabled);
             Assert.Equal("audio", config.Voicemail.Delivery);
             Assert.Equal("{timestamp}-{caller}.opus", config.Voicemail.RecordingFilename);
-            Assert.Equal(VoicemailBudget.MaxTextRecordingSeconds, config.Voicemail.MaxTextRecordingSeconds);
+            Assert.Equal(VoicemailBudget.MaxRecordingSeconds, config.Voicemail.MaxRecordingSeconds);
             Assert.Equal(VoicemailBudget.OpusResamplerQuality, config.Voicemail.OpusResamplerQuality);
+            Assert.Empty(config.Voicemail.Blossom.Servers);
             Assert.Equal(15, config.WebRtc.ConnectionLossGraceSeconds);
         }
         finally
@@ -125,14 +126,20 @@ public class ConfigLoaderTests
     }
 
     [Fact]
-    public void Load_TextDeliveryWithoutModelPath_Throws()
+    public void Load_TextDeliveryWithoutModelPath_Succeeds()
     {
+        // Leaving [voicemail.transcription].model_path unset when
+        // delivery = "text" isn't a ConfigLoader-level mistake - it's a
+        // valid choice not to set transcription up. Program.cs is what
+        // reacts to it (a startup warning, falling back to
+        // LocalOnlyDeliveryBackend) - see docs/voicemail.md.
         var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"text\"\n";
         var path = WriteTempConfig(toml);
         try
         {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
-            Assert.Contains("model_path", exception.Message);
+            var config = ConfigLoader.Load(path);
+            Assert.Equal("text", config.Voicemail.Delivery);
+            Assert.Null(config.Voicemail.Transcription.ModelPath);
         }
         finally
         {
@@ -183,6 +190,26 @@ public class ConfigLoaderTests
     }
 
     [Fact]
+    public void Load_UnknownTranscriptionEngine_ThrowsEvenUnderAudioDelivery()
+    {
+        // [voicemail.transcription].engine is validated whenever it's set
+        // to something, regardless of the active [voicemail].delivery -
+        // unlike an unconfigured model_path, a bogus engine name is
+        // always a typo, never a legitimate "not set up" choice.
+        var toml = $"{MinimalValidToml}\n\n[voicemail.transcription]\nengine = \"bogus\"\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains("engine", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Load_TextDeliveryWithValidModelPath_Succeeds()
     {
         var modelPath = WriteTempFile("fake-model-bytes");
@@ -210,125 +237,67 @@ public class ConfigLoaderTests
     }
 
     [Fact]
-    public void Load_TextDeliveryExceedingAudioBudget_Succeeds()
+    public void Load_MaxRecordingSecondsAboveCeiling_Throws()
     {
-        // The NIP-17/Opus size budget only constrains the "audio" backend -
-        // a transcript stays tiny regardless of recording length.
-        var modelPath = WriteTempFile("fake-model-bytes");
-        try
-        {
-            var overBudget = VoicemailBudget.MaxRecordingSeconds + 100;
-            var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"text\"\nmax_recording_seconds = {overBudget}\n\n" +
-                $"[voicemail.transcription]\nmodel_path = \"{EscapeTomlString(modelPath)}\"\n";
-            var path = WriteTempConfig(toml);
-            try
-            {
-                var config = ConfigLoader.Load(path);
-                Assert.Equal(overBudget, config.Voicemail.MaxRecordingSeconds);
-            }
-            finally
-            {
-                File.Delete(path);
-            }
-        }
-        finally
-        {
-            File.Delete(modelPath);
-        }
-    }
-
-    [Fact]
-    public void Load_TextDeliveryExceedingTextRecordingCeiling_Throws()
-    {
-        var modelPath = WriteTempFile("fake-model-bytes");
-        try
-        {
-            var overCeiling = VoicemailBudget.MaxTextRecordingSeconds + 1;
-            var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"text\"\nmax_recording_seconds = {overCeiling}\n\n" +
-                $"[voicemail.transcription]\nmodel_path = \"{EscapeTomlString(modelPath)}\"\n";
-            var path = WriteTempConfig(toml);
-            try
-            {
-                var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
-                Assert.Contains("max_recording_seconds", exception.Message);
-            }
-            finally
-            {
-                File.Delete(path);
-            }
-        }
-        finally
-        {
-            File.Delete(modelPath);
-        }
-    }
-
-    [Fact]
-    public void Load_BlossomDeliveryWithoutServers_Throws()
-    {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"blossom\"\n";
-        var path = WriteTempConfig(toml);
-        try
-        {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
-            Assert.Contains("[voicemail.blossom].servers", exception.Message);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public void Load_BlossomDeliveryWithValidServers_Succeeds()
-    {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"blossom\"\n\n" +
-            "[voicemail.blossom]\nservers = [\"https://blossom.example.com\", \"https://blossom2.example.com\"]\n";
-        var path = WriteTempConfig(toml);
-        try
-        {
-            var config = ConfigLoader.Load(path);
-            Assert.Equal("blossom", config.Voicemail.Delivery);
-            Assert.Equal(["https://blossom.example.com", "https://blossom2.example.com"], config.Voicemail.Blossom.Servers);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public void Load_BlossomDeliveryExceedingAudioBudget_Succeeds()
-    {
-        // Same reasoning as Load_TextDeliveryExceedingAudioBudget_Succeeds -
-        // a Blossom upload isn't inlined in the DM, so it isn't bound by
-        // the NIP-17/Opus size budget either.
-        var overBudget = VoicemailBudget.MaxRecordingSeconds + 100;
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"blossom\"\nmax_recording_seconds = {overBudget}\n\n" +
-            "[voicemail.blossom]\nservers = [\"https://blossom.example.com\"]\n";
-        var path = WriteTempConfig(toml);
-        try
-        {
-            var config = ConfigLoader.Load(path);
-            Assert.Equal(overBudget, config.Voicemail.MaxRecordingSeconds);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public void Load_BlossomDeliveryExceedingTextRecordingCeiling_Throws()
-    {
-        var overCeiling = VoicemailBudget.MaxTextRecordingSeconds + 1;
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"blossom\"\nmax_recording_seconds = {overCeiling}\n\n" +
-            "[voicemail.blossom]\nservers = [\"https://blossom.example.com\"]\n";
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nmax_recording_seconds = {VoicemailBudget.MaxRecordingSecondsCeiling + 1}\n";
         var path = WriteTempConfig(toml);
         try
         {
             var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains("max_recording_seconds", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_MaxRecordingSecondsAtCeiling_Succeeds()
+    {
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nmax_recording_seconds = {VoicemailBudget.MaxRecordingSecondsCeiling}\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal(VoicemailBudget.MaxRecordingSecondsCeiling, config.Voicemail.MaxRecordingSeconds);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_AudioDeliveryWithoutBlossomServers_Succeeds()
+    {
+        // Same reasoning as Load_TextDeliveryWithoutModelPath_Succeeds:
+        // an empty [voicemail.blossom].servers under delivery = "audio"
+        // (the default) isn't a mistake ConfigLoader should block startup
+        // over - Program.cs degrades to LocalOnlyDeliveryBackend instead.
+        var path = WriteTempConfig(MinimalValidToml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal("audio", config.Voicemail.Delivery);
+            Assert.Empty(config.Voicemail.Blossom.Servers);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_AudioDeliveryWithBlossomServers_Succeeds()
+    {
+        var toml = $"{MinimalValidToml}\n\n[voicemail.blossom]\n" +
+            "servers = [\"https://blossom.example.com\", \"https://blossom2.example.com\"]\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal(["https://blossom.example.com", "https://blossom2.example.com"], config.Voicemail.Blossom.Servers);
         }
         finally
         {
@@ -342,8 +311,7 @@ public class ConfigLoaderTests
     [InlineData("blossom.example.com")]
     public void Load_BlossomServerInvalidUrl_Throws(string server)
     {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"blossom\"\n\n" +
-            $"[voicemail.blossom]\nservers = [\"{EscapeTomlString(server)}\"]\n";
+        var toml = $"{MinimalValidToml}\n\n[voicemail.blossom]\nservers = [\"{EscapeTomlString(server)}\"]\n";
         var path = WriteTempConfig(toml);
         try
         {
@@ -361,7 +329,7 @@ public class ConfigLoaderTests
     {
         // [voicemail.blossom].servers can be configured purely as a
         // fallback under delivery = "text" - a malformed entry there
-        // should still fail at startup, not just when delivery = "blossom".
+        // should still fail at startup, not just under delivery = "audio".
         var modelPath = WriteTempFile("fake-model-bytes");
         try
         {
@@ -390,9 +358,6 @@ public class ConfigLoaderTests
     [InlineData("ring_timeout_seconds = -5", "ring_timeout_seconds")]
     [InlineData("max_recording_seconds = 0", "max_recording_seconds")]
     [InlineData("max_recording_seconds = -1", "max_recording_seconds")]
-    [InlineData("max_text_recording_seconds = 0", "max_text_recording_seconds")]
-    [InlineData("max_text_recording_seconds = -5", "max_text_recording_seconds")]
-    [InlineData("max_text_recording_seconds = 3601", "max_text_recording_seconds")]
     public void Load_InvalidVoicemailTimeout_Throws(string voicemailOverride, string expectedKeyInMessage)
     {
         var toml = $"{MinimalValidToml}\n\n[voicemail]\n{voicemailOverride}\n";
@@ -401,22 +366,6 @@ public class ConfigLoaderTests
         {
             var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains(expectedKeyInMessage, exception.Message);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public void Load_MaxTextRecordingSecondsAtCeiling_Succeeds()
-    {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\nmax_text_recording_seconds = {VoicemailBudget.MaxTextRecordingSecondsCeiling}\n";
-        var path = WriteTempConfig(toml);
-        try
-        {
-            var config = ConfigLoader.Load(path);
-            Assert.Equal(VoicemailBudget.MaxTextRecordingSecondsCeiling, config.Voicemail.MaxTextRecordingSeconds);
         }
         finally
         {
@@ -436,22 +385,6 @@ public class ConfigLoaderTests
         {
             var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
             Assert.Contains("recording_filename", exception.Message);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public void Load_MaxRecordingSecondsExceedsNip17Budget_Throws()
-    {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\nmax_recording_seconds = {VoicemailBudget.MaxRecordingSeconds + 1}\n";
-        var path = WriteTempConfig(toml);
-        try
-        {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
-            Assert.Contains("max_recording_seconds", exception.Message);
         }
         finally
         {
@@ -488,81 +421,6 @@ public class ConfigLoaderTests
         {
             var config = ConfigLoader.Load(path);
             Assert.Equal(quality, config.Voicemail.OpusResamplerQuality);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public void Load_MaxRecordingSecondsBelowConfiguredTextCeiling_Throws()
-    {
-        // max_text_recording_seconds lowers the "text" ceiling below the
-        // default (VoicemailBudget.MaxTextRecordingSeconds) - ConfigLoader
-        // must validate against the configured value, not the constant.
-        var modelPath = WriteTempFile("fake-model-bytes");
-        try
-        {
-            var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"text\"\n" +
-                "max_text_recording_seconds = 30\nmax_recording_seconds = 60\n\n" +
-                $"[voicemail.transcription]\nmodel_path = \"{EscapeTomlString(modelPath)}\"\n";
-            var path = WriteTempConfig(toml);
-            try
-            {
-                var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
-                Assert.Contains("max_recording_seconds", exception.Message);
-            }
-            finally
-            {
-                File.Delete(path);
-            }
-        }
-        finally
-        {
-            File.Delete(modelPath);
-        }
-    }
-
-    [Fact]
-    public void Load_MaxRecordingSecondsAboveConfiguredTextCeiling_Succeeds()
-    {
-        // Raising max_text_recording_seconds above the default should let a
-        // previously-rejected max_recording_seconds through.
-        var modelPath = WriteTempFile("fake-model-bytes");
-        try
-        {
-            var raisedCeiling = VoicemailBudget.MaxTextRecordingSeconds + 100;
-            var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"text\"\n" +
-                $"max_text_recording_seconds = {raisedCeiling}\nmax_recording_seconds = {raisedCeiling}\n\n" +
-                $"[voicemail.transcription]\nmodel_path = \"{EscapeTomlString(modelPath)}\"\n";
-            var path = WriteTempConfig(toml);
-            try
-            {
-                var config = ConfigLoader.Load(path);
-                Assert.Equal(raisedCeiling, config.Voicemail.MaxTextRecordingSeconds);
-                Assert.Equal(raisedCeiling, config.Voicemail.MaxRecordingSeconds);
-            }
-            finally
-            {
-                File.Delete(path);
-            }
-        }
-        finally
-        {
-            File.Delete(modelPath);
-        }
-    }
-
-    [Fact]
-    public void Load_MaxRecordingSecondsAtNip17Budget_Succeeds()
-    {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\nmax_recording_seconds = {VoicemailBudget.MaxRecordingSeconds}\n";
-        var path = WriteTempConfig(toml);
-        try
-        {
-            var config = ConfigLoader.Load(path);
-            Assert.Equal(VoicemailBudget.MaxRecordingSeconds, config.Voicemail.MaxRecordingSeconds);
         }
         finally
         {

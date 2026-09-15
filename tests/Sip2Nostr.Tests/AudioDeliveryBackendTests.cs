@@ -9,7 +9,7 @@ using Xunit;
 
 namespace Sip2Nostr.Tests;
 
-public class AudioBlossomDeliveryBackendTests
+public class AudioDeliveryBackendTests
 {
     // Arbitrary, freshly generated for this test file only - see
     // ConfigLoaderTests.BridgeNsec for why a real, parseable key is
@@ -26,7 +26,7 @@ public class AudioBlossomDeliveryBackendTests
         using var server = new FakeBlossomServer("https://cdn.example.com/uploaded-blob");
         try
         {
-            var backend = new AudioBlossomDeliveryBackend(
+            var backend = new AudioDeliveryBackend(
                 [server.BaseUri],
                 new NostrConfig { BridgeNsec = BridgeNsec },
                 Log.Logger);
@@ -98,7 +98,7 @@ public class AudioBlossomDeliveryBackendTests
         using var workingServer = new FakeBlossomServer("https://cdn.example.com/second-server-blob");
         try
         {
-            var backend = new AudioBlossomDeliveryBackend(
+            var backend = new AudioDeliveryBackend(
                 [failingServer.BaseUri, workingServer.BaseUri],
                 new NostrConfig { BridgeNsec = BridgeNsec },
                 Log.Logger);
@@ -123,7 +123,7 @@ public class AudioBlossomDeliveryBackendTests
         using var server = new FakeBlossomServer(null, HttpStatusCode.Forbidden);
         try
         {
-            var backend = new AudioBlossomDeliveryBackend(
+            var backend = new AudioDeliveryBackend(
                 [server.BaseUri],
                 new NostrConfig { BridgeNsec = BridgeNsec },
                 Log.Logger);
@@ -139,7 +139,7 @@ public class AudioBlossomDeliveryBackendTests
 
     // Minimal BUD-02 server: accepts one PUT /upload, records what it
     // received, and replies with either a blob descriptor or a failure
-    // status - just enough surface for AudioBlossomDeliveryBackend to
+    // status - just enough surface for AudioDeliveryBackend to
     // talk to.
     private sealed class FakeBlossomServer : IDisposable
     {

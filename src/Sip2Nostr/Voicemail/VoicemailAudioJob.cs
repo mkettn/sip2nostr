@@ -7,7 +7,7 @@ namespace Sip2Nostr.Voicemail;
 // carries the original recorded PCM alongside OpusPath so
 // TranscribedTextDeliveryBackend (for whisper.cpp) reads the recording
 // directly rather than decoding it back out of the lossy Opus file;
-// AudioInlineDeliveryBackend sends OpusPath's file as-is and never reads
+// AudioDeliveryBackend reads OpusPath's file as-is and never reads
 // Samples, so VoicemailSink only populates it when the configured
 // delivery backend's RequiresPcm says so - otherwise it's empty.
 public sealed record VoicemailAudioJob(

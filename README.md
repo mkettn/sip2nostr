@@ -167,18 +167,18 @@ connection_loss_grace_seconds = 15  # how long a bridged call's WebRTC connectio
 [voicemail]
 enabled = false                # opt-in: falls back to a greeting + recording if target_npub doesn't answer
 ring_timeout_seconds = 20
-max_recording_seconds = 60
+max_recording_seconds = 600
 # greeting_sound = "sounds/greeting.opus"   # optional; a short tone plays if unset
 # dm_relays = ["wss://dm-relay.example.com"] # optional; defaults to [nostr].relays
-delivery = "audio"             # or "text"/"blossom" - see [voicemail.transcription]/[voicemail.blossom] below
+delivery = "audio"             # or "text" - see [voicemail.blossom]/[voicemail.transcription] below
+
+[voicemail.blossom]            # consulted when delivery = "audio" (the default), or as a "text" fallback on transcription failure
+# servers = ["https://blossom.example.com"]   # required for delivery = "audio" to actually deliver anything
 
 [voicemail.transcription]      # only consulted when delivery = "text"
 engine = "whisper"
-# model_path = "models/ggml-base.en.bin"   # required for delivery = "text"
+# model_path = "models/ggml-base.en.bin"   # required for delivery = "text" to actually deliver anything
 # language = "en"                          # optional; auto-detected if unset
-
-[voicemail.blossom]            # consulted when delivery = "blossom", or as a "text" fallback on transcription failure
-# servers = ["https://blossom.example.com"]   # at least one required for delivery = "blossom"
 ```
 
 ## Voicemail: answering-machine fallback
@@ -200,30 +200,25 @@ for the process lifetime) that connects to `[voicemail].dm_relays` (or
 legitimately differ from the relays used for call signaling) only when
 something's queued, sends it as a Nostr direct message, then disconnects.
 How the recording turns into DM content is pluggable via
-`[voicemail].delivery`: `"audio"` (default) inlines the already-encoded
-Opus recording directly, so `max_recording_seconds` is capped by
-what reliably fits a NIP-17 DM (27s by default); `"text"` transcribes it
-offline via Whisper.net and sends the transcript instead, no relay-side
-or third-party involvement needed for the transcription itself (just a
-local GGML model file); `"blossom"` AES-GCM encrypts the recording and
-uploads only the ciphertext to a [Blossom](https://github.com/hzrd149/blossom)
-server from `[voicemail.blossom].servers`, sending a NIP-17 file message
-with the URL and decryption key instead of the audio itself. The latter
-two aren't bound by the inline-DM size budget, so they're instead capped
-by the separately configurable `[voicemail].max_text_recording_seconds`
-(default 600s, a memory-use sanity limit rather than a DM size budget) -
-and if transcription produces nothing, `"text"` falls back to a Blossom
-upload when one is configured, before falling back further to a
-plain-text notice. Exactly one DM per missed call: the recording (or its
-URL), or - if the caller hung up before anything worth sending was
-captured - a plain-text missed-call notice naming the caller. Recordings
-on disk don't depend on delivery succeeding. See `docs/voicemail.md` for
-the full flow and known limitations — notably, `delivery = "audio"`
-inlines the recording directly into the DM rather than uploading it,
-which is what caps its `max_recording_seconds` default well below a
-minute (NIP-17's own encryption, not just a relay's size limit, can't
-carry much more than ~27 seconds of audio at the current encoding) -
-`delivery = "blossom"` is the way around that cap entirely.
+`[voicemail].delivery`: `"audio"` (default) AES-GCM encrypts the
+recording and uploads only the ciphertext to a
+[Blossom](https://github.com/hzrd149/blossom) server from
+`[voicemail.blossom].servers`, sending a NIP-17 file message with the URL
+and decryption key; `"text"` transcribes it offline via Whisper.net and
+sends the transcript instead, no relay-side or third-party involvement
+needed for the transcription itself (just a local GGML model file). If
+the selected mode's requirement isn't configured (no Blossom servers for
+`"audio"`, no model for `"text"`), sip2nostr logs a startup warning and
+falls back to saving the recording to `recordings_dir` only, with a
+plain-text notice in place of the recording - it does not fall back to
+inlining the recording in the DM. If transcription produces nothing,
+`"text"` falls back to a Blossom upload when one is configured, before
+falling back further to that same plain-text notice. Exactly one DM per
+missed call either way: the recording's URL, its transcript, or a
+plain-text notice - never more than one, never none. Recordings on disk
+don't depend on delivery succeeding. See `docs/voicemail.md` for the full
+flow and known limitations — notably, `delivery = "audio"`'s Blossom
+upload hasn't been verified against a real Blossom server yet.
 
 ## Multiple lines, single identity (MVP)
 

@@ -54,17 +54,11 @@ public static class ConfigLoader
                 $"{config.WebRtc.ConnectionLossGraceSeconds}.");
         }
 
-        if (config.Voicemail.MaxRecordingSeconds <= 0)
+        if (config.Voicemail.MaxRecordingSeconds is <= 0 or > VoicemailBudget.MaxRecordingSecondsCeiling)
         {
             throw new ConfigurationException(
-                $"[voicemail].max_recording_seconds must be greater than 0, got {config.Voicemail.MaxRecordingSeconds}.");
-        }
-
-        if (config.Voicemail.MaxTextRecordingSeconds is <= 0 or > VoicemailBudget.MaxTextRecordingSecondsCeiling)
-        {
-            throw new ConfigurationException(
-                "[voicemail].max_text_recording_seconds must be greater than 0 and at most " +
-                $"{VoicemailBudget.MaxTextRecordingSecondsCeiling}, got {config.Voicemail.MaxTextRecordingSeconds}.");
+                "[voicemail].max_recording_seconds must be greater than 0 and at most " +
+                $"{VoicemailBudget.MaxRecordingSecondsCeiling}, got {config.Voicemail.MaxRecordingSeconds}.");
         }
 
         if (config.Voicemail.OpusResamplerQuality is < 0 or > 10)
@@ -73,11 +67,10 @@ public static class ConfigLoader
                 $"[voicemail].opus_resampler_quality must be between 0 and 10, got {config.Voicemail.OpusResamplerQuality}.");
         }
 
-        if (config.Voicemail.Delivery is not ("audio" or "text" or "blossom"))
+        if (config.Voicemail.Delivery is not ("audio" or "text"))
         {
             throw new ConfigurationException(
-                "[voicemail].delivery must be \"audio\", \"text\", or \"blossom\", got " +
-                $"\"{config.Voicemail.Delivery}\".");
+                $"[voicemail].delivery must be \"audio\" or \"text\", got \"{config.Voicemail.Delivery}\".");
         }
 
         if (string.IsNullOrWhiteSpace(config.Voicemail.RecordingFilename))
@@ -114,40 +107,22 @@ public static class ConfigLoader
                 $"got \"{config.Voicemail.RecordingFilename}\".");
         }
 
-        // The ceiling depends on which backend is actually recording-length
-        // sensitive: "audio" is bound by the Opus/NIP-17 size budget below
-        // (VoicemailBudget.MaxRecordingSeconds - not configurable, derived
-        // from that budget); "text" and "blossom" aren't (a transcript
-        // stays small regardless of recording length, and a Blossom upload
-        // isn't inlined in the DM at all - the real enforcement for "text"
-        // is MaxTranscriptBytes, checked against the actual output at send
-        // time), so their ceiling is just the configurable
-        // max_text_recording_seconds sanity limit on VoicemailSink's
-        // in-memory PCM buffer. See docs/voicemail.md.
-        var maxRecordingSecondsCeiling = config.Voicemail.Delivery == "audio"
-            ? VoicemailBudget.MaxRecordingSeconds
-            : config.Voicemail.MaxTextRecordingSeconds;
-        if (config.Voicemail.MaxRecordingSeconds > maxRecordingSecondsCeiling)
+        // Whether transcription/Blossom is actually usable for the
+        // selected delivery mode is a Program.cs concern (it logs a
+        // warning and falls back to local-only delivery instead - see
+        // docs/voicemail.md), not something ConfigLoader fails startup
+        // over: leaving a mode's requirement unconfigured is a valid
+        // choice, not a mistake. What ConfigLoader still rejects is a
+        // value that *is* present but broken - that's always a typo the
+        // operator should fix immediately, delivery mode notwithstanding.
+        if (config.Voicemail.Transcription.Engine != "whisper")
         {
             throw new ConfigurationException(
-                $"[voicemail].max_recording_seconds is {config.Voicemail.MaxRecordingSeconds}, but the maximum for " +
-                $"[voicemail].delivery = \"{config.Voicemail.Delivery}\" is {maxRecordingSecondsCeiling}s. See docs/voicemail.md.");
+                $"[voicemail.transcription].engine \"{config.Voicemail.Transcription.Engine}\" is not supported - only \"whisper\" is available today.");
         }
 
-        if (config.Voicemail.Delivery == "text")
+        if (!string.IsNullOrWhiteSpace(config.Voicemail.Transcription.ModelPath))
         {
-            if (config.Voicemail.Transcription.Engine != "whisper")
-            {
-                throw new ConfigurationException(
-                    $"[voicemail.transcription].engine \"{config.Voicemail.Transcription.Engine}\" is not supported - only \"whisper\" is available today.");
-            }
-
-            if (string.IsNullOrWhiteSpace(config.Voicemail.Transcription.ModelPath))
-            {
-                throw new ConfigurationException(
-                    "[voicemail.transcription].model_path is required when [voicemail].delivery = \"text\".");
-            }
-
             var resolvedModelPath = Path.IsPathRooted(config.Voicemail.Transcription.ModelPath)
                 ? config.Voicemail.Transcription.ModelPath
                 : Path.GetFullPath(Path.Combine(config.ConfigDirectory, config.Voicemail.Transcription.ModelPath));
@@ -159,17 +134,6 @@ public static class ConfigLoader
             }
         }
 
-        if (config.Voicemail.Delivery == "blossom" && config.Voicemail.Blossom.Servers.Count == 0)
-        {
-            throw new ConfigurationException(
-                "[voicemail.blossom].servers must contain at least one server URL when [voicemail].delivery = \"blossom\".");
-        }
-
-        // Checked regardless of delivery: a server list under [voicemail.blossom]
-        // can also be consulted as a fallback when delivery = "text" (see
-        // Voicemail/TranscribedTextDeliveryBackend.cs), so a malformed
-        // entry there should fail at startup too, not just when it's the
-        // primary delivery mode.
         foreach (var server in config.Voicemail.Blossom.Servers)
         {
             if (!Uri.TryCreate(server, UriKind.Absolute, out var serverUri) ||

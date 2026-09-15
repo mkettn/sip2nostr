@@ -32,38 +32,59 @@ static Serilog.Core.Logger CreateLogger(
 }
 
 // Only loads a transcriber (and its GGML model) when it'll actually be
-// used - voicemail disabled, or [voicemail].delivery = "audio" (the
-// default), stays as cheap to start up as before this existed.
+// used - voicemail disabled stays as cheap to start up as before this
+// existed. Neither delivery mode's requirement being configured is a
+// startup failure (see ConfigLoader.Validate) - it degrades to
+// LocalOnlyDeliveryBackend with a warning instead, so a voicemail still
+// gets saved to recordings_dir and the caller still gets a notice, just
+// without the recording/transcript itself. See docs/voicemail.md.
 static IVoicemailDeliveryBackend CreateVoicemailDeliveryBackend(AppConfig config, ILogger logger)
 {
     if (!config.Voicemail.Enabled)
     {
-        return new AudioInlineDeliveryBackend();
+        return new LocalOnlyDeliveryBackend();
     }
 
-    return config.Voicemail.Delivery switch
+    if (config.Voicemail.Delivery == "text")
     {
-        "blossom" => CreateBlossomDeliveryBackend(config, logger),
-        "text" => CreateTextDeliveryBackend(config, logger),
-        _ => new AudioInlineDeliveryBackend(),
-    };
+        if (string.IsNullOrWhiteSpace(config.Voicemail.Transcription.ModelPath))
+        {
+            logger.Warning(
+                "[voicemail].delivery is \"text\" but [voicemail.transcription].model_path is not set; " +
+                "voicemails will be saved to recordings_dir only, not delivered over Nostr.");
+            return new LocalOnlyDeliveryBackend();
+        }
+
+        return CreateTextDeliveryBackend(config, logger);
+    }
+
+    // "audio" - ConfigLoader.Validate already rejected any other value.
+    if (config.Voicemail.Blossom.Servers.Count == 0)
+    {
+        logger.Warning(
+            "[voicemail].delivery is \"audio\" but [voicemail.blossom].servers is empty; " +
+            "voicemails will be saved to recordings_dir only, not delivered over Nostr.");
+        return new LocalOnlyDeliveryBackend();
+    }
+
+    return CreateAudioDeliveryBackend(config, logger);
 }
 
-static AudioBlossomDeliveryBackend CreateBlossomDeliveryBackend(AppConfig config, ILogger logger)
+static AudioDeliveryBackend CreateAudioDeliveryBackend(AppConfig config, ILogger logger)
 {
     var servers = config.Voicemail.Blossom.Servers.Select(s => new Uri(s)).ToList();
-    return new AudioBlossomDeliveryBackend(servers, config.Nostr, logger.ForContext<AudioBlossomDeliveryBackend>());
+    return new AudioDeliveryBackend(servers, config.Nostr, logger.ForContext<AudioDeliveryBackend>());
 }
 
 // The audio fallback (see Voicemail/TranscribedTextDeliveryBackend.cs) is
 // only wired up when [voicemail.blossom].servers is actually configured -
-// otherwise a transcription failure keeps today's plain-text-notice
-// behavior, not a new dependency nobody asked for.
+// otherwise a transcription failure keeps its own plain-text-notice
+// fallback, not a new dependency nobody asked for.
 static TranscribedTextDeliveryBackend CreateTextDeliveryBackend(AppConfig config, ILogger logger)
 {
     var transcriber = CreateTranscriber(config.Voicemail.Transcription, config.ConfigDirectory, logger);
     IVoicemailDeliveryBackend? audioFallback = config.Voicemail.Blossom.Servers.Count > 0
-        ? CreateBlossomDeliveryBackend(config, logger)
+        ? CreateAudioDeliveryBackend(config, logger)
         : null;
     return new TranscribedTextDeliveryBackend(transcriber, audioFallback, logger.ForContext<TranscribedTextDeliveryBackend>());
 }

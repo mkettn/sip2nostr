@@ -5,23 +5,25 @@ using Sip2Nostr.Shared;
 
 namespace Sip2Nostr.Voicemail;
 
-// Alternative voicemail delivery backend: transcribes the recording via
-// an IVoicemailTranscriber and sends the text instead of inlining audio.
+// [voicemail].delivery = "text": transcribes the recording via an
+// IVoicemailTranscriber and sends the text instead of the audio itself.
 // Transcribes job.Samples - the original recorded PCM - directly, rather
-// than decoding job's saved Opus file back out, so transcription
-// never runs on lossy-recompressed audio. A transcript is normally tiny
-// compared to the NIP-17 budget that constrains AudioInlineDeliveryBackend,
-// but it's still checked against the actual output (MaxTranscriptBytes)
+// than decoding job's saved Opus file back out, so transcription never
+// runs on lossy-recompressed audio. A transcript is normally tiny, but
+// it's still checked against the actual output (MaxTranscriptBytes)
 // rather than trusted to stay small just because recordings are
 // duration-capped - whisper.cpp's repetition-loop failure mode on
 // silence/noise can produce far more text than any real voicemail would.
 // See docs/voicemail.md.
 //
-// When transcription produces nothing, audioFallback (if configured -
-// see Program.cs) delivers the recording as audio instead of a
-// plain-text notice, so a transcription failure degrades to "you get the
-// audio" rather than "you get nothing." A failure in audioFallback
-// itself falls through to the notice, same as having no fallback at all.
+// When transcription produces nothing, audioFallback (an
+// AudioDeliveryBackend, wired up by Program.cs whenever
+// [voicemail.blossom].servers is configured - regardless of the
+// top-level delivery mode) delivers the recording as a Blossom upload
+// instead of a plain-text notice, so a transcription failure degrades to
+// "you get the audio" rather than "you get nothing." A failure in
+// audioFallback itself falls through to the notice, same as having no
+// fallback at all.
 public sealed class TranscribedTextDeliveryBackend(
     IVoicemailTranscriber transcriber,
     IVoicemailDeliveryBackend? audioFallback,
