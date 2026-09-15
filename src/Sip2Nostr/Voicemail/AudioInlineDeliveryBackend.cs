@@ -11,7 +11,7 @@ public sealed class AudioInlineDeliveryBackend : IVoicemailDeliveryBackend
 {
     public bool RequiresPcm => false;
 
-    public async Task<(string Content, List<Tag> Tags, string Description)> BuildContentAsync(VoicemailAudioJob job, CancellationToken ct)
+    public async Task<(string Content, List<Tag> Tags, string Description, VoicemailContentKind Kind)> BuildContentAsync(VoicemailAudioJob job, CancellationToken ct)
     {
         var audioBytes = await File.ReadAllBytesAsync(job.OpusPath, ct);
 
@@ -31,7 +31,7 @@ public sealed class AudioInlineDeliveryBackend : IVoicemailDeliveryBackend
             Tag.Parse(["alt", "sip2nostr voicemail"]),
             Tag.Parse(["duration", job.DurationSeconds.ToString()]),
         };
-        return (content, tags, $"voicemail ({job.DurationSeconds}s, {audioBytes.Length} bytes, audio/ogg)");
+        return (content, tags, $"voicemail ({job.DurationSeconds}s, {audioBytes.Length} bytes, audio/ogg)", VoicemailContentKind.PrivateMessage);
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;

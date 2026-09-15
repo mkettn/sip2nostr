@@ -68,17 +68,17 @@ ring_timeout_seconds = 20
 # The default is the largest value that reliably still fits in a single
 # NIP-17 DM at the current Opus encoding - ConfigLoader rejects anything
 # larger at startup. This ceiling only applies to delivery = "audio"
-# below; delivery = "text" is instead capped by
-# max_text_recording_seconds, since a transcript isn't bound by the same
-# DM size budget. See docs/voicemail.md.
+# below; delivery = "text" and "blossom" are instead capped by
+# max_text_recording_seconds, since neither one inlines the recording in
+# the DM itself. See docs/voicemail.md.
 max_recording_seconds = 27
-# The max_recording_seconds ceiling used when delivery = "text" below.
-# Not derived from anything - just a sanity limit on how much PCM is
-# buffered in memory while recording, so raise it only as far as this
-# host's available RAM comfortably allows for the busiest realistic case
-# (one recording per line, worst case all lines at once). ConfigLoader
-# rejects anything above 3600 (1 hour) at startup, so this can't itself
-# become unbounded.
+# The max_recording_seconds ceiling used when delivery = "text" or
+# "blossom" below. Not derived from anything - just a sanity limit on how
+# much PCM is buffered in memory while recording, so raise it only as far
+# as this host's available RAM comfortably allows for the busiest
+# realistic case (one recording per line, worst case all lines at once).
+# ConfigLoader rejects anything above 3600 (1 hour) at startup, so this
+# can't itself become unbounded.
 max_text_recording_seconds = 600
 # Passed to Concentus when encoding a recording. Only takes effect if
 # the writer's input and output sample rates ever differ -
@@ -112,7 +112,11 @@ recording_filename = "{timestamp}-{caller}.opus"
 # dm_relays = ["wss://dm-relay.example.com"]
 # "audio" inlines Opus/OGG (default, subject to the NIP-17 size budget
 # above); "text" transcribes the recording and sends the transcript
-# instead - see [voicemail.transcription] below and docs/voicemail.md.
+# instead (see [voicemail.transcription] below); "blossom" AES-GCM
+# encrypts the recording, uploads only the ciphertext to a Blossom
+# server (see [voicemail.blossom] below), and sends a NIP-17 file
+# message with the URL and decryption key - no recording-length cap
+# beyond max_text_recording_seconds above. See docs/voicemail.md.
 delivery = "audio"
 
 # Only consulted when [voicemail].delivery = "text".
@@ -126,3 +130,16 @@ engine = "whisper"
 # Optional. An ISO 639-1 code (e.g. "en"). Unset auto-detects the spoken
 # language per recording, at some accuracy/latency cost.
 # language = "en"
+
+# Consulted when [voicemail].delivery = "blossom", and also when
+# delivery = "text" above and transcription produces nothing - in that
+# case a Blossom upload is tried before falling back further to a
+# plain-text notice. See docs/voicemail.md.
+[voicemail.blossom]
+# Blossom (BUD-01/BUD-02) server base URLs, tried in order until one
+# accepts the upload. Authenticates every upload as [nostr].bridge_nsec's
+# identity (a signed, time-limited kind 24242 event per BUD-02) - the
+# server never sees the bridge's actual Nostr identity's private key, and
+# never sees the recording's plaintext, only the AES-GCM ciphertext. At
+# least one entry is required when delivery = "blossom".
+# servers = ["https://blossom.example.com"]

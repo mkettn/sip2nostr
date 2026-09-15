@@ -170,12 +170,15 @@ ring_timeout_seconds = 20
 max_recording_seconds = 60
 # greeting_sound = "sounds/greeting.opus"   # optional; a short tone plays if unset
 # dm_relays = ["wss://dm-relay.example.com"] # optional; defaults to [nostr].relays
-delivery = "audio"             # or "text" - see [voicemail.transcription] below
+delivery = "audio"             # or "text"/"blossom" - see [voicemail.transcription]/[voicemail.blossom] below
 
 [voicemail.transcription]      # only consulted when delivery = "text"
 engine = "whisper"
 # model_path = "models/ggml-base.en.bin"   # required for delivery = "text"
 # language = "en"                          # optional; auto-detected if unset
+
+[voicemail.blossom]            # consulted when delivery = "blossom", or as a "text" fallback on transcription failure
+# servers = ["https://blossom.example.com"]   # at least one required for delivery = "blossom"
 ```
 
 ## Voicemail: answering-machine fallback
@@ -202,18 +205,25 @@ Opus recording directly, so `max_recording_seconds` is capped by
 what reliably fits a NIP-17 DM (27s by default); `"text"` transcribes it
 offline via Whisper.net and sends the transcript instead, no relay-side
 or third-party involvement needed for the transcription itself (just a
-local GGML model file), so it's instead capped by the separately
-configurable `[voicemail].max_text_recording_seconds` (default 600s, a
-memory-use sanity limit rather than a DM size budget). Exactly one DM
-per missed call: the recording, or - if the caller hung up before
-anything worth sending was captured - a plain-text missed-call notice
-naming the caller. Recordings on disk don't depend on delivery
-succeeding. See `docs/voicemail.md` for the full flow and known
-limitations — notably, the recording is inlined directly into the DM
-rather than uploaded to a file host, which is what caps
-`max_recording_seconds`'s default well below a minute: NIP-17's own
-encryption (not just a relay's size limit) can't carry much more than
-~27 seconds of audio at the current encoding.
+local GGML model file); `"blossom"` AES-GCM encrypts the recording and
+uploads only the ciphertext to a [Blossom](https://github.com/hzrd149/blossom)
+server from `[voicemail.blossom].servers`, sending a NIP-17 file message
+with the URL and decryption key instead of the audio itself. The latter
+two aren't bound by the inline-DM size budget, so they're instead capped
+by the separately configurable `[voicemail].max_text_recording_seconds`
+(default 600s, a memory-use sanity limit rather than a DM size budget) -
+and if transcription produces nothing, `"text"` falls back to a Blossom
+upload when one is configured, before falling back further to a
+plain-text notice. Exactly one DM per missed call: the recording (or its
+URL), or - if the caller hung up before anything worth sending was
+captured - a plain-text missed-call notice naming the caller. Recordings
+on disk don't depend on delivery succeeding. See `docs/voicemail.md` for
+the full flow and known limitations — notably, `delivery = "audio"`
+inlines the recording directly into the DM rather than uploading it,
+which is what caps its `max_recording_seconds` default well below a
+minute (NIP-17's own encryption, not just a relay's size limit, can't
+carry much more than ~27 seconds of audio at the current encoding) -
+`delivery = "blossom"` is the way around that cap entirely.
 
 ## Multiple lines, single identity (MVP)
 

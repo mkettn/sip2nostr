@@ -36,13 +36,36 @@ static Serilog.Core.Logger CreateLogger(
 // default), stays as cheap to start up as before this existed.
 static IVoicemailDeliveryBackend CreateVoicemailDeliveryBackend(AppConfig config, ILogger logger)
 {
-    if (!config.Voicemail.Enabled || config.Voicemail.Delivery != "text")
+    if (!config.Voicemail.Enabled)
     {
         return new AudioInlineDeliveryBackend();
     }
 
+    return config.Voicemail.Delivery switch
+    {
+        "blossom" => CreateBlossomDeliveryBackend(config, logger),
+        "text" => CreateTextDeliveryBackend(config, logger),
+        _ => new AudioInlineDeliveryBackend(),
+    };
+}
+
+static AudioBlossomDeliveryBackend CreateBlossomDeliveryBackend(AppConfig config, ILogger logger)
+{
+    var servers = config.Voicemail.Blossom.Servers.Select(s => new Uri(s)).ToList();
+    return new AudioBlossomDeliveryBackend(servers, config.Nostr, logger.ForContext<AudioBlossomDeliveryBackend>());
+}
+
+// The audio fallback (see Voicemail/TranscribedTextDeliveryBackend.cs) is
+// only wired up when [voicemail.blossom].servers is actually configured -
+// otherwise a transcription failure keeps today's plain-text-notice
+// behavior, not a new dependency nobody asked for.
+static TranscribedTextDeliveryBackend CreateTextDeliveryBackend(AppConfig config, ILogger logger)
+{
     var transcriber = CreateTranscriber(config.Voicemail.Transcription, config.ConfigDirectory, logger);
-    return new TranscribedTextDeliveryBackend(transcriber, logger.ForContext<TranscribedTextDeliveryBackend>());
+    IVoicemailDeliveryBackend? audioFallback = config.Voicemail.Blossom.Servers.Count > 0
+        ? CreateBlossomDeliveryBackend(config, logger)
+        : null;
+    return new TranscribedTextDeliveryBackend(transcriber, audioFallback, logger.ForContext<TranscribedTextDeliveryBackend>());
 }
 
 static IVoicemailTranscriber CreateTranscriber(TranscriptionConfig transcriptionConfig, string configDirectory, ILogger logger)

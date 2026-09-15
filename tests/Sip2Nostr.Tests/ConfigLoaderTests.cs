@@ -263,6 +263,128 @@ public class ConfigLoaderTests
         }
     }
 
+    [Fact]
+    public void Load_BlossomDeliveryWithoutServers_Throws()
+    {
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"blossom\"\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains("[voicemail.blossom].servers", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_BlossomDeliveryWithValidServers_Succeeds()
+    {
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"blossom\"\n\n" +
+            "[voicemail.blossom]\nservers = [\"https://blossom.example.com\", \"https://blossom2.example.com\"]\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal("blossom", config.Voicemail.Delivery);
+            Assert.Equal(["https://blossom.example.com", "https://blossom2.example.com"], config.Voicemail.Blossom.Servers);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_BlossomDeliveryExceedingAudioBudget_Succeeds()
+    {
+        // Same reasoning as Load_TextDeliveryExceedingAudioBudget_Succeeds -
+        // a Blossom upload isn't inlined in the DM, so it isn't bound by
+        // the NIP-17/Opus size budget either.
+        var overBudget = VoicemailBudget.MaxRecordingSeconds + 100;
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"blossom\"\nmax_recording_seconds = {overBudget}\n\n" +
+            "[voicemail.blossom]\nservers = [\"https://blossom.example.com\"]\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal(overBudget, config.Voicemail.MaxRecordingSeconds);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_BlossomDeliveryExceedingTextRecordingCeiling_Throws()
+    {
+        var overCeiling = VoicemailBudget.MaxTextRecordingSeconds + 1;
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"blossom\"\nmax_recording_seconds = {overCeiling}\n\n" +
+            "[voicemail.blossom]\nservers = [\"https://blossom.example.com\"]\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains("max_recording_seconds", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("not a url")]
+    [InlineData("ftp://blossom.example.com")]
+    [InlineData("blossom.example.com")]
+    public void Load_BlossomServerInvalidUrl_Throws(string server)
+    {
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"blossom\"\n\n" +
+            $"[voicemail.blossom]\nservers = [\"{EscapeTomlString(server)}\"]\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains("[voicemail.blossom].servers", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_BlossomServersValidatedAsTextDeliveryFallback_Throws()
+    {
+        // [voicemail.blossom].servers can be configured purely as a
+        // fallback under delivery = "text" - a malformed entry there
+        // should still fail at startup, not just when delivery = "blossom".
+        var modelPath = WriteTempFile("fake-model-bytes");
+        try
+        {
+            var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"text\"\n\n" +
+                $"[voicemail.transcription]\nmodel_path = \"{EscapeTomlString(modelPath)}\"\n\n" +
+                "[voicemail.blossom]\nservers = [\"not a url\"]\n";
+            var path = WriteTempConfig(toml);
+            try
+            {
+                var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+                Assert.Contains("[voicemail.blossom].servers", exception.Message);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+        finally
+        {
+            File.Delete(modelPath);
+        }
+    }
+
     [Theory]
     [InlineData("ring_timeout_seconds = 0", "ring_timeout_seconds")]
     [InlineData("ring_timeout_seconds = -5", "ring_timeout_seconds")]

@@ -178,17 +178,19 @@ public sealed class VoicemailConfig
 
     // See docs/voicemail.md - ConfigLoader rejects anything larger than
     // VoicemailBudget.MaxRecordingSeconds (delivery = "audio") or
-    // max_text_recording_seconds below (delivery = "text").
+    // max_text_recording_seconds below (delivery = "text" or "blossom").
     [property: TomlPropertyName("max_recording_seconds")]
     public int MaxRecordingSeconds { get; init; } = Sip2Nostr.Shared.VoicemailBudget.MaxRecordingSeconds;
 
-    // The max_recording_seconds ceiling used when delivery = "text" -
-    // unlike delivery = "audio"'s ceiling (VoicemailBudget.MaxRecordingSeconds,
-    // derived from the NIP-17/Opus size budget and not configurable), this
-    // is just a sanity limit on how much PCM VoicemailSink buffers in
-    // memory while recording, not derived from anything else. ConfigLoader
-    // caps it at VoicemailBudget.MaxTextRecordingSecondsCeiling so it can't
-    // itself become unbounded. See docs/voicemail.md.
+    // The max_recording_seconds ceiling used when delivery = "text" or
+    // "blossom" - unlike delivery = "audio"'s ceiling
+    // (VoicemailBudget.MaxRecordingSeconds, derived from the NIP-17/Opus
+    // size budget and not configurable), this is just a sanity limit on
+    // how much PCM VoicemailSink buffers in memory while recording, not
+    // derived from anything else (neither of those two delivery modes'
+    // DM content scales with recording length the way inlined audio
+    // does). ConfigLoader caps it at VoicemailBudget.MaxTextRecordingSecondsCeiling
+    // so it can't itself become unbounded. See docs/voicemail.md.
     [property: TomlPropertyName("max_text_recording_seconds")]
     public int MaxTextRecordingSeconds { get; init; } = Sip2Nostr.Shared.VoicemailBudget.MaxTextRecordingSeconds;
 
@@ -228,12 +230,17 @@ public sealed class VoicemailConfig
     public List<string> DmRelays { get; init; } = [];
 
     // "audio" inlines Opus/OGG (default); "text" sends a transcript
-    // instead - see [voicemail.transcription] and docs/voicemail.md.
+    // instead; "blossom" uploads an encrypted copy to a Blossom server
+    // and sends a file message - see [voicemail.transcription],
+    // [voicemail.blossom], and docs/voicemail.md.
     [property: TomlPropertyName("delivery")]
     public string Delivery { get; init; } = "audio";
 
     [property: TomlPropertyName("transcription")]
     public TranscriptionConfig Transcription { get; init; } = new();
+
+    [property: TomlPropertyName("blossom")]
+    public BlossomConfig Blossom { get; init; } = new();
 }
 
 // Only consulted when [voicemail].delivery = "text" - see docs/voicemail.md.
@@ -253,4 +260,17 @@ public sealed class TranscriptionConfig
     // spoken language per recording, at some accuracy/latency cost.
     [property: TomlPropertyName("language")]
     public string? Language { get; init; }
+}
+
+// Consulted when [voicemail].delivery = "blossom", and also when
+// delivery = "text" and transcription produces nothing (see
+// Voicemail/TranscribedTextDeliveryBackend.cs) - see docs/voicemail.md.
+public sealed class BlossomConfig
+{
+    // Blossom (BUD-01/BUD-02) server base URLs, tried in order until one
+    // accepts the upload. At least one entry is required when
+    // [voicemail].delivery = "blossom"; every entry (here or used only as
+    // a fallback under delivery = "text") must be an absolute http(s) URL.
+    [property: TomlPropertyName("servers")]
+    public List<string> Servers { get; init; } = [];
 }

@@ -8,8 +8,10 @@ namespace Sip2Nostr.Voicemail;
 
 // Background worker that owns delivery of missed-call notices and
 // recorded voicemails - see docs/voicemail.md for the full flow. How a
-// VoicemailAudioJob turns into DM content (audio vs. transcript) is
-// delegated to the configured IVoicemailDeliveryBackend.
+// VoicemailAudioJob turns into DM content (inlined audio, a transcript,
+// or an encrypted Blossom upload) is delegated to the configured
+// IVoicemailDeliveryBackend; its result's Kind says whether that content
+// goes out as a kind 14 private message or a kind 15 file message.
 public sealed class VoicemailSender : IAsyncDisposable
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
@@ -99,7 +101,7 @@ public sealed class VoicemailSender : IAsyncDisposable
         }
     }
 
-    private sealed record PreparedJob(SendJob Job, string Content, List<Tag> Tags, string Description);
+    private sealed record PreparedJob(SendJob Job, string Content, List<Tag> Tags, string Description, VoicemailContentKind Kind);
 
     private async Task SendBatchAsync(List<SendJob> batch, CancellationToken ct)
     {
@@ -133,6 +135,7 @@ public sealed class VoicemailSender : IAsyncDisposable
         // [nostr].enabled (see Program.cs) - the same condition
         // ConfigLoader validated bridge_nsec/target_npub under.
         var bridgeKeys = Keys.Parse(_nostrConfig.BridgeNsec!);
+        var bridgePublicKey = bridgeKeys.PublicKey();
         var targetPubkey = PublicKey.Parse(_nostrConfig.TargetNpub!);
         var relayUrls = (_voicemailConfig.DmRelays.Count > 0 ? _voicemailConfig.DmRelays : _nostrConfig.Relays)
             .Select(RelayUrl.Parse)
@@ -159,7 +162,7 @@ public sealed class VoicemailSender : IAsyncDisposable
                     break;
                 }
 
-                await SendPreparedJobSafeAsync(client, targetPubkey, connectedRelays, prepared).ConfigureAwait(false);
+                await SendPreparedJobSafeAsync(client, bridgePublicKey, targetPubkey, connectedRelays, prepared).ConfigureAwait(false);
             }
         }
         finally
@@ -173,14 +176,14 @@ public sealed class VoicemailSender : IAsyncDisposable
     {
         try
         {
-            var (content, tags, description) = job switch
+            var (content, tags, description, kind) = job switch
             {
                 MissedCallNoticeJob notice => BuildMissedCallNoticeContent(notice),
                 VoicemailAudioJob audio => await _deliveryBackend.BuildContentAsync(audio, ct),
                 _ => throw new NotSupportedException($"Unknown send job type {job.GetType()}."),
             };
 
-            return new PreparedJob(job, content, tags, description);
+            return new PreparedJob(job, content, tags, description, kind);
         }
         catch (Exception exception) when (job is VoicemailAudioJob audioJob)
         {
@@ -198,11 +201,21 @@ public sealed class VoicemailSender : IAsyncDisposable
         }
     }
 
-    private async Task SendPreparedJobSafeAsync(Client client, PublicKey targetPubkey, List<RelayUrl> connectedRelays, PreparedJob prepared)
+    private async Task SendPreparedJobSafeAsync(Client client, PublicKey bridgePublicKey, PublicKey targetPubkey, List<RelayUrl> connectedRelays, PreparedJob prepared)
     {
         try
         {
-            var output = await client.SendPrivateMsgTo(connectedRelays, targetPubkey, prepared.Content, prepared.Tags);
+            // FileMessage (AudioBlossomDeliveryBackend) needs a kind 15
+            // rumor built and gift-wrapped directly - Content is a file
+            // URL, not message text, so SendPrivateMsgTo's kind 14 rumor
+            // (used for every other backend) doesn't apply here.
+            var output = prepared.Kind == VoicemailContentKind.FileMessage
+                ? await client.GiftWrapTo(
+                    connectedRelays,
+                    targetPubkey,
+                    new EventBuilder(new Kind(15), prepared.Content).Tags(prepared.Tags).Build(bridgePublicKey),
+                    [])
+                : await client.SendPrivateMsgTo(connectedRelays, targetPubkey, prepared.Content, prepared.Tags);
             PublishOutcome.ThrowIfFailed(_logger, prepared.Description, output);
 
             _logger.Information(
@@ -224,11 +237,11 @@ public sealed class VoicemailSender : IAsyncDisposable
         }
     }
 
-    private static (string Content, List<Tag> Tags, string Description) BuildMissedCallNoticeContent(MissedCallNoticeJob notice)
+    private static (string Content, List<Tag> Tags, string Description, VoicemailContentKind Kind) BuildMissedCallNoticeContent(MissedCallNoticeJob notice)
     {
         var content = $"📞 Missed call from {notice.CallerNumber} - not answered.";
         var tags = new List<Tag> { Tag.Parse(["alt", "sip2nostr missed call"]) };
-        return (content, tags, "missed-call notice");
+        return (content, tags, "missed-call notice", VoicemailContentKind.PrivateMessage);
     }
 
     public async ValueTask DisposeAsync()

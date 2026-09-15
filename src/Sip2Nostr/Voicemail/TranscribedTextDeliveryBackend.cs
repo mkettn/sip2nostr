@@ -16,22 +16,26 @@ namespace Sip2Nostr.Voicemail;
 // duration-capped - whisper.cpp's repetition-loop failure mode on
 // silence/noise can produce far more text than any real voicemail would.
 // See docs/voicemail.md.
-public sealed class TranscribedTextDeliveryBackend(IVoicemailTranscriber transcriber, ILogger logger) : IVoicemailDeliveryBackend
+//
+// When transcription produces nothing, audioFallback (if configured -
+// see Program.cs) delivers the recording as audio instead of a
+// plain-text notice, so a transcription failure degrades to "you get the
+// audio" rather than "you get nothing." A failure in audioFallback
+// itself falls through to the notice, same as having no fallback at all.
+public sealed class TranscribedTextDeliveryBackend(
+    IVoicemailTranscriber transcriber,
+    IVoicemailDeliveryBackend? audioFallback,
+    ILogger logger) : IVoicemailDeliveryBackend
 {
     public bool RequiresPcm => true;
 
-    public async Task<(string Content, List<Tag> Tags, string Description)> BuildContentAsync(VoicemailAudioJob job, CancellationToken ct)
+    public async Task<(string Content, List<Tag> Tags, string Description, VoicemailContentKind Kind)> BuildContentAsync(VoicemailAudioJob job, CancellationToken ct)
     {
         var text = await transcriber.TranscribeAsync(job.Samples, job.SampleRate, ct);
 
         if (string.IsNullOrWhiteSpace(text))
         {
-            logger.Warning("Could not transcribe voicemail for call {CallId}; sending a notice instead.", job.CallId);
-            var fallbackContent =
-                $"🎤 Voicemail from {job.CallerNumber} ({job.DurationSeconds}s) - the call wasn't answered. " +
-                "Could not transcribe the recording; it's still saved on the bridge.";
-            var fallbackTags = new List<Tag> { Tag.Parse(["alt", "sip2nostr voicemail (transcription failed)"]) };
-            return (fallbackContent, fallbackTags, "voicemail notice (transcription failed)");
+            return await BuildFallbackContentAsync(job, ct);
         }
 
         var transcriptBytes = Encoding.UTF8.GetByteCount(text);
@@ -48,8 +52,43 @@ public sealed class TranscribedTextDeliveryBackend(IVoicemailTranscriber transcr
             Tag.Parse(["alt", "sip2nostr voicemail transcript"]),
             Tag.Parse(["duration", job.DurationSeconds.ToString()]),
         };
-        return (content, tags, $"voicemail transcript ({transcriptBytes} bytes)");
+        return (content, tags, $"voicemail transcript ({transcriptBytes} bytes)", VoicemailContentKind.PrivateMessage);
     }
 
-    public async ValueTask DisposeAsync() => await transcriber.DisposeAsync();
+    private async Task<(string Content, List<Tag> Tags, string Description, VoicemailContentKind Kind)> BuildFallbackContentAsync(VoicemailAudioJob job, CancellationToken ct)
+    {
+        if (audioFallback is not null)
+        {
+            try
+            {
+                return await audioFallback.BuildContentAsync(job, ct);
+            }
+            catch (Exception exception)
+            {
+                logger.Warning(
+                    exception,
+                    "Audio fallback failed for call {CallId} after transcription produced nothing; sending a notice instead.",
+                    job.CallId);
+            }
+        }
+        else
+        {
+            logger.Warning("Could not transcribe voicemail for call {CallId}; sending a notice instead.", job.CallId);
+        }
+
+        var fallbackContent =
+            $"🎤 Voicemail from {job.CallerNumber} ({job.DurationSeconds}s) - the call wasn't answered. " +
+            "Could not transcribe the recording; it's still saved on the bridge.";
+        var fallbackTags = new List<Tag> { Tag.Parse(["alt", "sip2nostr voicemail (transcription failed)"]) };
+        return (fallbackContent, fallbackTags, "voicemail notice (transcription failed)", VoicemailContentKind.PrivateMessage);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await transcriber.DisposeAsync();
+        if (audioFallback is not null)
+        {
+            await audioFallback.DisposeAsync();
+        }
+    }
 }

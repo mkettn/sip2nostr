@@ -14,5 +14,21 @@ public interface IVoicemailDeliveryBackend : IAsyncDisposable
     // in the job at all.
     bool RequiresPcm { get; }
 
-    Task<(string Content, List<Tag> Tags, string Description)> BuildContentAsync(VoicemailAudioJob job, CancellationToken ct);
+    // Kind says whether Content/Tags describe a kind 14 private-message
+    // rumor (VoicemailSender sends it via Client.SendPrivateMsgTo, as
+    // every backend before AudioBlossomDeliveryBackend did) or a kind 15
+    // file-message rumor it has to build and gift-wrap itself instead
+    // (Content is a file URL, not message text). It's part of the result
+    // rather than a fixed per-backend property because
+    // TranscribedTextDeliveryBackend can return either, depending on
+    // whether it ends up delegating to an audio fallback for one
+    // particular call - see Voicemail/AudioBlossomDeliveryBackend.cs and
+    // docs/voicemail.md.
+    Task<(string Content, List<Tag> Tags, string Description, VoicemailContentKind Kind)> BuildContentAsync(VoicemailAudioJob job, CancellationToken ct);
+}
+
+public enum VoicemailContentKind
+{
+    PrivateMessage,
+    FileMessage,
 }

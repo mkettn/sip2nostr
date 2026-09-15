@@ -73,10 +73,11 @@ public static class ConfigLoader
                 $"[voicemail].opus_resampler_quality must be between 0 and 10, got {config.Voicemail.OpusResamplerQuality}.");
         }
 
-        if (config.Voicemail.Delivery is not ("audio" or "text"))
+        if (config.Voicemail.Delivery is not ("audio" or "text" or "blossom"))
         {
             throw new ConfigurationException(
-                $"[voicemail].delivery must be \"audio\" or \"text\", got \"{config.Voicemail.Delivery}\".");
+                "[voicemail].delivery must be \"audio\", \"text\", or \"blossom\", got " +
+                $"\"{config.Voicemail.Delivery}\".");
         }
 
         if (string.IsNullOrWhiteSpace(config.Voicemail.RecordingFilename))
@@ -116,14 +117,16 @@ public static class ConfigLoader
         // The ceiling depends on which backend is actually recording-length
         // sensitive: "audio" is bound by the Opus/NIP-17 size budget below
         // (VoicemailBudget.MaxRecordingSeconds - not configurable, derived
-        // from that budget); "text" isn't (a transcript stays small
-        // regardless - the real enforcement there is MaxTranscriptBytes,
-        // checked against the actual output at send time), so its ceiling
-        // is just the configurable max_text_recording_seconds sanity limit
-        // on VoicemailSink's in-memory PCM buffer. See docs/voicemail.md.
-        var maxRecordingSecondsCeiling = config.Voicemail.Delivery == "text"
-            ? config.Voicemail.MaxTextRecordingSeconds
-            : VoicemailBudget.MaxRecordingSeconds;
+        // from that budget); "text" and "blossom" aren't (a transcript
+        // stays small regardless of recording length, and a Blossom upload
+        // isn't inlined in the DM at all - the real enforcement for "text"
+        // is MaxTranscriptBytes, checked against the actual output at send
+        // time), so their ceiling is just the configurable
+        // max_text_recording_seconds sanity limit on VoicemailSink's
+        // in-memory PCM buffer. See docs/voicemail.md.
+        var maxRecordingSecondsCeiling = config.Voicemail.Delivery == "audio"
+            ? VoicemailBudget.MaxRecordingSeconds
+            : config.Voicemail.MaxTextRecordingSeconds;
         if (config.Voicemail.MaxRecordingSeconds > maxRecordingSecondsCeiling)
         {
             throw new ConfigurationException(
@@ -153,6 +156,27 @@ public static class ConfigLoader
                 throw new ConfigurationException(
                     $"[voicemail.transcription].model_path \"{config.Voicemail.Transcription.ModelPath}\" resolved to " +
                     $"\"{resolvedModelPath}\", but no file exists there.");
+            }
+        }
+
+        if (config.Voicemail.Delivery == "blossom" && config.Voicemail.Blossom.Servers.Count == 0)
+        {
+            throw new ConfigurationException(
+                "[voicemail.blossom].servers must contain at least one server URL when [voicemail].delivery = \"blossom\".");
+        }
+
+        // Checked regardless of delivery: a server list under [voicemail.blossom]
+        // can also be consulted as a fallback when delivery = "text" (see
+        // Voicemail/TranscribedTextDeliveryBackend.cs), so a malformed
+        // entry there should fail at startup too, not just when it's the
+        // primary delivery mode.
+        foreach (var server in config.Voicemail.Blossom.Servers)
+        {
+            if (!Uri.TryCreate(server, UriKind.Absolute, out var serverUri) ||
+                (serverUri.Scheme != Uri.UriSchemeHttp && serverUri.Scheme != Uri.UriSchemeHttps))
+            {
+                throw new ConfigurationException(
+                    $"[voicemail.blossom].servers entry \"{server}\" is not a valid absolute http(s) URL.");
             }
         }
 
