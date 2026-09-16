@@ -41,12 +41,6 @@ public static class ConfigLoader
     // See docs/voicemail.md for why these fail fast here.
     private static void Validate(AppConfig config)
     {
-        if (config.Voicemail.RingTimeoutSeconds <= 0)
-        {
-            throw new ConfigurationException(
-                $"[voicemail].ring_timeout_seconds must be greater than 0, got {config.Voicemail.RingTimeoutSeconds}.");
-        }
-
         if (config.WebRtc.ConnectionLossGraceSeconds <= 0)
         {
             throw new ConfigurationException(
@@ -54,75 +48,91 @@ public static class ConfigLoader
                 $"{config.WebRtc.ConnectionLossGraceSeconds}.");
         }
 
-        if (config.Voicemail.MaxRecordingSeconds is <= 0 or > VoicemailBudget.MaxRecordingSecondsCeiling)
-        {
-            throw new ConfigurationException(
-                "[voicemail].max_recording_seconds must be greater than 0 and at most " +
-                $"{VoicemailBudget.MaxRecordingSecondsCeiling}, got {config.Voicemail.MaxRecordingSeconds}.");
-        }
-
-        if (config.Voicemail.OpusResamplerQuality is < 0 or > 10)
-        {
-            throw new ConfigurationException(
-                $"[voicemail].opus_resampler_quality must be between 0 and 10, got {config.Voicemail.OpusResamplerQuality}.");
-        }
-
-        if (config.Voicemail.Delivery is not ("file" or "audio" or "text"))
-        {
-            throw new ConfigurationException(
-                "[voicemail].delivery must be \"file\", \"audio\", or \"text\", got " +
-                $"\"{config.Voicemail.Delivery}\".");
-        }
-
-        if (string.IsNullOrWhiteSpace(config.Voicemail.RecordingFilename))
-        {
-            throw new ConfigurationException("[voicemail].recording_filename must not be empty.");
-        }
-
-        // Without {timestamp} or {call_id}, every recording would resolve
-        // to the same filename and silently overwrite the last one.
-        if (!config.Voicemail.RecordingFilename.Contains("{timestamp}", StringComparison.OrdinalIgnoreCase) &&
-            !config.Voicemail.RecordingFilename.Contains("{call_id}", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ConfigurationException(
-                "[voicemail].recording_filename must include {timestamp} or {call_id}, so recordings from " +
-                $"different calls can't overwrite each other. Got \"{config.Voicemail.RecordingFilename}\".");
-        }
-
-        // VoicemailSink.SaveRecordingAsync joins this straight onto
-        // recordings_dir - a rooted template would silently discard
-        // recordings_dir entirely (Path.Combine's documented behavior),
-        // and a ".." segment could escape it, so both are rejected here
-        // rather than only ever naming something under recordings_dir.
-        if (Path.IsPathRooted(config.Voicemail.RecordingFilename))
-        {
-            throw new ConfigurationException(
-                "[voicemail].recording_filename must be a relative path, resolved under recordings_dir - " +
-                $"got \"{config.Voicemail.RecordingFilename}\".");
-        }
-
-        if (config.Voicemail.RecordingFilename.Split('/', '\\').Any(segment => segment == ".."))
-        {
-            throw new ConfigurationException(
-                "[voicemail].recording_filename must not contain \"..\" path segments - " +
-                $"got \"{config.Voicemail.RecordingFilename}\".");
-        }
-
-        // Whether transcription/Blossom is actually usable for the
-        // selected delivery mode is a Program.cs concern (it logs a
-        // warning and falls back to local-only delivery instead - see
-        // docs/voicemail.md), not something ConfigLoader fails startup
-        // over: leaving a mode's requirement unconfigured is a valid
-        // choice, not a mistake. What ConfigLoader still rejects is a
-        // value that *is* present but broken - that's always a typo the
-        // operator should fix immediately, delivery mode notwithstanding.
-        // Gated on Enabled, same as bridge_nsec/target_npub/relays below
-        // are gated on [nostr].enabled: neither Transcription nor Blossom
-        // is read at all when voicemail is off (Program.cs never
-        // constructs a delivery backend that would need them), so a
-        // stale or half-filled-in value there shouldn't block startup.
+        // Every check in this block names a [voicemail] (or
+        // [voicemail.transcription]/[voicemail.blossom]) setting that's
+        // only ever read when voicemail itself is on: ring_timeout_seconds
+        // and max_recording_seconds by NosCallSink/VoicemailSink,
+        // opus_resampler_quality and recording_filename by
+        // VoicemailSink.SaveRecordingAsync, delivery by
+        // Program.CreateVoicemailDeliveryBackend, and
+        // transcription/blossom by whichever delivery backend that
+        // resolves to - none of them constructed with voicemail disabled.
+        // Gated the same way ValidateBridgeIdentity/ValidateTargetAndRelays
+        // below are gated on [nostr].enabled, so a stale or half-filled-in
+        // value in a disabled feature's section never blocks startup - only
+        // a value that's live and broken does.
         if (config.Voicemail.Enabled)
         {
+            if (config.Voicemail.RingTimeoutSeconds <= 0)
+            {
+                throw new ConfigurationException(
+                    $"[voicemail].ring_timeout_seconds must be greater than 0, got {config.Voicemail.RingTimeoutSeconds}.");
+            }
+
+            if (config.Voicemail.MaxRecordingSeconds is <= 0 or > VoicemailBudget.MaxRecordingSecondsCeiling)
+            {
+                throw new ConfigurationException(
+                    "[voicemail].max_recording_seconds must be greater than 0 and at most " +
+                    $"{VoicemailBudget.MaxRecordingSecondsCeiling}, got {config.Voicemail.MaxRecordingSeconds}.");
+            }
+
+            if (config.Voicemail.OpusResamplerQuality is < 0 or > 10)
+            {
+                throw new ConfigurationException(
+                    $"[voicemail].opus_resampler_quality must be between 0 and 10, got {config.Voicemail.OpusResamplerQuality}.");
+            }
+
+            if (config.Voicemail.Delivery is not ("file" or "audio" or "text"))
+            {
+                throw new ConfigurationException(
+                    "[voicemail].delivery must be \"file\", \"audio\", or \"text\", got " +
+                    $"\"{config.Voicemail.Delivery}\".");
+            }
+
+            if (string.IsNullOrWhiteSpace(config.Voicemail.RecordingFilename))
+            {
+                throw new ConfigurationException("[voicemail].recording_filename must not be empty.");
+            }
+
+            // Without {timestamp} or {call_id}, every recording would
+            // resolve to the same filename and silently overwrite the last
+            // one.
+            if (!config.Voicemail.RecordingFilename.Contains("{timestamp}", StringComparison.OrdinalIgnoreCase) &&
+                !config.Voicemail.RecordingFilename.Contains("{call_id}", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ConfigurationException(
+                    "[voicemail].recording_filename must include {timestamp} or {call_id}, so recordings from " +
+                    $"different calls can't overwrite each other. Got \"{config.Voicemail.RecordingFilename}\".");
+            }
+
+            // VoicemailSink.SaveRecordingAsync joins this straight onto
+            // recordings_dir - a rooted template would silently discard
+            // recordings_dir entirely (Path.Combine's documented behavior),
+            // and a ".." segment could escape it, so both are rejected here
+            // rather than only ever naming something under recordings_dir.
+            if (Path.IsPathRooted(config.Voicemail.RecordingFilename))
+            {
+                throw new ConfigurationException(
+                    "[voicemail].recording_filename must be a relative path, resolved under recordings_dir - " +
+                    $"got \"{config.Voicemail.RecordingFilename}\".");
+            }
+
+            if (config.Voicemail.RecordingFilename.Split('/', '\\').Any(segment => segment == ".."))
+            {
+                throw new ConfigurationException(
+                    "[voicemail].recording_filename must not contain \"..\" path segments - " +
+                    $"got \"{config.Voicemail.RecordingFilename}\".");
+            }
+
+            // Whether transcription/Blossom is actually usable for the
+            // selected delivery mode is a Program.cs concern (it logs a
+            // warning and falls back to local-only delivery instead - see
+            // docs/voicemail.md), not something ConfigLoader fails startup
+            // over: leaving a mode's requirement unconfigured is a valid
+            // choice, not a mistake. What ConfigLoader still rejects here is
+            // a value that *is* present but broken - that's always a typo
+            // the operator should fix immediately, delivery mode
+            // notwithstanding.
             if (config.Voicemail.Transcription.Engine != "whisper")
             {
                 throw new ConfigurationException(

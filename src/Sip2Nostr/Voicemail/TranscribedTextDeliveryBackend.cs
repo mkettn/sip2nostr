@@ -61,6 +61,17 @@ public sealed class TranscribedTextDeliveryBackend(
     {
         if (audioFallback is not null)
         {
+            // Logged here, not just on the exception path below: since
+            // AudioDeliveryBackend itself no longer throws on a total
+            // upload failure (it degrades to a notice), the call below can
+            // succeed while still silently landing on FileDeliveryBackend's
+            // generic notice - without this line, that combination (empty
+            // transcription and every Blossom server down) would leave no
+            // trace anywhere that transcription was the one that actually
+            // failed.
+            logger.Warning(
+                "Could not transcribe voicemail for call {CallId}; falling back to a Blossom upload.",
+                job.CallId);
             try
             {
                 return await audioFallback.BuildContentAsync(job, ct);

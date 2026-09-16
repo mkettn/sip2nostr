@@ -72,7 +72,9 @@ ring_timeout_seconds = 20
 # available RAM comfortably allows for the busiest realistic case (one
 # recording per line, worst case all lines at once). ConfigLoader rejects
 # anything above 3600 (1 hour) at startup, so this can't itself become
-# unbounded. See docs/voicemail.md.
+# unbounded. See docs/voicemail.md. Replaces the old, now-removed
+# max_text_recording_seconds - if your config still has that key, delete
+# it and use this one as the ceiling for every delivery mode instead.
 max_recording_seconds = 600
 # Passed to Concentus when encoding a recording. Only takes effect if
 # the writer's input and output sample rates ever differ -

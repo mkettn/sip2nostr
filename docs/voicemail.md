@@ -364,53 +364,62 @@ string?`, `null` meaning nothing could be transcribed), selected by
     and calls `VoicemailSender.Enqueue` - it has no Nostr.Sdk dependency
     at all, so nothing in the call-handling path blocks on relay
     connectivity or a publish.
-  - `[voicemail].ring_timeout_seconds` and `max_recording_seconds` are
-    validated (`> 0`) in `Config/ConfigLoader.cs` at startup, alongside
-    the rest of config loading - an unchecked bad value would otherwise
-    surface deep inside `Task.Delay` as every call being silently routed
-    to voicemail with a misleading "signaling failed" log line.
-    `max_recording_seconds` is also rejected there if it exceeds
-    `Shared/VoicemailBudget.cs`'s `MaxRecordingSecondsCeiling` (3600s) -
-    a single ceiling regardless of `delivery`, since neither mode inlines
-    the recording in the DM: it's purely a sanity limit on how much PCM
-    `VoicemailSink` buffers in memory while recording, not a size budget,
-    so a value that would buffer more than intended fails at startup
-    rather than only after a caller has already left a message. Whether
-    the configured `delivery` mode's own requirement
-    (`[voicemail.transcription].model_path` for `"text"`,
-    `[voicemail.blossom].servers` for `"audio"`) is actually configured
-    is deliberately *not* checked here - `Program.cs` handles that with a
-    warning and `FileDeliveryBackend`, not a startup failure, since
-    leaving a mode's requirement unset is a valid choice, not a mistake
-    (see Delivery backends above). What *is* still checked here - whether
-    a present `[voicemail.transcription].engine`/`model_path` or
-    `[voicemail.blossom].servers` entry is itself well-formed - is gated
-    on `[voicemail].enabled`, the same way `ValidateBridgeIdentity`/
-    `ValidateTargetAndRelays` below are gated on `[nostr].enabled`: with
-    voicemail off, `Program.cs` never constructs a delivery backend that
-    would read either section, so a stale or half-filled-in value there
-    shouldn't block startup. There's a migration note worth calling out
-    here too: an older config's `max_text_recording_seconds` (removed
-    when the per-mode recording-length split collapsed into the single
-    `max_recording_seconds` above) is silently ignored by Tomlyn rather
-    than rejected - deserializing an unmapped TOML key is a no-op, not a
-    parse error. A config still carrying both keys keeps working, but
-    only `max_recording_seconds` has any effect now; if it was left at
-    the old audio-mode default (27s) while `max_text_recording_seconds`
-    held a longer value, every delivery mode is now capped at 27s until
-    `max_recording_seconds` itself is raised to the ceiling actually
-    wanted. `[voicemail].opus_resampler_quality` (default
-    `VoicemailBudget.OpusResamplerQuality`, 5) is validated against the
-    `0`-`10` range Concentus itself enforces (see the `VoicemailSink.cs`
-    bullet above) - checking it here means a bad value fails at startup,
-    not on the first voicemail encoded. `[voicemail].recording_filename`
-    is validated as: non-empty; containing `{timestamp}` or `{call_id}`
-    (case-insensitively); not rooted; and containing no `..` path
-    segment - the latter two because `SaveRecordingAsync` joins the
-    resolved filename straight onto `recordings_dir`, and a rooted value
-    would silently discard `recordings_dir` entirely (`Path.Combine`'s
-    documented behavior) while a `..` segment could escape it, so a
-    template can only ever name something under `recordings_dir`.
+  - Every `[voicemail]`/`[voicemail.transcription]`/`[voicemail.blossom]`
+    check below runs inside a single `if (config.Voicemail.Enabled)` block
+    in `Config/ConfigLoader.cs`, the same way `ValidateBridgeIdentity`/
+    `ValidateTargetAndRelays` further down the same file are gated on
+    `[nostr].enabled`: every setting these checks cover is only ever read
+    by something `Program.cs` constructs when voicemail is on
+    (`NosCallSink`/`VoicemailSink` for the timing/filename settings,
+    `CreateVoicemailDeliveryBackend` for `delivery` and the
+    transcription/Blossom settings it dispatches to), so a stale or
+    half-filled-in value in a disabled feature's section can't block
+    startup - only a value that's live and broken can. `ring_timeout_seconds`
+    and `max_recording_seconds` are validated (`> 0`) alongside the rest of
+    config loading - an unchecked bad value would otherwise surface deep
+    inside `Task.Delay` as every call being silently routed to voicemail
+    with a misleading "signaling failed" log line. `max_recording_seconds`
+    is also rejected there if it exceeds `Shared/VoicemailBudget.cs`'s
+    `MaxRecordingSecondsCeiling` (3600s) - a single ceiling regardless of
+    `delivery`, since neither mode inlines the recording in the DM: it's
+    purely a sanity limit on how much PCM `VoicemailSink` buffers in memory
+    while recording, not a size budget, so a value that would buffer more
+    than intended fails at startup rather than only after a caller has
+    already left a message. Whether the configured `delivery` mode's own
+    requirement (`[voicemail.transcription].model_path` for `"text"`,
+    `[voicemail.blossom].servers` for `"audio"`) is actually configured is
+    deliberately *not* checked here - `Program.cs` handles that with a
+    warning and `FileDeliveryBackend`, not a startup failure, since leaving
+    a mode's requirement unset is a valid choice, not a mistake (see
+    Delivery backends above); what *is* still checked is whether a present
+    `[voicemail.transcription].engine`/`model_path` or
+    `[voicemail.blossom].servers` entry is itself well-formed. There's a
+    migration note worth calling out here too (also flagged in
+    `config.example.toml`/`README.md`, where an operator upgrading a live
+    config is more likely to see it): an older config's
+    `max_text_recording_seconds` (removed when the per-mode
+    recording-length split collapsed into the single `max_recording_seconds`
+    above) is silently ignored by Tomlyn rather than rejected -
+    deserializing an unmapped TOML key is a no-op, not a parse error
+    (pinned down by `ConfigLoaderTests.Load_ConfigWithRemovedMaxTextRecordingSecondsKey_IgnoresItInsteadOfFailing`,
+    rather than only asserted here). A config still carrying both keys
+    keeps working, but only `max_recording_seconds` has any effect now; if
+    it was left at the old audio-mode default (27s) while
+    `max_text_recording_seconds` held a longer value, every delivery mode
+    is now capped at 27s until `max_recording_seconds` itself is raised to
+    the ceiling actually wanted. `[voicemail].opus_resampler_quality`
+    (default `VoicemailBudget.OpusResamplerQuality`, 5) is validated
+    against the `0`-`10` range Concentus itself enforces (see the
+    `VoicemailSink.cs` bullet above) - checking it here means a bad value
+    fails at startup, not on the first voicemail encoded.
+    `[voicemail].recording_filename` is validated as: non-empty; containing
+    `{timestamp}` or `{call_id}` (case-insensitively); not rooted; and
+    containing no `..` path segment - the latter two because
+    `SaveRecordingAsync` joins the resolved filename straight onto
+    `recordings_dir`, and a rooted value would silently discard
+    `recordings_dir` entirely (`Path.Combine`'s documented behavior) while a
+    `..` segment could escape it, so a template can only ever name
+    something under `recordings_dir`.
 - `Voicemail/VoicemailSender.cs`: one instance, constructed once in
   `Program.cs` and shared across every call for the life of the process -
   unlike `NostrSignalingClient`, which is scoped to a single call.

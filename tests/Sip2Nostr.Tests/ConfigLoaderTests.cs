@@ -112,7 +112,7 @@ public class ConfigLoaderTests
     [Fact]
     public void Load_InvalidDeliveryValue_Throws()
     {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"bogus\"\n";
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\ndelivery = \"bogus\"\n";
         var path = WriteTempConfig(toml);
         try
         {
@@ -239,7 +239,7 @@ public class ConfigLoaderTests
     [Fact]
     public void Load_MaxRecordingSecondsAboveCeiling_Throws()
     {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\nmax_recording_seconds = {VoicemailBudget.MaxRecordingSecondsCeiling + 1}\n";
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\nmax_recording_seconds = {VoicemailBudget.MaxRecordingSecondsCeiling + 1}\n";
         var path = WriteTempConfig(toml);
         try
         {
@@ -261,6 +261,31 @@ public class ConfigLoaderTests
         {
             var config = ConfigLoader.Load(path);
             Assert.Equal(VoicemailBudget.MaxRecordingSecondsCeiling, config.Voicemail.MaxRecordingSeconds);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ConfigWithRemovedMaxTextRecordingSecondsKey_IgnoresItInsteadOfFailing()
+    {
+        // max_text_recording_seconds was removed when the per-mode
+        // recording-length split collapsed into one max_recording_seconds
+        // (see docs/voicemail.md's migration note) - this pins down what
+        // actually happens to an old config that still has it, rather than
+        // just asserting it in a comment: Tomlyn's TomlSerializerOptions.Default
+        // (the overload ConfigLoader.Load uses) ignores an unmapped key
+        // instead of failing to deserialize, so the config loads and only
+        // max_recording_seconds - here left at its own default - has any
+        // effect.
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nmax_text_recording_seconds = 27\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal(VoicemailBudget.MaxRecordingSeconds, config.Voicemail.MaxRecordingSeconds);
         }
         finally
         {
@@ -381,7 +406,7 @@ public class ConfigLoaderTests
     [InlineData("max_recording_seconds = -1", "max_recording_seconds")]
     public void Load_InvalidVoicemailTimeout_Throws(string voicemailOverride, string expectedKeyInMessage)
     {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\n{voicemailOverride}\n";
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\n{voicemailOverride}\n";
         var path = WriteTempConfig(toml);
         try
         {
@@ -400,7 +425,7 @@ public class ConfigLoaderTests
     [InlineData("{caller}/../../etc/{call_id}.opus")]
     public void Load_RecordingFilenameEscapingRecordingsDir_Throws(string recordingFilename)
     {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\nrecording_filename = \"{EscapeTomlString(recordingFilename)}\"\n";
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\nrecording_filename = \"{EscapeTomlString(recordingFilename)}\"\n";
         var path = WriteTempConfig(toml);
         try
         {
@@ -418,7 +443,7 @@ public class ConfigLoaderTests
     [InlineData(11)]
     public void Load_OpusResamplerQualityOutOfRange_Throws(int quality)
     {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\nopus_resampler_quality = {quality}\n";
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\nopus_resampler_quality = {quality}\n";
         var path = WriteTempConfig(toml);
         try
         {
@@ -455,7 +480,7 @@ public class ConfigLoaderTests
     [InlineData("{caller}.opus")]
     public void Load_RecordingFilenameWithoutTimestampOrCallId_Throws(string recordingFilename)
     {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\nrecording_filename = \"{EscapeTomlString(recordingFilename)}\"\n";
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\nrecording_filename = \"{EscapeTomlString(recordingFilename)}\"\n";
         var path = WriteTempConfig(toml);
         try
         {

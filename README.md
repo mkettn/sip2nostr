@@ -167,7 +167,7 @@ connection_loss_grace_seconds = 15  # how long a bridged call's WebRTC connectio
 [voicemail]
 enabled = false                # opt-in: falls back to a greeting + recording if target_npub doesn't answer
 ring_timeout_seconds = 20
-max_recording_seconds = 600
+max_recording_seconds = 600    # replaces the old max_text_recording_seconds; drop that key if your config still has it
 # greeting_sound = "sounds/greeting.opus"   # optional; a short tone plays if unset
 # dm_relays = ["wss://dm-relay.example.com"] # optional; defaults to [nostr].relays
 delivery = "file"              # or "audio"/"text" - see [voicemail.blossom]/[voicemail.transcription] below
