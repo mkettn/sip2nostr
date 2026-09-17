@@ -168,8 +168,16 @@ failing to start or trying to inline the recording:
   the encrypted/original bytes), and `size`. Authentication is a signed,
   10-minute-lived kind 24242 event (BUD-02's `t: upload` + `x: <sha256 of
   the exact blob>`), built and signed with `[nostr].bridge_nsec` directly
-  - no separate identity or credential for the storage server. Because
-  the DM itself only ever carries a URL, this mode has no
+  - no separate identity or credential for the storage server. The upload
+  itself goes over .NET's own `HttpClient`, not `Nostr.Sdk` - unlike a
+  relay connection (see `docs/propagating-to-nostr.md`'s Blind spots), this
+  means a Blossom server's certificate is checked against the OS's own
+  certificate store, so a private/self-signed CA works here as long as
+  it's installed on the host the bridge runs on. That's a second,
+  independent layer on top of the AES-256-GCM encryption above, not a
+  substitute for it: the server only ever sees ciphertext regardless of
+  whether its own HTTPS certificate is publicly or privately trusted.
+  Because the DM itself only ever carries a URL, this mode has no
   recording-length cap beyond the shared `max_recording_seconds` sanity
   limit below; if every configured server rejects the upload, it falls
   back to `"file"`'s plain-text notice instead of dropping the job -
