@@ -29,9 +29,23 @@ static Serilog.Core.Logger CreateLogger(
         ? parsedLevel
         : LogEventLevel.Warning;
 
+    // The console is restricted to `level` directly, but the global
+    // minimum (the floor every sink shares, including the run log file)
+    // stays at least Information whenever a run file is configured: a
+    // fresh timestamped log per run exists specifically for after-the-fact
+    // troubleshooting, so it shouldn't come up empty for a run that looked
+    // fine at the time but wasn't - by the point you're reaching for it,
+    // "turn the level down and reproduce it" often isn't an option. A
+    // `level` more verbose than Information (e.g. "debug") still wins,
+    // since Serilog's MinimumLevel is a hard floor no sink's own
+    // restrictedToMinimumLevel can widen back past.
+    var globalLevel = runLogPath is not null && level > LogEventLevel.Information
+        ? LogEventLevel.Information
+        : level;
+
     var logger = new LoggerConfiguration()
-        .MinimumLevel.Is(level)
-        .WriteTo.Console(outputTemplate: LogOutputTemplate);
+        .MinimumLevel.Is(globalLevel)
+        .WriteTo.Console(restrictedToMinimumLevel: level, outputTemplate: LogOutputTemplate);
 
     if (runLogPath is not null)
     {

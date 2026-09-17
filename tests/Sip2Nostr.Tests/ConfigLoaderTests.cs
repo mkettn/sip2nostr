@@ -150,6 +150,13 @@ public class ConfigLoaderTests
     [InlineData("warn")]
     [InlineData("bogus")]
     [InlineData("")]
+    // Enum.TryParse alone accepts these as the numeric form of a
+    // LogEventLevel value - "3" is the defined Error, "99" isn't a member
+    // at all - so both need Enum.IsDefined to actually be rejected; "99"
+    // in particular would otherwise silently produce a bridge that logs
+    // nothing, ever, since Serilog has nothing at or above level 99.
+    [InlineData("3")]
+    [InlineData("99")]
     public void Load_InvalidLoggingLevel_Throws(string level)
     {
         var toml = $"{MinimalValidToml}\n\n[logging]\nlevel = \"{level}\"\n";
