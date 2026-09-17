@@ -37,6 +37,14 @@ level = "warning"
 # (systemd, a service manager) where nothing should print absent a real
 # problem.
 quiet = false
+# Optional: drop the leading timestamp from console log lines (run_file's
+# own timestamp is unaffected - it has no other record of when something
+# happened once the process exits). Defaults to true. Set false when
+# something else is already stamping captured output - e.g. running under
+# systemd, where journald timestamps every line on arrival regardless of
+# its content, so leaving this on gives every console line two timestamps
+# (journalctl's own plus this one) instead of one.
+console_timestamps = true
 
 [[lines]]
 uri = "sip:+4989123456@sip.your-provider.de"

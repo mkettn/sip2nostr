@@ -155,6 +155,37 @@ public class ConfigLoaderTests
         }
     }
 
+    [Fact]
+    public void Load_DefaultLoggingConsoleTimestampsIsTrue_Succeeds()
+    {
+        var path = WriteTempConfig(MinimalValidToml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.True(config.Logging.ConsoleTimestamps);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_LoggingConsoleTimestampsFalse_Succeeds()
+    {
+        var toml = $"{MinimalValidToml}\n\n[logging]\nconsole_timestamps = false\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.False(config.Logging.ConsoleTimestamps);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Theory]
     [InlineData("verbose")]
     [InlineData("Debug")]

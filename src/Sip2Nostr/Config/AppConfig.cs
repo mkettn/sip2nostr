@@ -172,6 +172,17 @@ public sealed class LoggingConfig
     // real problem.
     [property: TomlPropertyName("quiet")]
     public bool Quiet { get; init; }
+
+    // Console-only, like Quiet above: a supervisor that already timestamps
+    // captured output - systemd/journald being the common case, since
+    // journald stamps every line with its own arrival time regardless of
+    // what the line itself contains - ends up showing two timestamps per
+    // line otherwise, its own plus this process's. run_file's timestamp is
+    // never affected by this: a log file has no such external stamping to
+    // duplicate, and is the only record of when something happened once
+    // the process has exited.
+    [property: TomlPropertyName("console_timestamps")]
+    public bool ConsoleTimestamps { get; init; } = true;
 }
 
 // Blacklist always wins on match. An empty whitelist means blacklist-only

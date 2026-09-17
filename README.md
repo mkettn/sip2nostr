@@ -146,6 +146,10 @@ run_file = "logs/sip2nostr-{timestamp}.log"
 # only output there is, so it applies exactly as set.
 level = "warning"
 quiet = false                  # true suppresses the startup "running, press Ctrl+C" stdout line
+# Drops the leading timestamp from console lines only (run_file keeps its
+# own regardless). Set false under systemd/journald - it stamps every
+# captured line on arrival anyway, so leaving this on double-stamps them.
+console_timestamps = true
 
 [[lines]]
 uri = "sip:+4989123456@sip.your-provider.de"

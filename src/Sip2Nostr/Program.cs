@@ -9,6 +9,7 @@ using Sip2Nostr.Sip;
 using Sip2Nostr.Voicemail;
 
 const string LogOutputTemplate = "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}";
+const string LogOutputTemplateNoTimestamp = "[{Level:u3}] {Message:lj}{NewLine}{Exception}";
 
 Log.Logger = CreateLogger(null, Directory.GetCurrentDirectory(), out _);
 
@@ -43,9 +44,17 @@ static Serilog.Core.Logger CreateLogger(
         ? LogEventLevel.Information
         : level;
 
+    // Console-only, and defaulting to true (unlike Level/Quiet, both
+    // false-by-default): most direct/interactive runs want the timestamp,
+    // it's specifically a supervisor that already stamps captured output
+    // - systemd/journald being the common case - that wants it turned off,
+    // to stop each line showing two timestamps instead of one. run_file
+    // always keeps its own timestamp regardless - see LoggingConfig.
+    var consoleTemplate = (logging?.ConsoleTimestamps ?? true) ? LogOutputTemplate : LogOutputTemplateNoTimestamp;
+
     var logger = new LoggerConfiguration()
         .MinimumLevel.Is(globalLevel)
-        .WriteTo.Console(restrictedToMinimumLevel: level, outputTemplate: LogOutputTemplate);
+        .WriteTo.Console(restrictedToMinimumLevel: level, outputTemplate: consoleTemplate);
 
     if (runLogPath is not null)
     {
