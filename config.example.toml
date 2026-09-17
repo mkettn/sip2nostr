@@ -22,7 +22,13 @@ timeout_ms = 2000
 run_file = "logs/sip2nostr-{timestamp}.log"
 # Minimum level to log, case-insensitive: "verbose", "debug",
 # "information", "warning", "error", or "fatal". Defaults to "warning" -
-# turn this down to "information" or "debug" when troubleshooting.
+# turn this down to "information" or "debug" when troubleshooting. This
+# always governs the console exactly. If run_file above is set, the log
+# file can end up MORE verbose than this - it's floored at "information"
+# regardless of a quieter level here, so a run that looked fine on a quiet
+# console still leaves a useful record to check afterward - but it is
+# never quieter than this setting. With run_file unset, this is the only
+# output there is, so it applies as configured with no flooring.
 level = "warning"
 # Optional: suppress the one-time "sip2nostr running. Press Ctrl+C to
 # exit." startup line on stdout. Separate from `level` above - that line
