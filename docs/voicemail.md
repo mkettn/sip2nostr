@@ -12,16 +12,21 @@ changes. With it turned on, a caller who isn't answered within
 was captured, otherwise a plain-text missed-call notice - never both,
 never neither.
 
-Verified end-to-end against a real SIP trunk and a real NIP-17 client,
-for both delivery backends: a call that falls back to voicemail plays
-the greeting/tone, records the caller, and saves the recording as
-Opus, then either delivers it as a NIP-17 DM that the receiving
-client decrypts and plays back correctly (`delivery = "audio"`), or
-transcribes it and delivers the transcript as DM text (`delivery =
-"text"`). The
-`MissedCallNoticeJob` path (recording too short / caller hangs up
-before anything is captured) hasn't specifically been exercised, but
-shares the same delivery code as the verified `VoicemailAudioJob` path.
+Verified end-to-end against a real SIP trunk and a real NIP-17 client for
+`delivery = "text"`: a call that falls back to voicemail plays the
+greeting/tone, records the caller, saves the recording as Opus,
+transcribes it, and delivers the transcript as DM text. `delivery =
+"file"` (the default) shares the same recording/notice code path, so
+it's covered by the same verification as far as that goes, but hasn't
+specifically been exercised against a real call itself. `delivery =
+"audio"` is new and, per the Blind spots below, not yet verified against
+a real Blossom server or a real NIP-17 client's handling of a kind 15
+file message - only exercised against a local fake server in
+`tests/Sip2Nostr.Tests/AudioDeliveryBackendTests.cs`. The
+`MissedCallNoticeJob` path (recording too short / caller hangs up before
+anything is captured) hasn't specifically been exercised against a real
+call either, though it shares code with the verified `VoicemailAudioJob`
+send path.
 
 ## Flow
 
@@ -124,9 +129,12 @@ VoicemailSender then, independently of any particular call:
          VoicemailAudioJob → delivery-backend-dependent content built
          from the already-Opus-encoded recording on disk (encoded at
          record time by VoicemailSink, not here - see Delivery backends
-         below). Either way, send as a NIP-17 private direct message. A
-         relay rejecting the event (e.g. too large) is detected and
-         logged as a failure, not reported as sent.
+         below). Sent as a NIP-17 kind 14 private message for every
+         backend except the "audio" backend's Blossom upload, which
+         sends a kind 15 file message instead (the backend's result says
+         which - see Delivery backends). A relay rejecting the event
+         (e.g. too large) is detected and logged as a failure, not
+         reported as sent.
       │
       ▼
  Disconnect, go back to idle
@@ -135,44 +143,93 @@ VoicemailSender then, independently of any particular call:
 ## Delivery backends
 
 How a recorded voicemail becomes DM content is pluggable via
-`[voicemail].delivery`:
+`[voicemail].delivery`: `"file"`, `"audio"`, or `"text"`. `"audio"` and
+`"text"` each have a requirement; if it isn't configured, sip2nostr
+degrades to `"file"`'s own behavior with a startup warning rather than
+failing to start or trying to inline the recording:
 
-- `"audio"` (default) - `Voicemail/AudioInlineDeliveryBackend.cs` reads
-  the recording (already Opus - `VoicemailSink` encodes it when
-  saving, not this backend) and inlines it as a base64 `data:` URI in the
-  DM content, subject to the NIP-17 size budget covered above.
+- `"file"` (default) - `Voicemail/FileDeliveryBackend.cs` does nothing
+  with the recording beyond what already happened before any delivery
+  backend runs: `VoicemailSink` always saves it to `recordings_dir`,
+  regardless of `delivery`. This backend just sends a plain-text notice
+  naming the caller, and points at the bridge for retrieval - the
+  zero-setup option, needing neither `[voicemail.blossom]` nor
+  `[voicemail.transcription]`.
+- `"audio"` - `Voicemail/AudioDeliveryBackend.cs` reads the recording
+  (already Opus - `VoicemailSink` encodes it when saving, not this
+  backend), AES-256-GCM encrypts it with a freshly generated key and
+  nonce, and uploads only the ciphertext (the server never sees the
+  plaintext, or the bridge's actual Nostr key beyond a signed auth event)
+  to a [Blossom](https://github.com/hzrd149/blossom) (BUD-01/BUD-02)
+  server from `[voicemail.blossom].servers` - tried in order until one
+  accepts it. It then sends a NIP-17 **kind 15** file message: `content`
+  is the uploaded URL, tags carry `decryption-key`/`decryption-nonce`
+  (hex-encoded), `encryption-algorithm` (`aes-gcm`), `x`/`ox` (sha256 of
+  the encrypted/original bytes), and `size`. Authentication is a signed,
+  10-minute-lived kind 24242 event (BUD-02's `t: upload` + `x: <sha256 of
+  the exact blob>`), built and signed with `[nostr].bridge_nsec` directly
+  - no separate identity or credential for the storage server. The upload
+  itself goes over .NET's own `HttpClient`, not `Nostr.Sdk` - unlike a
+  relay connection (see `docs/propagating-to-nostr.md`'s Blind spots), this
+  means a Blossom server's certificate is checked against the OS's own
+  certificate store, so a private/self-signed CA works here as long as
+  it's installed on the host the bridge runs on. That's a second,
+  independent layer on top of the AES-256-GCM encryption above, not a
+  substitute for it: the server only ever sees ciphertext regardless of
+  whether its own HTTPS certificate is publicly or privately trusted.
+  Because the DM itself only ever carries a URL, this mode has no
+  recording-length cap beyond the shared `max_recording_seconds` sanity
+  limit below; if every configured server rejects the upload, it falls
+  back to `"file"`'s plain-text notice instead of dropping the job -
+  a failed upload is a routine failure to plan for here (a third-party
+  HTTP server, DNS, and TLS are all now in the path), not the rare edge
+  case a dropped job would suggest. Requires at least one entry in
+  `[voicemail.blossom].servers`.
 - `"text"` - `Voicemail/TranscribedTextDeliveryBackend.cs` transcribes
   `VoicemailAudioJob.Samples` - the original recorded PCM, carried on the
   job alongside `OpusPath` rather than decoded back out of the saved
   Opus file - via a speech-to-text engine, sending the transcript as
   plain text instead. Transcribing the original PCM instead of a
   lossy-recompressed copy avoids feeding whisper.cpp audio that's already
-  been through 8 kbps Opus once. This path isn't bound by the Opus/NIP-17
-  budget above, so it has its own two checks: `max_recording_seconds` is
-  capped at `[voicemail].max_text_recording_seconds` (default 600s,
-  `VoicemailBudget.MaxTextRecordingSeconds`) instead of
-  `VoicemailBudget.MaxRecordingSeconds` (see `Config/ConfigLoader.cs`) -
-  a configurable sanity ceiling on how much PCM `VoicemailSink` buffers
-  in memory while recording, not a size budget - and the transcript itself is
-  checked against `VoicemailBudget.MaxTranscriptBytes` (40,000 bytes) at
-  send time, mirroring `AudioInlineDeliveryBackend`'s `MaxAudioBytes`
-  check. A transcript is normally tiny compared to that budget, but
-  whisper.cpp can fall into a repetition loop on silence or noise and
-  produce far more text than any real voicemail would, so the check
-  guards against that rather than being trusted to never trigger. If
-  nothing could be transcribed (silence, an engine failure), the backend
-  sends a plain-text notice instead of an empty message.
+  been through 8 kbps Opus once. The transcript is checked against
+  `VoicemailBudget.MaxTranscriptBytes` (40,000 bytes) at send time - a
+  transcript is normally tiny compared to that, but whisper.cpp can fall
+  into a repetition loop on silence or noise and produce far more text
+  than any real voicemail would, so the check guards against that rather
+  than being trusted to never trigger. If nothing could be transcribed
+  (silence, an engine failure), the backend falls back to
+  `[voicemail.blossom]` (the same encrypted upload `"audio"` uses) when
+  it's configured, or `"file"`'s plain-text notice otherwise; a failure
+  in the fallback itself falls through to that same notice too, so a
+  transcription failure never ends up with nothing sent at all. Requires
+  `[voicemail.transcription].model_path`.
 
-Both implement `Voicemail/IVoicemailDeliveryBackend.cs`
-(`BuildContentAsync(VoicemailAudioJob, CancellationToken) -> (Content,
-Tags, Description)`, plus a `RequiresPcm` property - `false` for
-`AudioInlineDeliveryBackend`, `true` for `TranscribedTextDeliveryBackend`
-- that `VoicemailSink` reads to decide whether to populate
+Recording length is no longer bound by what fits inside a single NIP-17
+message the way it would be if the recording were inlined as a base64
+`data:` URI directly in the DM content - that approach isn't attempted at
+all here, configured or not; all three modes work by reference (a local
+file, a transcript, or an uploaded file's URL) instead of inlining
+anything.
+
+`AudioDeliveryBackend` sends a kind 15 file message; the other two
+(`FileDeliveryBackend`, `TranscribedTextDeliveryBackend`) send a kind 14
+private message. All three implement
+`Voicemail/IVoicemailDeliveryBackend.cs` (`BuildContentAsync(VoicemailAudioJob,
+CancellationToken) -> (Content, Tags, Description, Kind)`, plus a
+`RequiresPcm` property - `false` for `FileDeliveryBackend`/
+`AudioDeliveryBackend`, `true` for `TranscribedTextDeliveryBackend` -
+that `VoicemailSink` reads to decide whether to populate
 `VoicemailAudioJob.Samples`, so that decision lives with the backend
 that actually knows its own needs rather than being re-derived from
-`[voicemail].delivery` at the recording site) - the only thing
-`VoicemailSender` depends on; it doesn't know or care which backend it's
-holding, and owns disposing it alongside its own worker. `Program.cs`
+`[voicemail].delivery` at the recording site). `Kind` (`PrivateMessage`
+or `FileMessage`) is part of each call's result rather than a fixed
+per-backend property, because `TranscribedTextDeliveryBackend` returns
+either one depending on whether a given call ends up delegating to its
+Blossom fallback. `VoicemailSender` reads `Kind` to decide whether to
+call `Client.SendPrivateMsgTo` (kind 14) or build and gift-wrap a kind 15
+rumor itself (`Client.GiftWrapTo`) - the only thing it depends on the
+delivery backend for; it doesn't otherwise know or care which backend
+it's holding, and owns disposing it alongside its own worker. `Program.cs`
 passes the same backend instance's `RequiresPcm` to `VoicemailSink`
 separately, since the sink itself only calls `VoicemailSender.Enqueue`
 and never touches the backend directly.
@@ -269,13 +326,13 @@ string?`, `null` meaning nothing could be transcribed), selected by
     `Shared/SoundFileResolver.cs` - see `docs/sound-files.md` for the
     format it requires and how a misconfigured file degrades) before
     writing the result under `recordings_dir` - so the file on disk is
-    already exactly what `delivery = "audio"` sends, with no separate
-    re-encode step at delivery time. `OpusCodec.Encode` runs with
-    `UseVBR = false`:
-    Concentus (like libopus) defaults to VBR, where `Bitrate` is only a
-    target the encoder can exceed on complex input, which would
-    undermine the size budget `AudioInlineDeliveryBackend` checks the
-    saved file against (see Blind spots below). Its `OpusOggWriteStream`
+    already exactly what `delivery = "audio"` encrypts and uploads, with
+    no separate re-encode step at delivery time. `OpusCodec.Encode` runs
+    with `UseVBR = false`: Concentus (like libopus) defaults to VBR,
+    where `Bitrate` is only a target the encoder can exceed on complex
+    input - CBR keeps a recording's encoded size roughly proportional to
+    its duration, useful for anyone budgeting `recordings_dir` disk
+    space. Its `OpusOggWriteStream`
     deliberately has no `using` - it isn't `IDisposable`; `Finish()` is
     what pads the trailing frame, writes the end-of-stream page, and
     flushes, and `leaveOpen` keeps the underlying `MemoryStream` readable
@@ -315,39 +372,62 @@ string?`, `null` meaning nothing could be transcribed), selected by
     and calls `VoicemailSender.Enqueue` - it has no Nostr.Sdk dependency
     at all, so nothing in the call-handling path blocks on relay
     connectivity or a publish.
-  - `[voicemail].ring_timeout_seconds` / `max_recording_seconds` /
-    `max_text_recording_seconds` are validated (`> 0`) in
-    `Config/ConfigLoader.cs` at startup, alongside the rest of config
-    loading - an unchecked bad value would otherwise surface deep inside
-    `Task.Delay` as every call being silently routed to voicemail with a
-    misleading "signaling failed" log line.
-    `max_recording_seconds` is also rejected there if it exceeds the
-    ceiling for the configured `delivery` mode: `Shared/VoicemailBudget.cs`'s
-    `MaxRecordingSeconds` for `"audio"` - a fixed value, not configurable,
-    that reliably fits a NIP-17 DM with headroom to spare (see Blind spots
-    below) - or the configured `max_text_recording_seconds` (default
-    `VoicemailBudget.MaxTextRecordingSeconds`, 600s; itself capped at
-    `VoicemailBudget.MaxTextRecordingSecondsCeiling`, 3600s, so raising
-    this sanity limit can't itself become unbounded) for `"text"` - so a
-    value that can never be delivered, or one that would let
-    `VoicemailSink` buffer more PCM in memory than intended, fails at
-    startup rather than only after a caller has already left a message.
-    `AudioInlineDeliveryBackend.BuildContentAsync` separately
-    checks the *actual* encoded size against `VoicemailBudget.MaxAudioBytes`
-    before every send, since `MaxRecordingSeconds` is a heuristic ceiling
-    on the configured value, not a guarantee about what any given
-    recording encodes to. `[voicemail].opus_resampler_quality` (default
-    `VoicemailBudget.OpusResamplerQuality`, 5) is validated against the
-    `0`-`10` range Concentus itself enforces (see the `VoicemailSink.cs`
-    bullet above) - checking it here means a bad value fails at startup,
-    not on the first voicemail encoded. `[voicemail].recording_filename`
-    is validated as: non-empty; containing `{timestamp}` or `{call_id}`
-    (case-insensitively); not rooted; and containing no `..` path
-    segment - the latter two because `SaveRecordingAsync` joins the
-    resolved filename straight onto `recordings_dir`, and a rooted value
-    would silently discard `recordings_dir` entirely (`Path.Combine`'s
-    documented behavior) while a `..` segment could escape it, so a
-    template can only ever name something under `recordings_dir`.
+  - Every `[voicemail]`/`[voicemail.transcription]`/`[voicemail.blossom]`
+    check below runs inside a single `if (config.Voicemail.Enabled)` block
+    in `Config/ConfigLoader.cs`, the same way `ValidateBridgeIdentity`/
+    `ValidateTargetAndRelays` further down the same file are gated on
+    `[nostr].enabled`: every setting these checks cover is only ever read
+    by something `Program.cs` constructs when voicemail is on
+    (`NosCallSink`/`VoicemailSink` for the timing/filename settings,
+    `CreateVoicemailDeliveryBackend` for `delivery` and the
+    transcription/Blossom settings it dispatches to), so a stale or
+    half-filled-in value in a disabled feature's section can't block
+    startup - only a value that's live and broken can. `ring_timeout_seconds`
+    and `max_recording_seconds` are validated (`> 0`) alongside the rest of
+    config loading - an unchecked bad value would otherwise surface deep
+    inside `Task.Delay` as every call being silently routed to voicemail
+    with a misleading "signaling failed" log line. `max_recording_seconds`
+    is also rejected there if it exceeds `Shared/VoicemailBudget.cs`'s
+    `MaxRecordingSecondsCeiling` (3600s) - a single ceiling regardless of
+    `delivery`, since neither mode inlines the recording in the DM: it's
+    purely a sanity limit on how much PCM `VoicemailSink` buffers in memory
+    while recording, not a size budget, so a value that would buffer more
+    than intended fails at startup rather than only after a caller has
+    already left a message. Whether the configured `delivery` mode's own
+    requirement (`[voicemail.transcription].model_path` for `"text"`,
+    `[voicemail.blossom].servers` for `"audio"`) is actually configured is
+    deliberately *not* checked here - `Program.cs` handles that with a
+    warning and `FileDeliveryBackend`, not a startup failure, since leaving
+    a mode's requirement unset is a valid choice, not a mistake (see
+    Delivery backends above); what *is* still checked is whether a present
+    `[voicemail.transcription].engine`/`model_path` or
+    `[voicemail.blossom].servers` entry is itself well-formed. There's a
+    migration note worth calling out here too (also flagged in
+    `config.example.toml`/`README.md`, where an operator upgrading a live
+    config is more likely to see it): an older config's
+    `max_text_recording_seconds` (removed when the per-mode
+    recording-length split collapsed into the single `max_recording_seconds`
+    above) is silently ignored by Tomlyn rather than rejected -
+    deserializing an unmapped TOML key is a no-op, not a parse error
+    (pinned down by `ConfigLoaderTests.Load_ConfigWithRemovedMaxTextRecordingSecondsKey_IgnoresItInsteadOfFailing`,
+    rather than only asserted here). A config still carrying both keys
+    keeps working, but only `max_recording_seconds` has any effect now; if
+    it was left at the old audio-mode default (27s) while
+    `max_text_recording_seconds` held a longer value, every delivery mode
+    is now capped at 27s until `max_recording_seconds` itself is raised to
+    the ceiling actually wanted. `[voicemail].opus_resampler_quality`
+    (default `VoicemailBudget.OpusResamplerQuality`, 5) is validated
+    against the `0`-`10` range Concentus itself enforces (see the
+    `VoicemailSink.cs` bullet above) - checking it here means a bad value
+    fails at startup, not on the first voicemail encoded.
+    `[voicemail].recording_filename` is validated as: non-empty; containing
+    `{timestamp}` or `{call_id}` (case-insensitively); not rooted; and
+    containing no `..` path segment - the latter two because
+    `SaveRecordingAsync` joins the resolved filename straight onto
+    `recordings_dir`, and a rooted value would silently discard
+    `recordings_dir` entirely (`Path.Combine`'s documented behavior) while a
+    `..` segment could escape it, so a template can only ever name
+    something under `recordings_dir`.
 - `Voicemail/VoicemailSender.cs`: one instance, constructed once in
   `Program.cs` and shared across every call for the life of the process -
   unlike `NostrSignalingClient`, which is scoped to a single call.
@@ -358,9 +438,9 @@ string?`, `null` meaning nothing could be transcribed), selected by
     reads whichever it actually needs; `VoicemailSink` only populates
     `Samples` when the configured backend's `IVoicemailDeliveryBackend.RequiresPcm`
     says so (`true` for `TranscribedTextDeliveryBackend`, `false` for
-    `AudioInlineDeliveryBackend`, which never reads it and would
-    otherwise carry the full recording in memory for every "audio" job
-    unread) - and writes it to an unbounded `System.Threading.Channels.Channel<SendJob>`, returning
+    `AudioDeliveryBackend`/`FileDeliveryBackend`, neither of which
+    reads it and would otherwise carry the full recording in memory for
+    every "audio" job unread) - and writes it to an unbounded `System.Threading.Channels.Channel<SendJob>`, returning
     immediately. It's a plain in-memory queue (multiple calls can enqueue
     concurrently - `Channel` is built for that), not a persistent one, so
     anything still queued at process shutdown is logged as undelivered;
@@ -396,18 +476,19 @@ string?`, `null` meaning nothing could be transcribed), selected by
     by the time `VoicemailSender` ever sees the job (`Sinks/VoicemailSink.cs`
     encodes it at record time; deliberately not `ffmpeg`/any external
     process, keeping the whole feature working in a self-contained
-    single-file binary with nothing to install on the host).
-    `AudioInlineDeliveryBackend.BuildContentAsync` checks the file's
-    actual size against `VoicemailBudget.MaxAudioBytes` before anything
-    is sent - see Blind spots below - throwing rather than attempting a
-    send that can only fail deep inside NIP-44 encryption or at the
-    relay. Then `VoicemailSender`
-    calls `Client.SendPrivateMsgTo(relayUrls, ...)` - NIP-17: rumor,
-    seal, gift wrap, and publish all handled by `Nostr.Sdk` - targeting
-    exactly the relay set (`[voicemail].dm_relays`, or `[nostr].relays`
-    as a fallback) this batch just connected to. `SendPrivateMsgTo` is
-    used explicitly rather than plain `SendPrivateMsg` so the relays
-    published to are always the same ones just verified reachable,
+    single-file binary with nothing to install on the host). The
+    backend's result `Kind` decides how it's sent: `PrivateMessage`
+    (`TranscribedTextDeliveryBackend`, `FileDeliveryBackend`) calls
+    `Client.SendPrivateMsgTo(relayUrls, ...)` - NIP-17: rumor, seal, gift
+    wrap, and publish all handled by `Nostr.Sdk`; `FileMessage`
+    (`AudioDeliveryBackend`) instead builds a kind 15 `EventBuilder`
+    rumor from the backend's `Content`/`Tags` directly and gift-wraps it
+    itself (`Client.GiftWrapTo`), since `SendPrivateMsgTo` only ever
+    builds a kind 14 rumor. Either way the target is exactly the relay
+    set (`[voicemail].dm_relays`, or `[nostr].relays` as a fallback) this
+    batch just connected to - `SendPrivateMsgTo`/`GiftWrapTo`'s `...To`
+    overloads are used explicitly rather than the plain ones so the
+    relays published to are always the same ones just verified reachable,
     rather than Nostr.Sdk's own separate NIP-17 relay-discovery landing
     on a different set. Unlike the NIP-AC signaling wrap `NostrSignalingClient`
     uses for call offer/answer/ICE, a voicemail should be readable by any
@@ -422,59 +503,20 @@ string?`, `null` meaning nothing could be transcribed), selected by
 
 ## Blind spots
 
-- **Audio is inlined as a base64 `data:` URI directly in the DM content,
-  not uploaded to a file host - and this hard-caps recording length far
-  below what a minute-long voicemail needs.** sip2nostr has no
-  NIP-96/Blossom upload dependency today, so the entire recording has to
-  fit inside one Nostr message. Two separate limits stack against it:
-  - **The relay's max event size** (commonly 64-256 KB) - the blind spot
-    this was originally framed around.
-  - **NIP-44's own plaintext cap, before any relay is even involved -
-    and the tighter of the two.** A NIP-17 DM is NIP-44-encrypted twice
-    (sealing the rumor, then wrapping the seal), and NIP-44 v2 caps
-    plaintext at 65,535 bytes and pads it into fixed-size buckets before
-    encrypting (see nips.nostr.com/44's `calc_padded_len`) - encryption
-    itself fails past that, not just delivery. Working back from the
-    outer (gift wrap) layer's cap to how much raw audio that leaves room
-    for:
-    ```
-      65,535   NIP-44 plaintext cap (gift wrap layer)
-    -    490   seal event JSON overhead (id/pubkey/tags/sig/...)
-    ÷    4/3   undo base64 on the seal's own ciphertext
-    ≈ 48,784   budget for the seal's padded ciphertext
-    → 40,960   largest padded length that actually fits (calc_padded_len's
-               next bucket up is 49,152, which doesn't fit in 48,784 - so
-               ~16% of the naive budget is lost to bucket rounding)
-    -    430   rumor JSON overhead (kind/tags/created_at/...) + prose
-    ÷    4/3   undo base64 on the audio data URI
-    ≈ 30,400   bytes of raw (pre-base64) encoded audio - MaxAudioBytes
-    ```
-    `Shared/VoicemailBudget.cs` holds this as `MaxAudioBytes` (30,400) -
-    the hard ceiling `AudioInlineDeliveryBackend.BuildContentAsync` checks
-    the actual encoded output against before every send. `MaxRecordingSeconds`,
-    used for the shipped default and startup validation, is deliberately
-    *not* `MaxAudioBytes / (bitrate / 8)`: that naive division assumes
-    the encoder produces exactly the target bitrate and ignores the
-    container framing overhead itself. Verified empirically (a throwaway encode of a 30s
-    tone at 8 kbps with VBR off): actual output ran ~1,050-1,060
-    bytes/sec against a naive estimate of 1,000 - a 30s recording came
-    out to ~31.8 KB, over budget despite "fitting" the naive math. 10%
-    of `MaxAudioBytes` is reserved for that overhead plus slack for
-    `CallerNumber` (bounded by `PhoneNumberNormalizer` at 32 digits -
-    generous headroom over E.164's 15-digit max, but still enough that
-    an unbounded, possibly malicious From-header can't eat arbitrarily
-    into the fixed rumor-overhead assumed above), giving `MaxRecordingSeconds` =
-    27 at the current 8 kbps encoding; `ConfigLoader` rejects a
-    configured `max_recording_seconds` above that at startup (see
-    Implementation above). The shipped default (`max_recording_seconds =
-    27`, `config.example.toml`) sits exactly at that ceiling, with the
-    real per-recording enforcement against `MaxAudioBytes` as a backstop
-    in case any single recording still runs over. Raising the ceiling
-    further requires either a lower bitrate (diminishing returns - 8
-    kbps is already conservative for 8 kHz telephony audio) or a real
-    upload path (data URI → uploaded file + `imeta`/`url` tag) to remove
-    the cap entirely - the latter is the actual fix; this budget is a
-    ceiling this architecture can't grow past.
+- **A delivery backend that throws drops the job silently instead of
+  falling back to a notice.** `VoicemailSender.PrepareJobSafeAsync`
+  catches any exception from `BuildContentAsync`, logs it, and returns
+  `null` - the job is simply never sent, not even as a plain-text notice.
+  `AudioDeliveryBackend` (total Blossom upload failure) and
+  `TranscribedTextDeliveryBackend`'s transcription-failure path both
+  fall back to a notice instead of reaching this - see Delivery backends
+  above - but `TranscribedTextDeliveryBackend` still throws this far when
+  transcription *succeeds* and the transcript itself exceeds
+  `MaxTranscriptBytes`. The recording is still safe on disk (logged in
+  the error) when this happens, but `target_npub` gets nothing over
+  Nostr for that call at all - the "exactly one DM per missed call,
+  never neither" invariant stated at the top of this document doesn't
+  actually hold for this specific failure path.
 - **No fallback if Opus encoding fails when a recording is saved.**
   The recording is encoded to Opus at record time
   (`VoicemailSink.SaveRecordingAsync`, via `Sip/OpusCodec.Encode`), so
@@ -545,3 +587,28 @@ string?`, `null` meaning nothing could be transcribed), selected by
   (either pruning the unused `runtimes/*` folders as a post-publish
   build step, or finding whether a newer `Whisper.net.Runtime` version
   fixes the packaging) before shipping this in a release build.
+- **`delivery = "audio"` hasn't been verified against a real Blossom
+  server or a real NIP-17 client.** `AudioDeliveryBackendTests.cs`
+  exercises the encryption, BUD-02 auth event, and upload request/response
+  handling against a local fake HTTP server - real protocol-level details
+  (a specific server's exact error responses, whether Amethyst or another
+  client actually renders a kind 15 `audio/ogg` attachment the way this
+  implementation expects) are unverified.
+- **No BUD-06 `HEAD /upload` preflight.** A client MAY ask a server
+  whether it would accept an upload (size, content type) before sending
+  the bytes; `AudioDeliveryBackend` always goes straight to `PUT`.
+  Skipping it is spec-compliant and costs nothing extra for a voicemail
+  (small, and there's no bandwidth pressure this bridge needs to
+  conserve), but means a server-side rejection is only discovered after
+  the full upload already happened.
+- **The BUD-02 auth event's 10-minute expiration is fixed, not
+  configurable.** Long enough for a normal upload to a responsive
+  server; not adjustable if a particular server or network needs more
+  (or less) headroom.
+- **No blob retention/expiration is requested from the server.** Some
+  Blossom servers accept an `expiration` tag on the auth event as a hint
+  for how long to keep the blob, but `AudioDeliveryBackend`
+  doesn't send one (its `expiration` tag is the auth event's own replay
+  window, not a retention request) - how long a voicemail stays
+  reachable at its uploaded URL is entirely up to the server's own
+  policy. This was an open question in issue #15 and is still open here.

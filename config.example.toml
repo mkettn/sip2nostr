@@ -65,21 +65,17 @@ enabled = false
 # How long to wait for a WebRTC answer over Nostr before falling back.
 ring_timeout_seconds = 20
 # Caller is disconnected after this long even if they keep talking.
-# The default is the largest value that reliably still fits in a single
-# NIP-17 DM at the current Opus encoding - ConfigLoader rejects anything
-# larger at startup. This ceiling only applies to delivery = "audio"
-# below; delivery = "text" is instead capped by
-# max_text_recording_seconds, since a transcript isn't bound by the same
-# DM size budget. See docs/voicemail.md.
-max_recording_seconds = 27
-# The max_recording_seconds ceiling used when delivery = "text" below.
-# Not derived from anything - just a sanity limit on how much PCM is
-# buffered in memory while recording, so raise it only as far as this
-# host's available RAM comfortably allows for the busiest realistic case
-# (one recording per line, worst case all lines at once). ConfigLoader
-# rejects anything above 3600 (1 hour) at startup, so this can't itself
-# become unbounded.
-max_text_recording_seconds = 600
+# Neither delivery mode below inlines the recording in the DM itself
+# ("text" sends a transcript, "audio" sends a Blossom upload's URL), so
+# this isn't a size budget - just a sanity limit on how much PCM is
+# buffered in memory while recording. Raise it only as far as this host's
+# available RAM comfortably allows for the busiest realistic case (one
+# recording per line, worst case all lines at once). ConfigLoader rejects
+# anything above 3600 (1 hour) at startup, so this can't itself become
+# unbounded. See docs/voicemail.md. Replaces the old, now-removed
+# max_text_recording_seconds - if your config still has that key, delete
+# it and use this one as the ceiling for every delivery mode instead.
+max_recording_seconds = 600
 # Passed to Concentus when encoding a recording. Only takes effect if
 # the writer's input and output sample rates ever differ -
 # they don't today (both are the recording's own rate), so this
@@ -110,19 +106,43 @@ recording_filename = "{timestamp}-{caller}.opus"
 # DM inbox relay list (kind:10050). Falls back to the Nostr SDK's default
 # NIP-17 relay resolution against [nostr].relays if left empty.
 # dm_relays = ["wss://dm-relay.example.com"]
-# "audio" inlines Opus/OGG (default, subject to the NIP-17 size budget
-# above); "text" transcribes the recording and sends the transcript
-# instead - see [voicemail.transcription] below and docs/voicemail.md.
-delivery = "audio"
+# "file" (default) - no upload, no transcription: the recording is just
+# saved to recordings_dir above and a plain-text notice is sent instead,
+# the zero-setup option. "audio" AES-GCM encrypts the recording, uploads
+# only the ciphertext to a Blossom server (see [voicemail.blossom]
+# below), and sends a NIP-17 file message with the URL and decryption
+# key - requires at least one entry there. "text" transcribes the
+# recording and sends the transcript instead (see
+# [voicemail.transcription] below) - requires model_path there. If
+# "audio"/"text"'s own requirement isn't configured, sip2nostr logs a
+# startup warning and falls back to "file"'s behavior instead of failing
+# to start - it does not fall back to inlining the recording in the DM.
+# See docs/voicemail.md.
+delivery = "file"
 
 # Only consulted when [voicemail].delivery = "text".
 [voicemail.transcription]
 # The only engine available today.
 engine = "whisper"
-# Required for delivery = "text". Path to a GGML model file, e.g. one
-# downloaded via whisper.cpp's models/download-ggml-model.sh script.
-# Relative to this config file unless rooted.
+# Path to a GGML model file, e.g. one downloaded via whisper.cpp's
+# models/download-ggml-model.sh script. Relative to this config file
+# unless rooted. Leaving this unset when delivery = "text" isn't an
+# error - see the [voicemail].delivery comment above.
 # model_path = "models/ggml-base.en.bin"
 # Optional. An ISO 639-1 code (e.g. "en"). Unset auto-detects the spoken
 # language per recording, at some accuracy/latency cost.
 # language = "en"
+
+# Consulted when [voicemail].delivery = "audio", and also when delivery
+# = "text" above and transcription produces nothing - in that case a
+# Blossom upload is tried before falling back further to a plain-text
+# notice. See docs/voicemail.md.
+[voicemail.blossom]
+# Blossom (BUD-01/BUD-02) server base URLs, tried in order until one
+# accepts the upload. Authenticates every upload as [nostr].bridge_nsec's
+# identity (a signed, time-limited kind 24242 event per BUD-02) - the
+# server never sees the bridge's actual Nostr identity's private key, and
+# never sees the recording's plaintext, only the AES-GCM ciphertext.
+# Leaving this empty when delivery = "audio" isn't an error - see the
+# [voicemail].delivery comment above.
+# servers = ["https://blossom.example.com"]

@@ -176,21 +176,15 @@ public sealed class VoicemailConfig
     [property: TomlPropertyName("ring_timeout_seconds")]
     public int RingTimeoutSeconds { get; init; } = 20;
 
-    // See docs/voicemail.md - ConfigLoader rejects anything larger than
-    // VoicemailBudget.MaxRecordingSeconds (delivery = "audio") or
-    // max_text_recording_seconds below (delivery = "text").
+    // Neither delivery mode inlines the recording in the DM itself
+    // ("text" sends a transcript, "audio" sends a Blossom upload's URL -
+    // see docs/voicemail.md), so this isn't a size budget - just a
+    // sanity limit on how much PCM VoicemailSink buffers in memory while
+    // recording. ConfigLoader caps it at
+    // VoicemailBudget.MaxRecordingSecondsCeiling so it can't itself
+    // become unbounded.
     [property: TomlPropertyName("max_recording_seconds")]
     public int MaxRecordingSeconds { get; init; } = Sip2Nostr.Shared.VoicemailBudget.MaxRecordingSeconds;
-
-    // The max_recording_seconds ceiling used when delivery = "text" -
-    // unlike delivery = "audio"'s ceiling (VoicemailBudget.MaxRecordingSeconds,
-    // derived from the NIP-17/Opus size budget and not configurable), this
-    // is just a sanity limit on how much PCM VoicemailSink buffers in
-    // memory while recording, not derived from anything else. ConfigLoader
-    // caps it at VoicemailBudget.MaxTextRecordingSecondsCeiling so it can't
-    // itself become unbounded. See docs/voicemail.md.
-    [property: TomlPropertyName("max_text_recording_seconds")]
-    public int MaxTextRecordingSeconds { get; init; } = Sip2Nostr.Shared.VoicemailBudget.MaxTextRecordingSeconds;
 
     // Passed to Concentus.Oggfile.OpusOggWriteStream's resamplerQuality
     // parameter when encoding a recording - ConfigLoader rejects anything
@@ -227,13 +221,23 @@ public sealed class VoicemailConfig
     [property: TomlPropertyName("dm_relays")]
     public List<string> DmRelays { get; init; } = [];
 
-    // "audio" inlines Opus/OGG (default); "text" sends a transcript
-    // instead - see [voicemail.transcription] and docs/voicemail.md.
+    // "file" (default) - no upload, no transcription: the recording is
+    // just saved to recordings_dir and a plain-text notice is sent
+    // instead, the zero-setup option. "audio" uploads an encrypted copy
+    // of the recording to a Blossom server and sends a file message with
+    // the link - requires [voicemail.blossom] below. "text" sends a
+    // transcript instead - requires [voicemail.transcription] below. If
+    // "audio"/"text"'s own requirement isn't configured, Program.cs logs
+    // a startup warning and falls back to "file"'s behavior instead of
+    // failing to start - see docs/voicemail.md.
     [property: TomlPropertyName("delivery")]
-    public string Delivery { get; init; } = "audio";
+    public string Delivery { get; init; } = "file";
 
     [property: TomlPropertyName("transcription")]
     public TranscriptionConfig Transcription { get; init; } = new();
+
+    [property: TomlPropertyName("blossom")]
+    public BlossomConfig Blossom { get; init; } = new();
 }
 
 // Only consulted when [voicemail].delivery = "text" - see docs/voicemail.md.
@@ -245,7 +249,10 @@ public sealed class TranscriptionConfig
     public string Engine { get; init; } = "whisper";
 
     // Path to a GGML model file (e.g. downloaded via whisper.cpp's
-    // models/download-ggml-model.sh) - required for the "whisper" engine.
+    // models/download-ggml-model.sh) - the "whisper" engine needs one to
+    // do anything. Left unset isn't itself an error: Program.cs logs a
+    // warning and falls back to [voicemail].delivery = "file"'s behavior
+    // instead (see docs/voicemail.md).
     [property: TomlPropertyName("model_path")]
     public string? ModelPath { get; init; }
 
@@ -253,4 +260,19 @@ public sealed class TranscriptionConfig
     // spoken language per recording, at some accuracy/latency cost.
     [property: TomlPropertyName("language")]
     public string? Language { get; init; }
+}
+
+// Consulted when [voicemail].delivery = "audio", and also when delivery
+// = "text" and transcription produces nothing (see
+// Voicemail/TranscribedTextDeliveryBackend.cs) - see docs/voicemail.md.
+public sealed class BlossomConfig
+{
+    // Blossom (BUD-01/BUD-02) server base URLs, tried in order until one
+    // accepts the upload. Every entry present must be an absolute
+    // http(s) URL - ConfigLoader rejects a malformed one at startup - but
+    // an empty list isn't itself an error: Program.cs logs a warning and
+    // falls back to [voicemail].delivery = "file"'s behavior instead
+    // (see docs/voicemail.md).
+    [property: TomlPropertyName("servers")]
+    public List<string> Servers { get; init; } = [];
 }

@@ -228,6 +228,29 @@ itself failing to reach that one relay.
 
 ## Blind spots
 
+- **A relay certificate signed by a private/self-signed CA is never
+  trusted, regardless of the OS's own certificate store.** Every relay
+  connection (`NostrSignalingClient` here, and `VoicemailSender`'s DM
+  connection) goes through `Nostr.Sdk`, a C# wrapper around a prebuilt
+  Rust library (`nostr_sdk_ffi`). Its websocket transport is compiled with
+  `rustls` and `tokio-tungstenite`'s `rustls-tls-webpki-roots` feature -
+  confirmed by inspecting the shipped native binary - which bakes in
+  Mozilla's public CA bundle *at compile time* and never reads the
+  system/OS trust store the way `rustls-tls-native-roots` would. Installing
+  a private CA into the OS (even successfully, confirmed working in a
+  browser) has no effect on this: `wss://` to a relay whose certificate
+  chains to that CA fails with `invalid peer certificate: UnknownIssuer`
+  every time. There's no config knob anywhere in `Nostr.Sdk`'s public API
+  to add a trusted root or bypass verification - the only fixes are giving
+  the relay a certificate from a publicly trusted CA (e.g. Let's Encrypt,
+  which works fine even for an internal-only host via a DNS-01 challenge)
+  or connecting over `ws://` instead, if the relay is only reachable over
+  a network already trusted some other way (`RelayUrl::parse` accepts
+  `ws://` as well as `wss://`). This is unrelated to `[voicemail].delivery
+  = "audio"`'s Blossom upload, which goes through .NET's own `HttpClient`
+  instead of `Nostr.Sdk` and therefore *does* read the OS certificate
+  store normally - a private CA that's fine for a Blossom server the
+  bridge itself was configured to trust is not fine for a relay.
 - **TURN/NAT behavior for the WebRTC leg is untested** beyond the local
   network the verification above ran on.
 - **No staleness check.** NIP-AC recommends discarding signaling events
