@@ -124,6 +124,37 @@ public class ConfigLoaderTests
         }
     }
 
+    [Fact]
+    public void Load_DefaultLoggingQuietIsFalse_Succeeds()
+    {
+        var path = WriteTempConfig(MinimalValidToml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.False(config.Logging.Quiet);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_LoggingQuietTrue_Succeeds()
+    {
+        var toml = $"{MinimalValidToml}\n\n[logging]\nquiet = true\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.True(config.Logging.Quiet);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Theory]
     [InlineData("verbose")]
     [InlineData("Debug")]

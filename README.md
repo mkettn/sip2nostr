@@ -140,6 +140,7 @@ timeout_ms = 2000
 # not include {timestamp} or {run}, a timestamp is added before the extension.
 run_file = "logs/sip2nostr-{timestamp}.log"
 level = "warning"              # or "verbose"/"debug"/"information"/"error"/"fatal" - default shown
+quiet = false                  # true suppresses the startup "running, press Ctrl+C" stdout line
 
 [[lines]]
 uri = "sip:+4989123456@sip.your-provider.de"

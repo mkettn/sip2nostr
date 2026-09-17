@@ -160,6 +160,18 @@ public sealed class LoggingConfig
     // it down to "information"/"debug" when troubleshooting.
     [property: TomlPropertyName("level")]
     public string Level { get; init; } = "warning";
+
+    // Separate from Level on purpose: Level gates Serilog's own log
+    // events (console + run file alike, see Program.cs), while this gates
+    // exactly one plain Console.WriteLine - the "sip2nostr running, press
+    // Ctrl+C to exit" line - that was never a log event a level could
+    // suppress in the first place. A human watching a foreground terminal
+    // still gets that one confirmation by default even at level =
+    // "warning"; quiet = true is for a supervised/scripted run (systemd,
+    // a service manager) where nothing should print to stdout absent a
+    // real problem.
+    [property: TomlPropertyName("quiet")]
+    public bool Quiet { get; init; }
 }
 
 // Blacklist always wins on match. An empty whitelist means blacklist-only

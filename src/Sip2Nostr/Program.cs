@@ -233,7 +233,15 @@ try
     hub.Attach(source, cts.Token);
     await source.StartAsync(cts.Token);
 
-    Log.Information("sip2nostr running. Press Ctrl+C to exit.");
+    // Plain stdout, not a log event: this is a one-time confirmation for
+    // whoever's watching a foreground terminal, not something
+    // [logging].level should be able to filter out the way it does actual
+    // log events (see LoggingConfig.Quiet) - a supervised/scripted run
+    // opts out via [logging].quiet instead.
+    if (!config.Logging.Quiet)
+    {
+        Console.WriteLine("sip2nostr running. Press Ctrl+C to exit.");
+    }
 
     try
     {

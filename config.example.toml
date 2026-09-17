@@ -24,6 +24,13 @@ run_file = "logs/sip2nostr-{timestamp}.log"
 # "information", "warning", "error", or "fatal". Defaults to "warning" -
 # turn this down to "information" or "debug" when troubleshooting.
 level = "warning"
+# Optional: suppress the one-time "sip2nostr running. Press Ctrl+C to
+# exit." startup line on stdout. Separate from `level` above - that line
+# isn't a log event `level` can filter, it's a plain print for whoever's
+# watching a foreground terminal. Set true for a supervised/scripted run
+# (systemd, a service manager) where nothing should print absent a real
+# problem.
+quiet = false
 
 [[lines]]
 uri = "sip:+4989123456@sip.your-provider.de"
