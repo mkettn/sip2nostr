@@ -1,5 +1,6 @@
 using Nostr.Sdk;
 using Serilog;
+using Serilog.Events;
 using Sip2Nostr.Config;
 using Sip2Nostr.Hub;
 using Sip2Nostr.Signaling;
@@ -18,8 +19,18 @@ static Serilog.Core.Logger CreateLogger(
 {
     runLogPath = ResolveRunLogPath(logging?.RunFile, configDirectory);
 
+    // ConfigLoader.Validate already rejected anything but a real
+    // Serilog level name by the time this runs with a loaded config;
+    // the one call site that doesn't have one yet - the bootstrap logger
+    // created before config is even read, logging: null - falls back to
+    // the same "warning" default LoggingConfig itself uses, so log output
+    // before and after config load is governed by the same default.
+    var level = Enum.TryParse<LogEventLevel>(logging?.Level, ignoreCase: true, out var parsedLevel)
+        ? parsedLevel
+        : LogEventLevel.Warning;
+
     var logger = new LoggerConfiguration()
-    .MinimumLevel.Information()
+        .MinimumLevel.Is(level)
         .WriteTo.Console(outputTemplate: LogOutputTemplate);
 
     if (runLogPath is not null)

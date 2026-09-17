@@ -150,6 +150,16 @@ public sealed class LoggingConfig
 {
     [property: TomlPropertyName("run_file")]
     public string? RunFile { get; init; }
+
+    // A Serilog LogEventLevel name (case-insensitive): "verbose", "debug",
+    // "information", "warning", "error", or "fatal" - checked against the
+    // real enum by ConfigLoader.Validate, so a typo fails at startup
+    // rather than silently falling back to this default. "warning" here,
+    // not Serilog's own "information" default: a bridge running
+    // unattended should be quiet unless something's actually wrong: turn
+    // it down to "information"/"debug" when troubleshooting.
+    [property: TomlPropertyName("level")]
+    public string Level { get; init; } = "warning";
 }
 
 // Blacklist always wins on match. An empty whitelist means blacklist-only

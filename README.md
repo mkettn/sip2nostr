@@ -139,6 +139,7 @@ timeout_ms = 2000
 # Relative paths are resolved next to this config file. If the path does
 # not include {timestamp} or {run}, a timestamp is added before the extension.
 run_file = "logs/sip2nostr-{timestamp}.log"
+level = "warning"              # or "verbose"/"debug"/"information"/"error"/"fatal" - default shown
 
 [[lines]]
 uri = "sip:+4989123456@sip.your-provider.de"

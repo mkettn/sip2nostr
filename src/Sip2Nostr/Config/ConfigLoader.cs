@@ -1,4 +1,5 @@
 using Nostr.Sdk;
+using Serilog.Events;
 using Tomlyn;
 using Sip2Nostr.Shared;
 
@@ -46,6 +47,18 @@ public static class ConfigLoader
             throw new ConfigurationException(
                 "[webrtc].connection_loss_grace_seconds must be greater than 0, got " +
                 $"{config.WebRtc.ConnectionLossGraceSeconds}.");
+        }
+
+        // Checked against the real Serilog enum, not just "is it
+        // non-empty", so a typo (e.g. "warn" instead of "warning") fails
+        // loudly at startup instead of Program.cs's own parsing silently
+        // falling back to "warning" and the operator never noticing their
+        // setting was ignored.
+        if (!Enum.TryParse<LogEventLevel>(config.Logging.Level, ignoreCase: true, out _))
+        {
+            throw new ConfigurationException(
+                $"[logging].level \"{config.Logging.Level}\" is not a valid Serilog level - use one of " +
+                "\"verbose\", \"debug\", \"information\", \"warning\", \"error\", or \"fatal\".");
         }
 
         // Every check in this block names a [voicemail] (or

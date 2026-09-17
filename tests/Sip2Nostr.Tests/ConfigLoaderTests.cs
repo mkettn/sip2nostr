@@ -110,6 +110,62 @@ public class ConfigLoaderTests
     }
 
     [Fact]
+    public void Load_DefaultLoggingLevelIsWarning_Succeeds()
+    {
+        var path = WriteTempConfig(MinimalValidToml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal("warning", config.Logging.Level);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("verbose")]
+    [InlineData("Debug")]
+    [InlineData("INFORMATION")]
+    [InlineData("Warning")]
+    [InlineData("error")]
+    [InlineData("fatal")]
+    public void Load_ValidLoggingLevel_Succeeds(string level)
+    {
+        var toml = $"{MinimalValidToml}\n\n[logging]\nlevel = \"{level}\"\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal(level, config.Logging.Level);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("warn")]
+    [InlineData("bogus")]
+    [InlineData("")]
+    public void Load_InvalidLoggingLevel_Throws(string level)
+    {
+        var toml = $"{MinimalValidToml}\n\n[logging]\nlevel = \"{level}\"\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains("[logging].level", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Load_InvalidDeliveryValue_Throws()
     {
         var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\ndelivery = \"bogus\"\n";
