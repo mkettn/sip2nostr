@@ -39,13 +39,13 @@ file_level = "information"
 # supervised/scripted run (systemd, a service manager) where nothing
 # should print absent a real problem.
 console_quiet = false
-# Optional: drop the leading timestamp from console log lines (the file's
-# own timestamp is unaffected - it has no other record of when something
-# happened once the process exits). Defaults to true. Set false when
-# something else is already stamping captured output - e.g. running under
-# systemd, where journald timestamps every line on arrival regardless of
-# its content, so leaving this on gives every console line two timestamps
-# (journalctl's own plus this one) instead of one.
+# Optional: include a leading timestamp on console log lines. Defaults to
+# true. Set false when something else is already stamping captured
+# output - e.g. running under systemd, where journald timestamps every
+# line on arrival regardless of its content, so leaving this on gives
+# every console line two timestamps (journalctl's own plus this one)
+# instead of one. The file's own timestamp is unaffected either way - it
+# has no other record of when something happened once the process exits.
 console_timestamps = true
 
 [[lines]]

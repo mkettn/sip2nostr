@@ -142,8 +142,8 @@ file = "logs/sip2nostr-{timestamp}.log"
 console_level = "warning"       # or "verbose"/"debug"/"information"/"error"/"fatal" - default shown
 file_level = "information"      # same values, independent of console_level, only used when `file` is set - default shown
 console_quiet = false           # true suppresses the startup "running, press Ctrl+C" stdout line
-# Drops the leading timestamp from console lines only (the file keeps its
-# own regardless). Set false under systemd/journald - it stamps every
+# Includes a leading timestamp on console lines (the file always keeps
+# its own regardless). Set false under systemd/journald - it stamps every
 # captured line on arrival anyway, so leaving this on double-stamps them.
 console_timestamps = true
 

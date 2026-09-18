@@ -268,7 +268,10 @@ public static class ConfigLoader
     }
 
     // Deliberately not Enum.TryParse: it also accepts the string form of
-    // any integer in LogEventLevel's underlying byte range, including
+    // any integer in LogEventLevel's underlying int range (confirmed via
+    // Enum.GetUnderlyingType - it declares no explicit one, so it's the
+    // default int, not the narrower type its 0-5 range might suggest),
+    // including
     // both a defined member's own ordinal (e.g. "3", Warning) and one
     // with no matching member at all (e.g. "99") - the latter would
     // otherwise silently produce a bridge that logs nothing, ever
