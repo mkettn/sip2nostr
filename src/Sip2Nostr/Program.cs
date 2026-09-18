@@ -18,48 +18,51 @@ static Serilog.Core.Logger CreateLogger(
     string configDirectory,
     out string? runLogPath)
 {
-    runLogPath = ResolveRunLogPath(logging?.RunFile, configDirectory);
+    runLogPath = ResolveRunLogPath(logging?.File, configDirectory);
 
-    // ConfigLoader.Validate already rejected anything but a real
-    // Serilog level name by the time this runs with a loaded config;
-    // the one call site that doesn't have one yet - the bootstrap logger
-    // created before config is even read, logging: null - falls back to
-    // the same "warning" default LoggingConfig itself uses, so log output
-    // before and after config load is governed by the same default.
-    var level = Enum.TryParse<LogEventLevel>(logging?.Level, ignoreCase: true, out var parsedLevel)
-        ? parsedLevel
+    // ConfigLoader.Validate already rejected anything but a real Serilog
+    // level name for both of these by the time this runs with a loaded
+    // config; the one call site that doesn't have one yet - the bootstrap
+    // logger created before config is even read, logging: null - falls
+    // back to the same defaults LoggingConfig itself uses (warning for
+    // the console, information for the file - though there's no file at
+    // all yet at that point), so log output before and after config load
+    // is governed by the same defaults.
+    var consoleLevel = Enum.TryParse<LogEventLevel>(logging?.ConsoleLevel, ignoreCase: true, out var parsedConsoleLevel)
+        ? parsedConsoleLevel
         : LogEventLevel.Warning;
+    var fileLevel = Enum.TryParse<LogEventLevel>(logging?.FileLevel, ignoreCase: true, out var parsedFileLevel)
+        ? parsedFileLevel
+        : LogEventLevel.Information;
 
-    // The console is restricted to `level` directly, but the global
-    // minimum (the floor every sink shares, including the run log file)
-    // stays at least Information whenever a run file is configured: a
-    // fresh timestamped log per run exists specifically for after-the-fact
-    // troubleshooting, so it shouldn't come up empty for a run that looked
-    // fine at the time but wasn't - by the point you're reaching for it,
-    // "turn the level down and reproduce it" often isn't an option. A
-    // `level` more verbose than Information (e.g. "debug") still wins,
-    // since Serilog's MinimumLevel is a hard floor no sink's own
-    // restrictedToMinimumLevel can widen back past.
-    var globalLevel = runLogPath is not null && level > LogEventLevel.Information
-        ? LogEventLevel.Information
-        : level;
+    // Each sink is restricted to its own level directly, but the global
+    // minimum (the hard floor Serilog applies before any sink gets a look
+    // at an event, which no sink's own restrictedToMinimumLevel can widen
+    // back past) has to be the more verbose of the two whenever a file is
+    // configured - otherwise a quieter console_level would silently cap
+    // what the file sink could ever see too, defeating file_level's whole
+    // point of being independent.
+    var globalLevel = runLogPath is not null && fileLevel < consoleLevel
+        ? fileLevel
+        : consoleLevel;
 
-    // Console-only, and defaulting to true (unlike Level/Quiet, both
-    // false-by-default): most direct/interactive runs want the timestamp,
+    // Console-only, and defaulting to true (unlike the *_level/quiet
+    // settings above): most direct/interactive runs want the timestamp,
     // it's specifically a supervisor that already stamps captured output
-    // - systemd/journald being the common case - that wants it turned off,
-    // to stop each line showing two timestamps instead of one. run_file
-    // always keeps its own timestamp regardless - see LoggingConfig.
+    // - systemd/journald being the common case - that wants it turned
+    // off, to stop each line showing two timestamps instead of one. The
+    // file sink always keeps its own timestamp regardless - see
+    // LoggingConfig.
     var consoleTemplate = (logging?.ConsoleTimestamps ?? true) ? LogOutputTemplate : LogOutputTemplateNoTimestamp;
 
     var logger = new LoggerConfiguration()
         .MinimumLevel.Is(globalLevel)
-        .WriteTo.Console(restrictedToMinimumLevel: level, outputTemplate: consoleTemplate);
+        .WriteTo.Console(restrictedToMinimumLevel: consoleLevel, outputTemplate: consoleTemplate);
 
     if (runLogPath is not null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(runLogPath)!);
-        logger.WriteTo.File(runLogPath, outputTemplate: LogOutputTemplate, shared: true);
+        logger.WriteTo.File(runLogPath, restrictedToMinimumLevel: fileLevel, outputTemplate: LogOutputTemplate, shared: true);
     }
 
     return logger.CreateLogger();
@@ -244,10 +247,11 @@ try
 
     // Plain stdout, not a log event: this is a one-time confirmation for
     // whoever's watching a foreground terminal, not something
-    // [logging].level should be able to filter out the way it does actual
-    // log events (see LoggingConfig.Quiet) - a supervised/scripted run
-    // opts out via [logging].quiet instead.
-    if (!config.Logging.Quiet)
+    // [logging].console_level should be able to filter out the way it
+    // does actual log events (see LoggingConfig.ConsoleQuiet) - a
+    // supervised/scripted run opts out via [logging].console_quiet
+    // instead.
+    if (!config.Logging.ConsoleQuiet)
     {
         Console.WriteLine("sip2nostr running. Press Ctrl+C to exit.");
     }

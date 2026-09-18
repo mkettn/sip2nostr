@@ -348,7 +348,7 @@ string?`, `null` meaning nothing could be transcribed), selected by
   - `ResolveRecordingFilename` builds the saved file's name from
     `[voicemail].recording_filename` (default `{timestamp}-{caller}.opus`)
     by substituting `{timestamp}` (`yyyyMMdd-HHmmss`, matching
-    `[logging].run_file`'s own templating convention in `Program.cs`),
+    `[logging].file`'s own templating convention in `Program.cs`),
     `{caller}` (`Call.CallerNumber`, already normalized to digits by
     `PhoneNumberNormalizer` - see `caller-allowlist.md` - so it's always
     a filesystem-safe path segment even though it's attacker-controlled

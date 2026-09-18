@@ -138,15 +138,11 @@ timeout_ms = 2000
 # Optional: write each process run to its own log file.
 # Relative paths are resolved next to this config file. If the path does
 # not include {timestamp} or {run}, a timestamp is added before the extension.
-run_file = "logs/sip2nostr-{timestamp}.log"
-# Minimum level for the console: "verbose"/"debug"/"information"/"warning"
-# (default)/"error"/"fatal". run_file's log can end up more verbose than
-# this (floored at "information") so a quiet console doesn't leave an
-# empty file to check after the fact; with run_file unset this is the
-# only output there is, so it applies exactly as set.
-level = "warning"
-quiet = false                  # true suppresses the startup "running, press Ctrl+C" stdout line
-# Drops the leading timestamp from console lines only (run_file keeps its
+file = "logs/sip2nostr-{timestamp}.log"
+console_level = "warning"       # or "verbose"/"debug"/"information"/"error"/"fatal" - default shown
+file_level = "information"      # same values, independent of console_level, only used when `file` is set - default shown
+console_quiet = false           # true suppresses the startup "running, press Ctrl+C" stdout line
+# Drops the leading timestamp from console lines only (the file keeps its
 # own regardless). Set false under systemd/journald - it stamps every
 # captured line on arrival anyway, so leaving this on double-stamps them.
 console_timestamps = true

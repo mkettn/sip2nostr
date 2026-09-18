@@ -49,27 +49,11 @@ public static class ConfigLoader
                 $"{config.WebRtc.ConnectionLossGraceSeconds}.");
         }
 
-        // Checked against the real Serilog level names, not just "is it
-        // non-empty" - so a typo (e.g. "warn" instead of "warning") fails
-        // loudly at startup instead of Program.cs's own parsing silently
-        // falling back to "warning" and the operator never noticing their
-        // setting was ignored. Deliberately not Enum.TryParse: it also
-        // accepts the string form of any integer in LogEventLevel's
-        // underlying byte range, including both a defined member's own
-        // ordinal (e.g. "3", Warning) and one with no matching member at
-        // all (e.g. "99") - the latter would otherwise silently produce a
-        // bridge that logs nothing, ever (Serilog filters on
-        // level >= minimum, and (LogEventLevel)99 is above every real
-        // level, Fatal included). Comparing against the enum's own member
-        // names directly closes the numeric-input loophole entirely rather
-        // than only its out-of-range half (Enum.IsDefined alone still
-        // accepts "3").
-        if (!Enum.GetNames<LogEventLevel>().Contains(config.Logging.Level, StringComparer.OrdinalIgnoreCase))
-        {
-            throw new ConfigurationException(
-                $"[logging].level \"{config.Logging.Level}\" is not a valid Serilog level - use one of " +
-                "\"verbose\", \"debug\", \"information\", \"warning\", \"error\", or \"fatal\".");
-        }
+        // console_level and file_level are independent settings (see
+        // LoggingConfig), but both need the same check: a real Serilog
+        // level name, not just "is it non-empty".
+        ValidateLoggingLevel("console_level", config.Logging.ConsoleLevel);
+        ValidateLoggingLevel("file_level", config.Logging.FileLevel);
 
         // Every check in this block names a [voicemail] (or
         // [voicemail.transcription]/[voicemail.blossom]) setting that's
@@ -280,6 +264,29 @@ public static class ConfigLoader
             {
                 throw new ConfigurationException($"{keyName} entry \"{relay}\" is not a valid relay URL: {exception.Message}", exception);
             }
+        }
+    }
+
+    // Deliberately not Enum.TryParse: it also accepts the string form of
+    // any integer in LogEventLevel's underlying byte range, including
+    // both a defined member's own ordinal (e.g. "3", Warning) and one
+    // with no matching member at all (e.g. "99") - the latter would
+    // otherwise silently produce a bridge that logs nothing, ever
+    // (Serilog filters on level >= minimum, and (LogEventLevel)99 is
+    // above every real level, Fatal included). Comparing against the
+    // enum's own member names directly closes the numeric-input loophole
+    // entirely rather than only its out-of-range half (Enum.IsDefined
+    // alone still accepts "3"). A typo here (e.g. "warn" instead of
+    // "warning") fails loudly at startup instead of Program.cs's own
+    // parsing silently falling back to a default and the operator never
+    // noticing their setting was ignored.
+    private static void ValidateLoggingLevel(string key, string value)
+    {
+        if (!Enum.GetNames<LogEventLevel>().Contains(value, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new ConfigurationException(
+                $"[logging].{key} \"{value}\" is not a valid Serilog level - use one of " +
+                "\"verbose\", \"debug\", \"information\", \"warning\", \"error\", or \"fatal\".");
         }
     }
 

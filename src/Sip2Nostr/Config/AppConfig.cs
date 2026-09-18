@@ -148,8 +148,11 @@ public sealed class WebRtcConfig
 
 public sealed class LoggingConfig
 {
-    [property: TomlPropertyName("run_file")]
-    public string? RunFile { get; init; }
+    // Optional: write each process run to its own log file, independent of
+    // whatever the console shows - see FileLevel below for how loud that
+    // file is by default.
+    [property: TomlPropertyName("file")]
+    public string? File { get; init; }
 
     // A Serilog LogEventLevel name (case-insensitive): "verbose", "debug",
     // "information", "warning", "error", or "fatal" - checked against the
@@ -157,30 +160,42 @@ public sealed class LoggingConfig
     // rather than silently falling back to this default. "warning" here,
     // not Serilog's own "information" default: a bridge running
     // unattended should be quiet unless something's actually wrong: turn
-    // it down to "information"/"debug" when troubleshooting.
-    [property: TomlPropertyName("level")]
-    public string Level { get; init; } = "warning";
+    // it down to "information"/"debug" when troubleshooting. Console-only
+    // - see FileLevel for the file sink's own, independent level.
+    [property: TomlPropertyName("console_level")]
+    public string ConsoleLevel { get; init; } = "warning";
 
-    // Separate from Level on purpose: Level gates Serilog's own log
-    // events (console + run file alike, see Program.cs), while this gates
-    // exactly one plain Console.WriteLine - the "sip2nostr running, press
-    // Ctrl+C to exit" line - that was never a log event a level could
-    // suppress in the first place. A human watching a foreground terminal
-    // still gets that one confirmation by default even at level =
-    // "warning"; quiet = true is for a supervised/scripted run (systemd,
-    // a service manager) where nothing should print to stdout absent a
-    // real problem.
-    [property: TomlPropertyName("quiet")]
-    public bool Quiet { get; init; }
+    // The file sink's own minimum level - same Serilog level names as
+    // ConsoleLevel, validated the same way, but independent of it and
+    // File above only consumes it when File is actually set. Defaults to
+    // "information", louder than ConsoleLevel's own "warning" default,
+    // because a fresh timestamped log per run exists specifically for
+    // after-the-fact troubleshooting: by the time you're reaching for it,
+    // the run that misbehaved is already over, so it shouldn't come up
+    // empty just because the console was left quiet at the time.
+    [property: TomlPropertyName("file_level")]
+    public string FileLevel { get; init; } = "information";
 
-    // Console-only, like Quiet above: a supervisor that already timestamps
-    // captured output - systemd/journald being the common case, since
-    // journald stamps every line with its own arrival time regardless of
-    // what the line itself contains - ends up showing two timestamps per
-    // line otherwise, its own plus this process's. run_file's timestamp is
-    // never affected by this: a log file has no such external stamping to
-    // duplicate, and is the only record of when something happened once
-    // the process has exited.
+    // Separate from ConsoleLevel/FileLevel on purpose: those gate
+    // Serilog's own log events, while this gates exactly one plain
+    // Console.WriteLine - the "sip2nostr running, press Ctrl+C to exit"
+    // line - that was never a log event a level could suppress in the
+    // first place. A human watching a foreground terminal still gets that
+    // one confirmation by default even at console_level = "warning";
+    // console_quiet = true is for a supervised/scripted run (systemd, a
+    // service manager) where nothing should print to stdout absent a real
+    // problem.
+    [property: TomlPropertyName("console_quiet")]
+    public bool ConsoleQuiet { get; init; }
+
+    // Console-only, like ConsoleQuiet above: a supervisor that already
+    // timestamps captured output - systemd/journald being the common
+    // case, since journald stamps every line with its own arrival time
+    // regardless of what the line itself contains - ends up showing two
+    // timestamps per line otherwise, its own plus this process's. The
+    // file sink's timestamp is never affected by this: a log file has no
+    // such external stamping to duplicate, and is the only record of when
+    // something happened once the process has exited.
     [property: TomlPropertyName("console_timestamps")]
     public bool ConsoleTimestamps { get; init; } = true;
 }

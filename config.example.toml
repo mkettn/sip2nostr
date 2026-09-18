@@ -16,28 +16,30 @@ resolver_fallback = "9.9.9.9:53"
 timeout_ms = 2000
 
 [logging]
-# Optional: write each process run to its own log file.
+# Optional: write each process run to its own log file, independent of
+# console_level below.
 # Relative paths are resolved next to this config file. If the path does
 # not include {timestamp} or {run}, a timestamp is added before the extension.
-run_file = "logs/sip2nostr-{timestamp}.log"
-# Minimum level to log, case-insensitive: "verbose", "debug",
+file = "logs/sip2nostr-{timestamp}.log"
+# Minimum level for the console, case-insensitive: "verbose", "debug",
 # "information", "warning", "error", or "fatal". Defaults to "warning" -
-# turn this down to "information" or "debug" when troubleshooting. This
-# always governs the console exactly. If run_file above is set, the log
-# file can end up MORE verbose than this - it's floored at "information"
-# regardless of a quieter level here, so a run that looked fine on a quiet
-# console still leaves a useful record to check afterward - but it is
-# never quieter than this setting. With run_file unset, this is the only
-# output there is, so it applies as configured with no flooring.
-level = "warning"
+# turn this down to "information" or "debug" when troubleshooting.
+console_level = "warning"
+# Minimum level for the file above (only takes effect when `file` is
+# set) - same names as console_level, but independent of it. Defaults to
+# "information", louder than console_level's own "warning" default: a
+# fresh timestamped log per run exists specifically for after-the-fact
+# troubleshooting, so it shouldn't come up empty just because the console
+# was left quiet at the time.
+file_level = "information"
 # Optional: suppress the one-time "sip2nostr running. Press Ctrl+C to
-# exit." startup line on stdout. Separate from `level` above - that line
-# isn't a log event `level` can filter, it's a plain print for whoever's
-# watching a foreground terminal. Set true for a supervised/scripted run
-# (systemd, a service manager) where nothing should print absent a real
-# problem.
-quiet = false
-# Optional: drop the leading timestamp from console log lines (run_file's
+# exit." startup line on stdout. Separate from `console_level` above -
+# that line isn't a log event a level can filter, it's a plain print for
+# whoever's watching a foreground terminal. Set true for a
+# supervised/scripted run (systemd, a service manager) where nothing
+# should print absent a real problem.
+console_quiet = false
+# Optional: drop the leading timestamp from console log lines (the file's
 # own timestamp is unaffected - it has no other record of when something
 # happened once the process exits). Defaults to true. Set false when
 # something else is already stamping captured output - e.g. running under
