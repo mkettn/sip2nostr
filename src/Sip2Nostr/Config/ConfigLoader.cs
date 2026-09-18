@@ -1,4 +1,5 @@
 using Nostr.Sdk;
+using Serilog.Events;
 using Tomlyn;
 using Sip2Nostr.Shared;
 
@@ -47,6 +48,12 @@ public static class ConfigLoader
                 "[webrtc].connection_loss_grace_seconds must be greater than 0, got " +
                 $"{config.WebRtc.ConnectionLossGraceSeconds}.");
         }
+
+        // console_level and file_level are independent settings (see
+        // LoggingConfig), but both need the same check: a real Serilog
+        // level name, not just "is it non-empty".
+        ValidateLoggingLevel("console_level", config.Logging.ConsoleLevel);
+        ValidateLoggingLevel("file_level", config.Logging.FileLevel);
 
         // Every check in this block names a [voicemail] (or
         // [voicemail.transcription]/[voicemail.blossom]) setting that's
@@ -257,6 +264,32 @@ public static class ConfigLoader
             {
                 throw new ConfigurationException($"{keyName} entry \"{relay}\" is not a valid relay URL: {exception.Message}", exception);
             }
+        }
+    }
+
+    // Deliberately not Enum.TryParse: it also accepts the string form of
+    // any integer in LogEventLevel's underlying int range (confirmed via
+    // Enum.GetUnderlyingType - it declares no explicit one, so it's the
+    // default int, not the narrower type its 0-5 range might suggest),
+    // including
+    // both a defined member's own ordinal (e.g. "3", Warning) and one
+    // with no matching member at all (e.g. "99") - the latter would
+    // otherwise silently produce a bridge that logs nothing, ever
+    // (Serilog filters on level >= minimum, and (LogEventLevel)99 is
+    // above every real level, Fatal included). Comparing against the
+    // enum's own member names directly closes the numeric-input loophole
+    // entirely rather than only its out-of-range half (Enum.IsDefined
+    // alone still accepts "3"). A typo here (e.g. "warn" instead of
+    // "warning") fails loudly at startup instead of Program.cs's own
+    // parsing silently falling back to a default and the operator never
+    // noticing their setting was ignored.
+    private static void ValidateLoggingLevel(string key, string value)
+    {
+        if (!Enum.GetNames<LogEventLevel>().Contains(value, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new ConfigurationException(
+                $"[logging].{key} \"{value}\" is not a valid Serilog level - use one of " +
+                "\"verbose\", \"debug\", \"information\", \"warning\", \"error\", or \"fatal\".");
         }
     }
 

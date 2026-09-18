@@ -1,5 +1,6 @@
 using Nostr.Sdk;
 using Serilog;
+using Serilog.Events;
 using Sip2Nostr.Config;
 using Sip2Nostr.Hub;
 using Sip2Nostr.Signaling;
@@ -8,6 +9,7 @@ using Sip2Nostr.Sip;
 using Sip2Nostr.Voicemail;
 
 const string LogOutputTemplate = "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}";
+const string LogOutputTemplateNoTimestamp = "[{Level:u3}] {Message:lj}{NewLine}{Exception}";
 
 Log.Logger = CreateLogger(null, Directory.GetCurrentDirectory(), out _);
 
@@ -16,16 +18,51 @@ static Serilog.Core.Logger CreateLogger(
     string configDirectory,
     out string? runLogPath)
 {
-    runLogPath = ResolveRunLogPath(logging?.RunFile, configDirectory);
+    runLogPath = ResolveRunLogPath(logging?.File, configDirectory);
+
+    // ConfigLoader.Validate already rejected anything but a real Serilog
+    // level name for both of these by the time this runs with a loaded
+    // config; the one call site that doesn't have one yet - the bootstrap
+    // logger created before config is even read, logging: null - falls
+    // back to the same defaults LoggingConfig itself uses (warning for
+    // the console, information for the file - though there's no file at
+    // all yet at that point), so log output before and after config load
+    // is governed by the same defaults.
+    var consoleLevel = Enum.TryParse<LogEventLevel>(logging?.ConsoleLevel, ignoreCase: true, out var parsedConsoleLevel)
+        ? parsedConsoleLevel
+        : LogEventLevel.Warning;
+    var fileLevel = Enum.TryParse<LogEventLevel>(logging?.FileLevel, ignoreCase: true, out var parsedFileLevel)
+        ? parsedFileLevel
+        : LogEventLevel.Information;
+
+    // Each sink is restricted to its own level directly, but the global
+    // minimum (the hard floor Serilog applies before any sink gets a look
+    // at an event, which no sink's own restrictedToMinimumLevel can widen
+    // back past) has to be the more verbose of the two whenever a file is
+    // configured - otherwise a quieter console_level would silently cap
+    // what the file sink could ever see too, defeating file_level's whole
+    // point of being independent.
+    var globalLevel = runLogPath is not null && fileLevel < consoleLevel
+        ? fileLevel
+        : consoleLevel;
+
+    // Console-only, and defaulting to true (unlike the *_level/quiet
+    // settings above): most direct/interactive runs want the timestamp,
+    // it's specifically a supervisor that already stamps captured output
+    // - systemd/journald being the common case - that wants it turned
+    // off, to stop each line showing two timestamps instead of one. The
+    // file sink always keeps its own timestamp regardless - see
+    // LoggingConfig.
+    var consoleTemplate = (logging?.ConsoleTimestamps ?? true) ? LogOutputTemplate : LogOutputTemplateNoTimestamp;
 
     var logger = new LoggerConfiguration()
-    .MinimumLevel.Information()
-        .WriteTo.Console(outputTemplate: LogOutputTemplate);
+        .MinimumLevel.Is(globalLevel)
+        .WriteTo.Console(restrictedToMinimumLevel: consoleLevel, outputTemplate: consoleTemplate);
 
     if (runLogPath is not null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(runLogPath)!);
-        logger.WriteTo.File(runLogPath, outputTemplate: LogOutputTemplate, shared: true);
+        logger.WriteTo.File(runLogPath, restrictedToMinimumLevel: fileLevel, outputTemplate: LogOutputTemplate, shared: true);
     }
 
     return logger.CreateLogger();
@@ -208,7 +245,16 @@ try
     hub.Attach(source, cts.Token);
     await source.StartAsync(cts.Token);
 
-    Log.Information("sip2nostr running. Press Ctrl+C to exit.");
+    // Plain stdout, not a log event: this is a one-time confirmation for
+    // whoever's watching a foreground terminal, not something
+    // [logging].console_level should be able to filter out the way it
+    // does actual log events (see LoggingConfig.ConsoleQuiet) - a
+    // supervised/scripted run opts out via [logging].console_quiet
+    // instead.
+    if (!config.Logging.ConsoleQuiet)
+    {
+        Console.WriteLine("sip2nostr running. Press Ctrl+C to exit.");
+    }
 
     try
     {
