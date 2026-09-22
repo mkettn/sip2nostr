@@ -55,20 +55,12 @@ jobs:
             -p:IncludeNativeLibrariesForSelfExtract=true \
             -o out/${{ matrix.rid }}
 
-      # Whisper.net.Runtime ships every platform's native binaries
-      # regardless of target RID, and dotnet publish -r doesn't prune
-      # them - out/${{ matrix.rid }} still has win-x64/macos-arm64/...
-      # native libraries and a macOS-only Metal shader resource sitting
-      # in it as loose files afterward (never eligible for embedding into
-      # a Linux single-file binary in the first place - IncludeNativeLibrariesForSelfExtract
-      # only filters by "loadable on this OS" at bundle time, not by CPU
-      # architecture). Sip2Nostr.csproj's ExcludeMismatchedLinuxWhisperNatives
-      # target handles the other Linux architectures the same flag WOULD
-      # otherwise embed (linux-x64/linux-arm64/linux-arm are all
-      # "loadable on this OS"). None of this needs cleaning up here: the
-      # next step only moves the one binary out of out/${{ matrix.rid }},
-      # and only that file gets uploaded - whatever's left in that
-      # directory is simply discarded with the rest of the runner.
+      # out/${{ matrix.rid }} still has some loose files behind
+      # (Sip2Nostr.pdb, and other platforms' native libraries that
+      # Sip2Nostr.csproj's targets don't prune - see there for why).
+      # None of that needs handling here: this only moves the one binary
+      # out, and only that file gets uploaded - whatever's left behind is
+      # simply discarded with the rest of the runner.
       - name: Rename binary for release
         run: |
           mv out/${{ matrix.rid }}/Sip2Nostr sip2nostr-${{ needs.version.outputs.version }}-${{ matrix.rid }}

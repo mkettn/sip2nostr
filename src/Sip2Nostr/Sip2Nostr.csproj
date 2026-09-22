@@ -35,6 +35,17 @@
     architecture that executable is actually for - it only filters by
     "loadable on this OS" (ELF vs PE vs Mach-O), not by CPU architecture.
     This drops the other two before they reach that step.
+
+    Forward-compatible with an upstream fix: the Remove below only
+    matches items whose TargetPath is exactly "runtimes/linux-*" for a
+    *different* RID than the one being built. If a future
+    Whisper.net.Runtime version starts conditioning these items on
+    $(RuntimeIdentifier) itself (so only the matching one is ever added),
+    or moves them to the standard runtimes/{rid}/native/ convention
+    entirely, nothing here would still match - the Remove finds zero
+    items and becomes a no-op, not a build failure. Worth deleting at
+    that point for its own sake, but leaving it in stops being harmful
+    the moment upstream stops needing it.
   -->
   <Target Name="ExcludeMismatchedLinuxWhisperNatives" BeforeTargets="AssignTargetPaths;ComputeResolvedFilesToPublishList"
           Condition="$(RuntimeIdentifier.StartsWith('linux-'))">
