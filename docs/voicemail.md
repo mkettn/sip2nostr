@@ -574,22 +574,6 @@ so there's no engine selection setting - just its own requirements:
   transcription is CPU-bound and model-size-dependent; how it performs
   on something like a Raspberry Pi (the README's arm64 release target)
   hasn't been measured for any model size.
-- **`Whisper.net.Runtime` is a heavier dependency than the rest of this
-  project's stack, and bundles every platform's native binaries
-  regardless of target RID.** Unlike Concentus (pure C#), it ships
-  prebuilt whisper.cpp libraries; confirmed via `dotnet publish -r
-  linux-x64 -p:PublishSingleFile=true
-  -p:IncludeNativeLibrariesForSelfExtract=true` that the output still
-  includes `runtimes/win-x64`, `runtimes/macos-arm64`, etc. (plus a
-  macOS-only `ggml-metal.metal` resource) alongside the target RID's own
-  native library, which does get correctly embedded into the single file
-  - `dotnet publish -r` doesn't prune the others the way it does for
-  packages using the standard `runtimes/{rid}/native/` convention.
-  `.github/workflows/release.yml` deletes `runtimes/` and any `*.metal`
-  file as a post-publish step for exactly this reason, so the shipped
-  release binary doesn't carry the other platforms' dead weight - a
-  build outside that workflow (a local `dotnet publish`) still will,
-  unless it does the same cleanup.
 - **`delivery = "audio"` hasn't been verified against a real Blossom
   server or a real NIP-17 client.** `AudioDeliveryBackendTests.cs`
   exercises the encryption, BUD-02 auth event, and upload request/response

@@ -56,12 +56,12 @@ jobs:
             -o out/${{ matrix.rid }}
 
       # Whisper.net.Runtime ships every platform's native binaries
-      # regardless of target RID (docs/voicemail.md's "Known limitations"),
-      # and dotnet publish -r doesn't prune them - IncludeNativeLibrariesForSelfExtract
-      # above only embeds the one this RID actually needs into the single
-      # file; the rest of runtimes/ (win-x64, macos-arm64, ...) plus a
-      # macOS-only Metal shader resource are left behind as loose, useless
-      # files that would otherwise still ship in the tarball.
+      # regardless of target RID, and dotnet publish -r doesn't prune
+      # them - IncludeNativeLibrariesForSelfExtract above only embeds the
+      # one this RID actually needs into the single file; the rest of
+      # runtimes/ (win-x64, macos-arm64, ...) plus a macOS-only Metal
+      # shader resource are left behind as loose, useless files that
+      # would otherwise still ship in the tarball.
       - name: Remove other platforms' bundled native libraries
         run: |
           rm -rf out/${{ matrix.rid }}/runtimes

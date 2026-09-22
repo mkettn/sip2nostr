@@ -48,16 +48,15 @@ architecture:
 | `linux-x64.tar.gz` | Deploying to an amd64 server/VM. |
 | `linux-arm64.tar.gz` | Deploying to a Raspberry Pi 4/5 (64-bit OS) or other arm64 target. |
 
-Each is a single `Sip2Nostr` executable, published framework-dependent
-(not self-contained, in .NET's sense - the runtime isn't bundled) but as
-a single file: every dependency this project has, native libraries
-included, is packed into that one file regardless. What it still needs on
-the target is the [.NET 8 runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
-itself, installed separately (not the SDK, just the runtime:
-`dotnet-runtime-8.0` on most distros). The tarball also
-includes `config.example.toml` and `README.md`. Extract it, copy
-`config.example.toml` to `config.toml`, fill in your credentials, and run
-the `Sip2Nostr` binary directly.
+Each is a single `Sip2Nostr` executable: a framework-dependent, single-file
+deployment. Framework-dependent means the
+[.NET 8 runtime](https://dotnet.microsoft.com/download/dotnet/8.0) needs
+to be installed on the target separately (not the SDK, just the runtime -
+`dotnet-runtime-8.0` on most distros); single-file means every dependency
+this project has, native libraries included, is packed into that one
+executable anyway. The tarball also includes `config.example.toml` and
+`README.md`. Extract it, copy `config.example.toml` to `config.toml`,
+fill in your credentials, and run the `Sip2Nostr` binary directly.
 
 ## Architecture: single binary, C#/.NET
 
