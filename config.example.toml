@@ -148,8 +148,6 @@ recording_filename = "{timestamp}-{caller}.opus"
 delivery = "file"
 
 # Only consulted when delivery = "text" above.
-# The only engine available today.
-transcription_engine = "whisper"
 # Path to a GGML model file, e.g. one downloaded via whisper.cpp's
 # models/download-ggml-model.sh script. Relative to this config file
 # unless rooted. Leaving this unset when delivery = "text" isn't an

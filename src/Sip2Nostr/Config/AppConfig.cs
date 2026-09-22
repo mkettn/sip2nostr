@@ -281,17 +281,13 @@ public sealed class VoicemailConfig
     [property: TomlPropertyName("delivery")]
     public string Delivery { get; init; } = "file";
 
-    // Only consulted when delivery = "text". The only engine today; the
-    // interface behind it (Voicemail/IVoicemailTranscriber.cs) is built
-    // to take more.
-    [property: TomlPropertyName("transcription_engine")]
-    public string TranscriptionEngine { get; init; } = "whisper";
-
     // Path to a GGML model file (e.g. downloaded via whisper.cpp's
-    // models/download-ggml-model.sh) - the "whisper" engine needs one to
-    // do anything. Left unset isn't itself an error: Program.cs logs a
-    // warning and falls back to delivery = "file"'s behavior instead
-    // (see docs/voicemail.md).
+    // models/download-ggml-model.sh), consumed by Whisper.net - the only
+    // transcription engine supported (Voicemail/IVoicemailTranscriber.cs
+    // is built to take more, but there's nothing to select between yet,
+    // so there's no transcription_engine setting). Left unset isn't
+    // itself an error: Program.cs logs a warning and falls back to
+    // delivery = "file"'s behavior instead (see docs/voicemail.md).
     [property: TomlPropertyName("transcription_model_path")]
     public string? TranscriptionModelPath { get; init; }
 

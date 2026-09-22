@@ -349,51 +349,6 @@ public class ConfigLoaderTests
     }
 
     [Fact]
-    public void Load_TextDeliveryWithUnknownEngine_Throws()
-    {
-        var modelPath = WriteTempFile("fake-model-bytes");
-        try
-        {
-            var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\ndelivery = \"text\"\n" +
-                $"transcription_engine = \"bogus\"\ntranscription_model_path = \"{EscapeTomlString(modelPath)}\"\n";
-            var path = WriteTempConfig(toml);
-            try
-            {
-                var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
-                Assert.Contains("engine", exception.Message);
-            }
-            finally
-            {
-                File.Delete(path);
-            }
-        }
-        finally
-        {
-            File.Delete(modelPath);
-        }
-    }
-
-    [Fact]
-    public void Load_UnknownTranscriptionEngine_ThrowsEvenUnderAudioDelivery()
-    {
-        // [voicemail].transcription_engine is validated whenever it's set
-        // to something, regardless of the active [voicemail].delivery -
-        // unlike an unconfigured model_path, a bogus engine name is
-        // always a typo, never a legitimate "not set up" choice.
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\ntranscription_engine = \"bogus\"\n";
-        var path = WriteTempConfig(toml);
-        try
-        {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
-            Assert.Contains("engine", exception.Message);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
-    }
-
-    [Fact]
     public void Load_TextDeliveryWithValidModelPath_Succeeds()
     {
         var modelPath = WriteTempFile("fake-model-bytes");
@@ -406,7 +361,6 @@ public class ConfigLoaderTests
             {
                 var config = ConfigLoader.Load(path);
                 Assert.Equal("text", config.Voicemail.Delivery);
-                Assert.Equal("whisper", config.Voicemail.TranscriptionEngine);
                 Assert.Equal("en", config.Voicemail.TranscriptionLanguage);
             }
             finally

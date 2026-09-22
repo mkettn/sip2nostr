@@ -239,11 +239,12 @@ and never touches the backend directly.
 The `"text"` backend's actual transcription sits behind a second,
 independently swappable interface, `Voicemail/IVoicemailTranscriber.cs`
 (`TranscribeAsync(short[] samples, int sampleRate, CancellationToken) ->
-string?`, `null` meaning nothing could be transcribed), selected by
-`[voicemail].transcription_engine`:
+string?`, `null` meaning nothing could be transcribed).
+`Voicemail/WhisperNetTranscriber.cs` is the only implementation today,
+so there's no engine selection setting - just its own requirements:
 
-- `"whisper"` (the only engine today) - `Voicemail/WhisperNetTranscriber.cs`
-  runs [Whisper.net](https://github.com/sandrohanea/whisper.net) (a
+- `Voicemail/WhisperNetTranscriber.cs` runs
+  [Whisper.net](https://github.com/sandrohanea/whisper.net) (a
   whisper.cpp binding) fully offline: no network access and no API key
   at transcription time, just a local GGML model file
   (`[voicemail].transcription_model_path`, required when
@@ -400,8 +401,8 @@ string?`, `null` meaning nothing could be transcribed), selected by
     warning and `FileDeliveryBackend`, not a startup failure, since leaving
     a mode's requirement unset is a valid choice, not a mistake (see
     Delivery backends above); what *is* still checked is whether a present
-    `[voicemail].transcription_engine`/`transcription_model_path` or
-    `[voicemail].blossom_servers` entry is itself well-formed. There's a
+    `[voicemail].transcription_model_path` or `[voicemail].blossom_servers`
+    entry is itself well-formed. There's a
     migration note worth calling out here too (also flagged in
     `config.example.toml`/`README.md`, where an operator upgrading a live
     config is more likely to see it): an older config's

@@ -139,11 +139,7 @@ static IVoicemailTranscriber CreateTranscriber(VoicemailConfig voicemailConfig, 
         ? voicemailConfig.TranscriptionModelPath!
         : Path.GetFullPath(Path.Combine(configDirectory, voicemailConfig.TranscriptionModelPath!));
 
-    return voicemailConfig.TranscriptionEngine switch
-    {
-        "whisper" => new WhisperNetTranscriber(modelPath, voicemailConfig.TranscriptionLanguage, logger.ForContext<WhisperNetTranscriber>()),
-        _ => throw new InvalidOperationException($"Unknown [voicemail].transcription_engine '{voicemailConfig.TranscriptionEngine}'."),
-    };
+    return new WhisperNetTranscriber(modelPath, voicemailConfig.TranscriptionLanguage, logger.ForContext<WhisperNetTranscriber>());
 }
 
 static string? ResolveRunLogPath(string? runFile, string configDirectory)

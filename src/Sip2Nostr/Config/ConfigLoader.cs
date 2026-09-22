@@ -139,12 +139,6 @@ public static class ConfigLoader
             // a value that *is* present but broken - that's always a typo
             // the operator should fix immediately, delivery mode
             // notwithstanding.
-            if (config.Voicemail.TranscriptionEngine != "whisper")
-            {
-                throw new ConfigurationException(
-                    $"[voicemail].transcription_engine \"{config.Voicemail.TranscriptionEngine}\" is not supported - only \"whisper\" is available today.");
-            }
-
             if (!string.IsNullOrWhiteSpace(config.Voicemail.TranscriptionModelPath))
             {
                 var resolvedModelPath = Path.IsPathRooted(config.Voicemail.TranscriptionModelPath)

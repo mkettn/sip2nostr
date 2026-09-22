@@ -181,8 +181,7 @@ delivery = "file"              # or "audio"/"text" - see blossom_servers/transcr
 
 # blossom_servers = ["https://blossom.example.com"]   # consulted when delivery = "audio", or as a "text" fallback on transcription failure; required for delivery = "audio" to actually deliver anything
 
-transcription_engine = "whisper"   # only consulted when delivery = "text"
-# transcription_model_path = "models/ggml-base.en.bin"   # required for delivery = "text" to actually deliver anything
+# transcription_model_path = "models/ggml-base.en.bin"   # only consulted when delivery = "text"; required for it to actually deliver anything
 # transcription_language = "en"                          # optional; auto-detected if unset
 ```
 
