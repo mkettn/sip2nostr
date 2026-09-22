@@ -117,6 +117,17 @@ public sealed class ConfiguredDnsResolver
             return false;
         }
 
+        // int.TryParse above accepts any int, but NameServer's constructor
+        // builds an IPEndPoint, which throws ArgumentOutOfRangeException
+        // for anything outside this range - checked here instead, so an
+        // out-of-range port fails the same clean way a bad address does,
+        // rather than throwing past this method uncaught.
+        if (port is < 1 or > 65535)
+        {
+            failureReason = $"port {port} is outside 1-65535";
+            return false;
+        }
+
         server = new NameServer(ip, port);
         return true;
     }

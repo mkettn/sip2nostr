@@ -149,11 +149,16 @@ public class ConfigLoaderTests
     [InlineData("1.1.1.1:not-a-port")]
     [InlineData("[2606:4700:4700::1111")]
     [InlineData("2606:4700:4700::1111:zz")]
+    [InlineData("1.1.1.1:70000")]
+    [InlineData("1.1.1.1:-1")]
+    [InlineData("1.1.1.1:0")]
     public void Load_DnsResolversInvalidFormat_Throws(string resolver)
     {
-        // A malformed entry must fail cleanly at startup (ConfigurationException),
-        // not crash later inside ConfiguredDnsResolver's field-initializer
-        // construction with an unhandled FormatException.
+        // A malformed entry (including an out-of-range port, which
+        // int.TryParse alone accepts) must fail cleanly at startup
+        // (ConfigurationException), not crash later inside
+        // ConfiguredDnsResolver's field-initializer construction with an
+        // unhandled FormatException/ArgumentOutOfRangeException.
         var toml = $"{MinimalValidToml}\n\n[dns]\nresolvers = [\"{EscapeTomlString(resolver)}\"]\n";
         var path = WriteTempConfig(toml);
         try
