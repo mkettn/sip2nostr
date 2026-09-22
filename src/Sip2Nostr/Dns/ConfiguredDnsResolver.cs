@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Net;
 using DnsClient;
 using Sip2Nostr.Config;
@@ -20,13 +21,8 @@ public sealed class ConfiguredDnsResolver
             return;
         }
 
-        var nameServers = new List<NameServer> { ParseNameServer(config.Resolver) };
-        if (!string.IsNullOrWhiteSpace(config.ResolverFallback))
-        {
-            nameServers.Add(ParseNameServer(config.ResolverFallback));
-        }
-
-        _lookupClient = new LookupClient(new LookupClientOptions(nameServers.ToArray())
+        var nameServers = config.Resolvers.Select(ParseNameServer).ToArray();
+        _lookupClient = new LookupClient(new LookupClientOptions(nameServers)
         {
             Timeout = TimeSpan.FromMilliseconds(config.TimeoutMs),
         });

@@ -81,12 +81,13 @@ public sealed class SipConfig
 // system resolver only when [dns] is absent from config.toml.
 public sealed class DnsConfig
 {
-    [property: TomlPropertyName("resolver")]
+    // Nameservers to query, in order - ConfiguredDnsResolver tries each in
+    // turn (DnsClient.NET's own fallback behavior). ConfigLoader.Validate
+    // rejects an empty list, since [dns] being present at all means at
+    // least one nameserver was intended.
+    [property: TomlPropertyName("resolvers")]
     [property: TomlRequired]
-    public required string Resolver { get; init; }
-
-    [property: TomlPropertyName("resolver_fallback")]
-    public string? ResolverFallback { get; init; }
+    public required List<string> Resolvers { get; init; }
 
     [property: TomlPropertyName("timeout_ms")]
     public int TimeoutMs { get; init; } = 2000;

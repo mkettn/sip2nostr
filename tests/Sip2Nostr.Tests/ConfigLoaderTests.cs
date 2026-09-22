@@ -75,6 +75,54 @@ public class ConfigLoaderTests
         }
     }
 
+    [Fact]
+    public void Load_DnsSectionAbsent_Succeeds()
+    {
+        var path = WriteTempConfig(MinimalValidToml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Null(config.Dns);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_DnsResolversEmpty_Throws()
+    {
+        var toml = $"{MinimalValidToml}\n\n[dns]\nresolvers = []\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains("[dns].resolvers", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_DnsResolversWithFallback_Succeeds()
+    {
+        var toml = $"{MinimalValidToml}\n\n[dns]\nresolvers = [\"1.1.1.1:53\", \"9.9.9.9:53\"]\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal(["1.1.1.1:53", "9.9.9.9:53"], config.Dns!.Resolvers);
+            Assert.Equal(2000, config.Dns.TimeoutMs);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-5)]

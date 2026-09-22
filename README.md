@@ -128,10 +128,9 @@ password = "YOUR_SIP_PASS"
 rtp_port = 8000
 
 [dns]
-# Address of the resolver to use for SIP hostname lookups.
-# Falls back to system resolver if omitted.
-resolver = "1.1.1.1:53"
-resolver_fallback = "9.9.9.9:53"
+# Nameservers to use for SIP hostname lookups, tried in order. Falls back
+# to the system resolver if [dns] is omitted entirely.
+resolvers = ["1.1.1.1:53", "9.9.9.9:53"]
 timeout_ms = 2000
 
 [logging]

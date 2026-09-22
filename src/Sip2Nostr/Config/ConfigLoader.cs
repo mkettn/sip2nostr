@@ -42,6 +42,14 @@ public static class ConfigLoader
     // See docs/voicemail.md for why these fail fast here.
     private static void Validate(AppConfig config)
     {
+        // [TomlRequired] only guarantees the `resolvers` key was present,
+        // not that it's non-empty - an operator who writes [dns] at all
+        // meant to configure at least one nameserver.
+        if (config.Dns is not null && config.Dns.Resolvers.Count == 0)
+        {
+            throw new ConfigurationException("[dns].resolvers must contain at least one entry when [dns] is present.");
+        }
+
         if (config.WebRtc.ConnectionLossGraceSeconds <= 0)
         {
             throw new ConfigurationException(
