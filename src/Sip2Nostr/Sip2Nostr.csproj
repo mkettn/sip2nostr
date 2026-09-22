@@ -34,7 +34,14 @@
     all three into the one executable regardless of which single
     architecture that executable is actually for - it only filters by
     "loadable on this OS" (ELF vs PE vs Mach-O), not by CPU architecture.
-    This drops the other two before they reach that step.
+    This drops the other two Linux architectures before they reach that
+    step. It does NOT touch the same package's win-x64/win-arm64/win-x86/
+    macos-x64/macos-arm64 native libraries or its macOS-only Metal shader
+    resource - those are added the same unconditional way but are never
+    eligible for embedding into a Linux single-file binary in the first
+    place (wrong file format for this OS), so there's nothing to prune
+    them for; release.yml only moves the one binary out of the publish
+    output afterward, so they're simply discarded there regardless.
 
     Forward-compatible with an upstream fix: the Remove below only
     matches items whose TargetPath is exactly "runtimes/linux-*" for a
@@ -53,6 +60,21 @@
       <None Remove="@(None)"
             Condition="$([System.String]::Copy('%(None.TargetPath)').StartsWith('runtimes/linux-')) AND !$([System.String]::Copy('%(None.TargetPath)').StartsWith('runtimes/$(RuntimeIdentifier)/'))" />
     </ItemGroup>
+    <!--
+      Guards against silently shipping a binary with no Whisper native at
+      all for some future linux-* RID this project starts targeting that
+      Whisper.net.Runtime doesn't - the Remove above can't tell "nothing
+      matched because there was nothing to remove" from "nothing matched
+      because there was never anything for this RID to begin with", so
+      check explicitly rather than let that show up only as a runtime
+      "native library not found" the first time delivery = "text" is used.
+    -->
+    <ItemGroup>
+      <_RemainingWhisperNativesForRid Include="@(None)"
+          Condition="$([System.String]::Copy('%(None.TargetPath)').StartsWith('runtimes/$(RuntimeIdentifier)/'))" />
+    </ItemGroup>
+    <Error Condition="'@(_RemainingWhisperNativesForRid)' == ''"
+           Text="Whisper.net.Runtime ships no native library for RuntimeIdentifier '$(RuntimeIdentifier)' - delivery = 'text' would fail to load it at first use instead of failing here at build time. Confirm Whisper.net.Runtime actually supports this RID before adding it to &lt;RuntimeIdentifiers&gt;." />
   </Target>
 
 </Project>
