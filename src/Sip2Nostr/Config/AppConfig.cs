@@ -81,12 +81,17 @@ public sealed class SipConfig
 // system resolver only when [dns] is absent from config.toml.
 public sealed class DnsConfig
 {
-    [property: TomlPropertyName("resolver")]
+    // Nameservers DnsClient.NET's LookupClient may query - it picks among
+    // them per request rather than always preferring the first entry, so
+    // this isn't a strict primary/fallback ordering despite the old
+    // resolver/resolver_fallback naming having implied one. Each entry
+    // must parse as ConfiguredDnsResolver.TryParseNameServer expects
+    // ("ip", "ip:port", or "[ipv6]:port") - ConfigLoader.Validate checks
+    // both that and that the list isn't empty, since [dns] being present
+    // at all means at least one nameserver was intended.
+    [property: TomlPropertyName("resolvers")]
     [property: TomlRequired]
-    public required string Resolver { get; init; }
-
-    [property: TomlPropertyName("resolver_fallback")]
-    public string? ResolverFallback { get; init; }
+    public required List<string> Resolvers { get; init; }
 
     [property: TomlPropertyName("timeout_ms")]
     public int TimeoutMs { get; init; } = 2000;
@@ -273,54 +278,38 @@ public sealed class VoicemailConfig
     // just saved to recordings_dir and a plain-text notice is sent
     // instead, the zero-setup option. "audio" uploads an encrypted copy
     // of the recording to a Blossom server and sends a file message with
-    // the link - requires [voicemail.blossom] below. "text" sends a
-    // transcript instead - requires [voicemail.transcription] below. If
+    // the link - requires blossom_servers below. "text" sends a
+    // transcript instead - requires transcription_model_path below. If
     // "audio"/"text"'s own requirement isn't configured, Program.cs logs
     // a startup warning and falls back to "file"'s behavior instead of
     // failing to start - see docs/voicemail.md.
     [property: TomlPropertyName("delivery")]
     public string Delivery { get; init; } = "file";
 
-    [property: TomlPropertyName("transcription")]
-    public TranscriptionConfig Transcription { get; init; } = new();
-
-    [property: TomlPropertyName("blossom")]
-    public BlossomConfig Blossom { get; init; } = new();
-}
-
-// Only consulted when [voicemail].delivery = "text" - see docs/voicemail.md.
-public sealed class TranscriptionConfig
-{
-    // The only engine today; the interface behind it
-    // (Voicemail/IVoicemailTranscriber.cs) is built to take more.
-    [property: TomlPropertyName("engine")]
-    public string Engine { get; init; } = "whisper";
-
     // Path to a GGML model file (e.g. downloaded via whisper.cpp's
-    // models/download-ggml-model.sh) - the "whisper" engine needs one to
-    // do anything. Left unset isn't itself an error: Program.cs logs a
-    // warning and falls back to [voicemail].delivery = "file"'s behavior
-    // instead (see docs/voicemail.md).
-    [property: TomlPropertyName("model_path")]
-    public string? ModelPath { get; init; }
+    // models/download-ggml-model.sh), consumed by Whisper.net - the only
+    // transcription engine supported (Voicemail/IVoicemailTranscriber.cs
+    // is built to take more, but there's nothing to select between yet,
+    // so there's no transcription_engine setting). Left unset isn't
+    // itself an error: Program.cs logs a warning and falls back to
+    // delivery = "file"'s behavior instead (see docs/voicemail.md).
+    [property: TomlPropertyName("transcription_model_path")]
+    public string? TranscriptionModelPath { get; init; }
 
     // Optional. An ISO 639-1 code (e.g. "en"); unset auto-detects the
     // spoken language per recording, at some accuracy/latency cost.
-    [property: TomlPropertyName("language")]
-    public string? Language { get; init; }
-}
+    [property: TomlPropertyName("transcription_language")]
+    public string? TranscriptionLanguage { get; init; }
 
-// Consulted when [voicemail].delivery = "audio", and also when delivery
-// = "text" and transcription produces nothing (see
-// Voicemail/TranscribedTextDeliveryBackend.cs) - see docs/voicemail.md.
-public sealed class BlossomConfig
-{
+    // Consulted when delivery = "audio", and also when delivery = "text"
+    // and transcription produces nothing (see
+    // Voicemail/TranscribedTextDeliveryBackend.cs) - see docs/voicemail.md.
     // Blossom (BUD-01/BUD-02) server base URLs, tried in order until one
     // accepts the upload. Every entry present must be an absolute
     // http(s) URL - ConfigLoader rejects a malformed one at startup - but
     // an empty list isn't itself an error: Program.cs logs a warning and
-    // falls back to [voicemail].delivery = "file"'s behavior instead
-    // (see docs/voicemail.md).
-    [property: TomlPropertyName("servers")]
-    public List<string> Servers { get; init; } = [];
+    // falls back to delivery = "file"'s behavior instead (see
+    // docs/voicemail.md).
+    [property: TomlPropertyName("blossom_servers")]
+    public List<string> BlossomServers { get; init; } = [];
 }

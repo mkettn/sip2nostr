@@ -9,10 +9,11 @@ password = "YOUR_SIP_PASS"
 rtp_port = 8000
 
 [dns]
-# Address of the resolver to use for SIP hostname lookups.
-# Falls back to system resolver if omitted.
-resolver = "1.1.1.1:53"
-resolver_fallback = "9.9.9.9:53"
+# Nameservers to use for SIP hostname lookups - each entry is an IP,
+# "ip:port", or "[ipv6]:port" (default port 53); DnsClient.NET picks
+# among them per request rather than always preferring the first one.
+# Falls back to the system resolver if [dns] is omitted entirely.
+resolvers = ["1.1.1.1:53", "9.9.9.9:53"]
 timeout_ms = 2000
 
 [logging]
@@ -136,40 +137,36 @@ recording_filename = "{timestamp}-{caller}.opus"
 # "file" (default) - no upload, no transcription: the recording is just
 # saved to recordings_dir above and a plain-text notice is sent instead,
 # the zero-setup option. "audio" AES-GCM encrypts the recording, uploads
-# only the ciphertext to a Blossom server (see [voicemail.blossom]
-# below), and sends a NIP-17 file message with the URL and decryption
-# key - requires at least one entry there. "text" transcribes the
-# recording and sends the transcript instead (see
-# [voicemail.transcription] below) - requires model_path there. If
-# "audio"/"text"'s own requirement isn't configured, sip2nostr logs a
-# startup warning and falls back to "file"'s behavior instead of failing
-# to start - it does not fall back to inlining the recording in the DM.
-# See docs/voicemail.md.
+# only the ciphertext to a Blossom server (see blossom_servers below),
+# and sends a NIP-17 file message with the URL and decryption key -
+# requires at least one entry there. "text" transcribes the recording
+# and sends the transcript instead (see the transcription_* settings
+# below) - requires transcription_model_path. If "audio"/"text"'s own
+# requirement isn't configured, sip2nostr logs a startup warning and
+# falls back to "file"'s behavior instead of failing to start - it does
+# not fall back to inlining the recording in the DM. See
+# docs/voicemail.md.
 delivery = "file"
 
-# Only consulted when [voicemail].delivery = "text".
-[voicemail.transcription]
-# The only engine available today.
-engine = "whisper"
+# Only consulted when delivery = "text" above.
 # Path to a GGML model file, e.g. one downloaded via whisper.cpp's
 # models/download-ggml-model.sh script. Relative to this config file
 # unless rooted. Leaving this unset when delivery = "text" isn't an
-# error - see the [voicemail].delivery comment above.
-# model_path = "models/ggml-base.en.bin"
+# error - see the delivery comment above.
+# transcription_model_path = "models/ggml-base.en.bin"
 # Optional. An ISO 639-1 code (e.g. "en"). Unset auto-detects the spoken
 # language per recording, at some accuracy/latency cost.
-# language = "en"
+# transcription_language = "en"
 
-# Consulted when [voicemail].delivery = "audio", and also when delivery
-# = "text" above and transcription produces nothing - in that case a
+# Consulted when delivery = "audio" above, and also when delivery =
+# "text" above and transcription produces nothing - in that case a
 # Blossom upload is tried before falling back further to a plain-text
 # notice. See docs/voicemail.md.
-[voicemail.blossom]
 # Blossom (BUD-01/BUD-02) server base URLs, tried in order until one
 # accepts the upload. Authenticates every upload as [nostr].bridge_nsec's
 # identity (a signed, time-limited kind 24242 event per BUD-02) - the
 # server never sees the bridge's actual Nostr identity's private key, and
 # never sees the recording's plaintext, only the AES-GCM ciphertext.
 # Leaving this empty when delivery = "audio" isn't an error - see the
-# [voicemail].delivery comment above.
-# servers = ["https://blossom.example.com"]
+# delivery comment above.
+# blossom_servers = ["https://blossom.example.com"]

@@ -1,6 +1,7 @@
 using Nostr.Sdk;
 using Serilog.Events;
 using Tomlyn;
+using Sip2Nostr.Dns;
 using Sip2Nostr.Shared;
 
 namespace Sip2Nostr.Config;
@@ -42,6 +43,30 @@ public static class ConfigLoader
     // See docs/voicemail.md for why these fail fast here.
     private static void Validate(AppConfig config)
     {
+        if (config.Dns is not null)
+        {
+            // [TomlRequired] only guarantees the `resolvers` key was
+            // present, not that it's non-empty - an operator who writes
+            // [dns] at all meant to configure at least one nameserver.
+            if (config.Dns.Resolvers.Count == 0)
+            {
+                throw new ConfigurationException("[dns].resolvers must contain at least one entry when [dns] is present.");
+            }
+
+            // Each entry is parsed again at first use by ConfiguredDnsResolver
+            // (SipCallSource's field initializer) - checking format here
+            // turns a malformed entry into a clean startup failure instead
+            // of an unhandled FormatException surfacing as a full-trace
+            // crash from deep inside call setup.
+            foreach (var resolver in config.Dns.Resolvers)
+            {
+                if (!ConfiguredDnsResolver.TryParseNameServer(resolver, out _, out var failureReason))
+                {
+                    throw new ConfigurationException($"[dns].resolvers entry \"{resolver}\" is invalid: {failureReason}");
+                }
+            }
+        }
+
         if (config.WebRtc.ConnectionLossGraceSeconds <= 0)
         {
             throw new ConfigurationException(
@@ -55,8 +80,7 @@ public static class ConfigLoader
         ValidateLoggingLevel("console_level", config.Logging.ConsoleLevel);
         ValidateLoggingLevel("file_level", config.Logging.FileLevel);
 
-        // Every check in this block names a [voicemail] (or
-        // [voicemail.transcription]/[voicemail.blossom]) setting that's
+        // Every check in this block names a [voicemail] setting that's
         // only ever read when voicemail itself is on: ring_timeout_seconds
         // and max_recording_seconds by NosCallSink/VoicemailSink,
         // opus_resampler_quality and recording_filename by
@@ -140,32 +164,26 @@ public static class ConfigLoader
             // a value that *is* present but broken - that's always a typo
             // the operator should fix immediately, delivery mode
             // notwithstanding.
-            if (config.Voicemail.Transcription.Engine != "whisper")
+            if (!string.IsNullOrWhiteSpace(config.Voicemail.TranscriptionModelPath))
             {
-                throw new ConfigurationException(
-                    $"[voicemail.transcription].engine \"{config.Voicemail.Transcription.Engine}\" is not supported - only \"whisper\" is available today.");
-            }
-
-            if (!string.IsNullOrWhiteSpace(config.Voicemail.Transcription.ModelPath))
-            {
-                var resolvedModelPath = Path.IsPathRooted(config.Voicemail.Transcription.ModelPath)
-                    ? config.Voicemail.Transcription.ModelPath
-                    : Path.GetFullPath(Path.Combine(config.ConfigDirectory, config.Voicemail.Transcription.ModelPath));
+                var resolvedModelPath = Path.IsPathRooted(config.Voicemail.TranscriptionModelPath)
+                    ? config.Voicemail.TranscriptionModelPath
+                    : Path.GetFullPath(Path.Combine(config.ConfigDirectory, config.Voicemail.TranscriptionModelPath));
                 if (!File.Exists(resolvedModelPath))
                 {
                     throw new ConfigurationException(
-                        $"[voicemail.transcription].model_path \"{config.Voicemail.Transcription.ModelPath}\" resolved to " +
+                        $"[voicemail].transcription_model_path \"{config.Voicemail.TranscriptionModelPath}\" resolved to " +
                         $"\"{resolvedModelPath}\", but no file exists there.");
                 }
             }
 
-            foreach (var server in config.Voicemail.Blossom.Servers)
+            foreach (var server in config.Voicemail.BlossomServers)
             {
                 if (!Uri.TryCreate(server, UriKind.Absolute, out var serverUri) ||
                     (serverUri.Scheme != Uri.UriSchemeHttp && serverUri.Scheme != Uri.UriSchemeHttps))
                 {
                     throw new ConfigurationException(
-                        $"[voicemail.blossom].servers entry \"{server}\" is not a valid absolute http(s) URL.");
+                        $"[voicemail].blossom_servers entry \"{server}\" is not a valid absolute http(s) URL.");
                 }
             }
         }

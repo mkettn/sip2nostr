@@ -7,7 +7,7 @@ namespace Sip2Nostr.Voicemail;
 
 // Offline speech-to-text via Whisper.net (a whisper.cpp binding) - no
 // network access and no API key at transcription time, just a local
-// GGML model file ([voicemail.transcription].model_path). whisper.cpp
+// GGML model file ([voicemail].transcription_model_path). whisper.cpp
 // expects 16 kHz mono float samples in [-1, 1]; voicemail recordings are
 // 8 kHz PCM (G.711's rate), so this resamples before handing samples
 // over - SIPSorcery.Media.PcmResampler is already a project dependency,

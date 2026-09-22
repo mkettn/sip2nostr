@@ -87,7 +87,7 @@ public sealed class AudioDeliveryBackend(
         {
             logger.Warning(
                 lastFailure,
-                "All {Count} configured [voicemail.blossom].servers rejected the upload for call {CallId}; sending a notice instead.",
+                "All {Count} configured [voicemail].blossom_servers rejected the upload for call {CallId}; sending a notice instead.",
                 servers.Count,
                 job.CallId);
             return await _fallback.BuildContentAsync(job, ct);
@@ -121,7 +121,7 @@ public sealed class AudioDeliveryBackend(
         // Not new Uri(server, "upload") - relative URI combination drops
         // the last path segment of a server URL with no trailing slash
         // (e.g. ".../api" + "upload" => ".../upload", silently losing
-        // "/api"), which a configured [voicemail.blossom].servers entry
+        // "/api"), which a configured [voicemail].blossom_servers entry
         // has no reason to have but shouldn't be able to break like this.
         var uploadUrl = new Uri($"{server.ToString().TrimEnd('/')}/upload");
         using var request = new HttpRequestMessage(HttpMethod.Put, uploadUrl)
