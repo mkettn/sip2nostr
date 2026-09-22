@@ -110,6 +110,190 @@ public class ConfigLoaderTests
     }
 
     [Fact]
+    public void Load_DefaultLoggingConsoleLevelIsWarning_Succeeds()
+    {
+        var path = WriteTempConfig(MinimalValidToml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal("warning", config.Logging.ConsoleLevel);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_DefaultLoggingFileLevelIsInformation_Succeeds()
+    {
+        var path = WriteTempConfig(MinimalValidToml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal("information", config.Logging.FileLevel);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_DefaultLoggingConsoleQuietIsFalse_Succeeds()
+    {
+        var path = WriteTempConfig(MinimalValidToml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.False(config.Logging.ConsoleQuiet);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_LoggingConsoleQuietTrue_Succeeds()
+    {
+        var toml = $"{MinimalValidToml}\n\n[logging]\nconsole_quiet = true\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.True(config.Logging.ConsoleQuiet);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_DefaultLoggingConsoleTimestampsIsTrue_Succeeds()
+    {
+        var path = WriteTempConfig(MinimalValidToml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.True(config.Logging.ConsoleTimestamps);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_LoggingConsoleTimestampsFalse_Succeeds()
+    {
+        var toml = $"{MinimalValidToml}\n\n[logging]\nconsole_timestamps = false\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.False(config.Logging.ConsoleTimestamps);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("verbose")]
+    [InlineData("Debug")]
+    [InlineData("INFORMATION")]
+    [InlineData("Warning")]
+    [InlineData("error")]
+    [InlineData("fatal")]
+    public void Load_ValidLoggingConsoleLevel_Succeeds(string level)
+    {
+        var toml = $"{MinimalValidToml}\n\n[logging]\nconsole_level = \"{level}\"\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal(level, config.Logging.ConsoleLevel);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("warn")]
+    [InlineData("bogus")]
+    [InlineData("")]
+    // Enum.TryParse alone accepts these as the numeric form of a
+    // LogEventLevel value - "3" is the defined Warning, "99" isn't a
+    // member at all - so name-matching (not Enum.TryParse/IsDefined) is
+    // needed to reject both; "99" in particular would otherwise silently
+    // produce a bridge that logs nothing, ever, since Serilog has nothing
+    // at or above level 99.
+    [InlineData("3")]
+    [InlineData("99")]
+    public void Load_InvalidLoggingConsoleLevel_Throws(string level)
+    {
+        var toml = $"{MinimalValidToml}\n\n[logging]\nconsole_level = \"{level}\"\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains("[logging].console_level", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("verbose")]
+    [InlineData("Debug")]
+    [InlineData("INFORMATION")]
+    [InlineData("Warning")]
+    [InlineData("error")]
+    [InlineData("fatal")]
+    public void Load_ValidLoggingFileLevel_Succeeds(string level)
+    {
+        var toml = $"{MinimalValidToml}\n\n[logging]\nfile_level = \"{level}\"\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal(level, config.Logging.FileLevel);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("warn")]
+    [InlineData("bogus")]
+    [InlineData("")]
+    [InlineData("3")]
+    [InlineData("99")]
+    public void Load_InvalidLoggingFileLevel_Throws(string level)
+    {
+        var toml = $"{MinimalValidToml}\n\n[logging]\nfile_level = \"{level}\"\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains("[logging].file_level", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Load_InvalidDeliveryValue_Throws()
     {
         var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\ndelivery = \"bogus\"\n";

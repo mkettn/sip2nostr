@@ -16,10 +16,37 @@ resolver_fallback = "9.9.9.9:53"
 timeout_ms = 2000
 
 [logging]
-# Optional: write each process run to its own log file.
+# Optional: write each process run to its own log file, independent of
+# console_level below.
 # Relative paths are resolved next to this config file. If the path does
 # not include {timestamp} or {run}, a timestamp is added before the extension.
-run_file = "logs/sip2nostr-{timestamp}.log"
+file = "logs/sip2nostr-{timestamp}.log"
+# Minimum level for the console, case-insensitive: "verbose", "debug",
+# "information", "warning", "error", or "fatal". Defaults to "warning" -
+# turn this down to "information" or "debug" when troubleshooting.
+console_level = "warning"
+# Minimum level for the file above (only takes effect when `file` is
+# set) - same names as console_level, but independent of it. Defaults to
+# "information", louder than console_level's own "warning" default: a
+# fresh timestamped log per run exists specifically for after-the-fact
+# troubleshooting, so it shouldn't come up empty just because the console
+# was left quiet at the time.
+file_level = "information"
+# Optional: suppress the one-time "sip2nostr running. Press Ctrl+C to
+# exit." startup line on stdout. Separate from `console_level` above -
+# that line isn't a log event a level can filter, it's a plain print for
+# whoever's watching a foreground terminal. Set true for a
+# supervised/scripted run (systemd, a service manager) where nothing
+# should print absent a real problem.
+console_quiet = false
+# Optional: include a leading timestamp on console log lines. Defaults to
+# true. Set false when something else is already stamping captured
+# output - e.g. running under systemd, where journald timestamps every
+# line on arrival regardless of its content, so leaving this on gives
+# every console line two timestamps (journalctl's own plus this one)
+# instead of one. The file's own timestamp is unaffected either way - it
+# has no other record of when something happened once the process exits.
+console_timestamps = true
 
 [[lines]]
 uri = "sip:+4989123456@sip.your-provider.de"

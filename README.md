@@ -138,7 +138,14 @@ timeout_ms = 2000
 # Optional: write each process run to its own log file.
 # Relative paths are resolved next to this config file. If the path does
 # not include {timestamp} or {run}, a timestamp is added before the extension.
-run_file = "logs/sip2nostr-{timestamp}.log"
+file = "logs/sip2nostr-{timestamp}.log"
+console_level = "warning"       # or "verbose"/"debug"/"information"/"error"/"fatal" - default shown
+file_level = "information"      # same values, independent of console_level, only used when `file` is set - default shown
+console_quiet = false           # true suppresses the startup "running, press Ctrl+C" stdout line
+# Includes a leading timestamp on console lines (the file always keeps
+# its own regardless). Set false under systemd/journald - it stamps every
+# captured line on arrival anyway, so leaving this on double-stamps them.
+console_timestamps = true
 
 [[lines]]
 uri = "sip:+4989123456@sip.your-provider.de"
