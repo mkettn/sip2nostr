@@ -7,12 +7,12 @@ namespace Sip2Nostr.Voicemail;
 // every mode does, unconditionally, before a delivery backend ever runs
 // - see Sinks/VoicemailSink.cs) and a plain-text notice goes out instead
 // of the recording itself, for the operator to fetch and play by hand.
-// The zero-setup option: nothing here needs [voicemail.blossom] or
-// [voicemail.transcription] configured.
+// The zero-setup option: nothing here needs blossom_servers or
+// the transcription_* settings configured.
 //
 // Also what Program.cs falls back to, with a logged warning, when
 // delivery = "audio"/"text" is selected but that mode's own requirement
-// ([voicemail.blossom].servers / [voicemail.transcription].model_path)
+// ([voicemail].blossom_servers / [voicemail].transcription_model_path)
 // isn't configured - see docs/voicemail.md.
 //
 // "File" names this mode's behavior (the recording stays a local file,

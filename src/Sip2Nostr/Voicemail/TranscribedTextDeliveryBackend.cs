@@ -18,7 +18,7 @@ namespace Sip2Nostr.Voicemail;
 //
 // When transcription produces nothing, audioFallback (an
 // AudioDeliveryBackend, wired up by Program.cs whenever
-// [voicemail.blossom].servers is configured - regardless of the
+// [voicemail].blossom_servers is configured - regardless of the
 // top-level delivery mode) delivers the recording as a Blossom upload
 // instead of a plain-text notice, so a transcription failure degrades to
 // "you get the audio" rather than "you get nothing." A failure in

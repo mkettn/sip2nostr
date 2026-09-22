@@ -55,8 +55,7 @@ public static class ConfigLoader
         ValidateLoggingLevel("console_level", config.Logging.ConsoleLevel);
         ValidateLoggingLevel("file_level", config.Logging.FileLevel);
 
-        // Every check in this block names a [voicemail] (or
-        // [voicemail.transcription]/[voicemail.blossom]) setting that's
+        // Every check in this block names a [voicemail] setting that's
         // only ever read when voicemail itself is on: ring_timeout_seconds
         // and max_recording_seconds by NosCallSink/VoicemailSink,
         // opus_resampler_quality and recording_filename by
@@ -140,32 +139,32 @@ public static class ConfigLoader
             // a value that *is* present but broken - that's always a typo
             // the operator should fix immediately, delivery mode
             // notwithstanding.
-            if (config.Voicemail.Transcription.Engine != "whisper")
+            if (config.Voicemail.TranscriptionEngine != "whisper")
             {
                 throw new ConfigurationException(
-                    $"[voicemail.transcription].engine \"{config.Voicemail.Transcription.Engine}\" is not supported - only \"whisper\" is available today.");
+                    $"[voicemail].transcription_engine \"{config.Voicemail.TranscriptionEngine}\" is not supported - only \"whisper\" is available today.");
             }
 
-            if (!string.IsNullOrWhiteSpace(config.Voicemail.Transcription.ModelPath))
+            if (!string.IsNullOrWhiteSpace(config.Voicemail.TranscriptionModelPath))
             {
-                var resolvedModelPath = Path.IsPathRooted(config.Voicemail.Transcription.ModelPath)
-                    ? config.Voicemail.Transcription.ModelPath
-                    : Path.GetFullPath(Path.Combine(config.ConfigDirectory, config.Voicemail.Transcription.ModelPath));
+                var resolvedModelPath = Path.IsPathRooted(config.Voicemail.TranscriptionModelPath)
+                    ? config.Voicemail.TranscriptionModelPath
+                    : Path.GetFullPath(Path.Combine(config.ConfigDirectory, config.Voicemail.TranscriptionModelPath));
                 if (!File.Exists(resolvedModelPath))
                 {
                     throw new ConfigurationException(
-                        $"[voicemail.transcription].model_path \"{config.Voicemail.Transcription.ModelPath}\" resolved to " +
+                        $"[voicemail].transcription_model_path \"{config.Voicemail.TranscriptionModelPath}\" resolved to " +
                         $"\"{resolvedModelPath}\", but no file exists there.");
                 }
             }
 
-            foreach (var server in config.Voicemail.Blossom.Servers)
+            foreach (var server in config.Voicemail.BlossomServers)
             {
                 if (!Uri.TryCreate(server, UriKind.Absolute, out var serverUri) ||
                     (serverUri.Scheme != Uri.UriSchemeHttp && serverUri.Scheme != Uri.UriSchemeHttps))
                 {
                     throw new ConfigurationException(
-                        $"[voicemail.blossom].servers entry \"{server}\" is not a valid absolute http(s) URL.");
+                        $"[voicemail].blossom_servers entry \"{server}\" is not a valid absolute http(s) URL.");
                 }
             }
         }

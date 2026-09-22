@@ -85,10 +85,10 @@ static IVoicemailDeliveryBackend CreateVoicemailDeliveryBackend(AppConfig config
 
     if (config.Voicemail.Delivery == "text")
     {
-        if (string.IsNullOrWhiteSpace(config.Voicemail.Transcription.ModelPath))
+        if (string.IsNullOrWhiteSpace(config.Voicemail.TranscriptionModelPath))
         {
             logger.Warning(
-                "[voicemail].delivery is \"text\" but [voicemail.transcription].model_path is not set; " +
+                "[voicemail].delivery is \"text\" but [voicemail].transcription_model_path is not set; " +
                 "voicemails will be saved to recordings_dir only, not delivered over Nostr.");
             return new FileDeliveryBackend();
         }
@@ -98,10 +98,10 @@ static IVoicemailDeliveryBackend CreateVoicemailDeliveryBackend(AppConfig config
 
     if (config.Voicemail.Delivery == "audio")
     {
-        if (config.Voicemail.Blossom.Servers.Count == 0)
+        if (config.Voicemail.BlossomServers.Count == 0)
         {
             logger.Warning(
-                "[voicemail].delivery is \"audio\" but [voicemail.blossom].servers is empty; " +
+                "[voicemail].delivery is \"audio\" but [voicemail].blossom_servers is empty; " +
                 "voicemails will be saved to recordings_dir only, not delivered over Nostr.");
             return new FileDeliveryBackend();
         }
@@ -116,33 +116,33 @@ static IVoicemailDeliveryBackend CreateVoicemailDeliveryBackend(AppConfig config
 
 static AudioDeliveryBackend CreateAudioDeliveryBackend(AppConfig config, ILogger logger)
 {
-    var servers = config.Voicemail.Blossom.Servers.Select(s => new Uri(s)).ToList();
+    var servers = config.Voicemail.BlossomServers.Select(s => new Uri(s)).ToList();
     return new AudioDeliveryBackend(servers, config.Nostr, logger.ForContext<AudioDeliveryBackend>());
 }
 
 // The audio fallback (see Voicemail/TranscribedTextDeliveryBackend.cs) is
-// only wired up when [voicemail.blossom].servers is actually configured -
+// only wired up when [voicemail].blossom_servers is actually configured -
 // otherwise a transcription failure keeps its own plain-text-notice
 // fallback, not a new dependency nobody asked for.
 static TranscribedTextDeliveryBackend CreateTextDeliveryBackend(AppConfig config, ILogger logger)
 {
-    var transcriber = CreateTranscriber(config.Voicemail.Transcription, config.ConfigDirectory, logger);
-    IVoicemailDeliveryBackend? audioFallback = config.Voicemail.Blossom.Servers.Count > 0
+    var transcriber = CreateTranscriber(config.Voicemail, config.ConfigDirectory, logger);
+    IVoicemailDeliveryBackend? audioFallback = config.Voicemail.BlossomServers.Count > 0
         ? CreateAudioDeliveryBackend(config, logger)
         : null;
     return new TranscribedTextDeliveryBackend(transcriber, audioFallback, logger.ForContext<TranscribedTextDeliveryBackend>());
 }
 
-static IVoicemailTranscriber CreateTranscriber(TranscriptionConfig transcriptionConfig, string configDirectory, ILogger logger)
+static IVoicemailTranscriber CreateTranscriber(VoicemailConfig voicemailConfig, string configDirectory, ILogger logger)
 {
-    var modelPath = Path.IsPathRooted(transcriptionConfig.ModelPath!)
-        ? transcriptionConfig.ModelPath!
-        : Path.GetFullPath(Path.Combine(configDirectory, transcriptionConfig.ModelPath!));
+    var modelPath = Path.IsPathRooted(voicemailConfig.TranscriptionModelPath!)
+        ? voicemailConfig.TranscriptionModelPath!
+        : Path.GetFullPath(Path.Combine(configDirectory, voicemailConfig.TranscriptionModelPath!));
 
-    return transcriptionConfig.Engine switch
+    return voicemailConfig.TranscriptionEngine switch
     {
-        "whisper" => new WhisperNetTranscriber(modelPath, transcriptionConfig.Language, logger.ForContext<WhisperNetTranscriber>()),
-        _ => throw new InvalidOperationException($"Unknown [voicemail.transcription] engine '{transcriptionConfig.Engine}'."),
+        "whisper" => new WhisperNetTranscriber(modelPath, voicemailConfig.TranscriptionLanguage, logger.ForContext<WhisperNetTranscriber>()),
+        _ => throw new InvalidOperationException($"Unknown [voicemail].transcription_engine '{voicemailConfig.TranscriptionEngine}'."),
     };
 }
 

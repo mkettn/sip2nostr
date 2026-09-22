@@ -153,15 +153,15 @@ failing to start or trying to inline the recording:
   backend runs: `VoicemailSink` always saves it to `recordings_dir`,
   regardless of `delivery`. This backend just sends a plain-text notice
   naming the caller, and points at the bridge for retrieval - the
-  zero-setup option, needing neither `[voicemail.blossom]` nor
-  `[voicemail.transcription]`.
+  zero-setup option, needing neither `blossom_servers` nor the
+  `transcription_*` settings.
 - `"audio"` - `Voicemail/AudioDeliveryBackend.cs` reads the recording
   (already Opus - `VoicemailSink` encodes it when saving, not this
   backend), AES-256-GCM encrypts it with a freshly generated key and
   nonce, and uploads only the ciphertext (the server never sees the
   plaintext, or the bridge's actual Nostr key beyond a signed auth event)
   to a [Blossom](https://github.com/hzrd149/blossom) (BUD-01/BUD-02)
-  server from `[voicemail.blossom].servers` - tried in order until one
+  server from `[voicemail].blossom_servers` - tried in order until one
   accepts it. It then sends a NIP-17 **kind 15** file message: `content`
   is the uploaded URL, tags carry `decryption-key`/`decryption-nonce`
   (hex-encoded), `encryption-algorithm` (`aes-gcm`), `x`/`ox` (sha256 of
@@ -184,7 +184,7 @@ failing to start or trying to inline the recording:
   a failed upload is a routine failure to plan for here (a third-party
   HTTP server, DNS, and TLS are all now in the path), not the rare edge
   case a dropped job would suggest. Requires at least one entry in
-  `[voicemail.blossom].servers`.
+  `[voicemail].blossom_servers`.
 - `"text"` - `Voicemail/TranscribedTextDeliveryBackend.cs` transcribes
   `VoicemailAudioJob.Samples` - the original recorded PCM, carried on the
   job alongside `OpusPath` rather than decoded back out of the saved
@@ -198,11 +198,11 @@ failing to start or trying to inline the recording:
   than any real voicemail would, so the check guards against that rather
   than being trusted to never trigger. If nothing could be transcribed
   (silence, an engine failure), the backend falls back to
-  `[voicemail.blossom]` (the same encrypted upload `"audio"` uses) when
+  `blossom_servers` (the same encrypted upload `"audio"` uses) when
   it's configured, or `"file"`'s plain-text notice otherwise; a failure
   in the fallback itself falls through to that same notice too, so a
   transcription failure never ends up with nothing sent at all. Requires
-  `[voicemail.transcription].model_path`.
+  `[voicemail].transcription_model_path`.
 
 Recording length is no longer bound by what fits inside a single NIP-17
 message the way it would be if the recording were inlined as a base64
@@ -240,13 +240,13 @@ The `"text"` backend's actual transcription sits behind a second,
 independently swappable interface, `Voicemail/IVoicemailTranscriber.cs`
 (`TranscribeAsync(short[] samples, int sampleRate, CancellationToken) ->
 string?`, `null` meaning nothing could be transcribed), selected by
-`[voicemail.transcription].engine`:
+`[voicemail].transcription_engine`:
 
 - `"whisper"` (the only engine today) - `Voicemail/WhisperNetTranscriber.cs`
   runs [Whisper.net](https://github.com/sandrohanea/whisper.net) (a
   whisper.cpp binding) fully offline: no network access and no API key
   at transcription time, just a local GGML model file
-  (`[voicemail.transcription].model_path`, required when
+  (`[voicemail].transcription_model_path`, required when
   `delivery = "text"` - `ConfigLoader` checks the file exists at
   startup). whisper.cpp expects 16 kHz mono float samples in `[-1, 1]`;
   `TranscribedTextDeliveryBackend` hands over `VoicemailAudioJob.Samples`
@@ -254,7 +254,7 @@ string?`, `null` meaning nothing could be transcribed), selected by
   resamples via `SIPSorcery.Media.PcmResampler`
   (already a project dependency, so no new one is needed just for that)
   and converts to `float` before handing samples to Whisper.
-  `[voicemail.transcription].language` pins the spoken language (e.g.
+  `[voicemail].transcription_language` pins the spoken language (e.g.
   `"en"`); left unset, Whisper auto-detects it per recording.
 
 ## Implementation
@@ -372,8 +372,8 @@ string?`, `null` meaning nothing could be transcribed), selected by
     and calls `VoicemailSender.Enqueue` - it has no Nostr.Sdk dependency
     at all, so nothing in the call-handling path blocks on relay
     connectivity or a publish.
-  - Every `[voicemail]`/`[voicemail.transcription]`/`[voicemail.blossom]`
-    check below runs inside a single `if (config.Voicemail.Enabled)` block
+  - Every `[voicemail]` check below (including its `transcription_*` and
+    `blossom_servers` settings) runs inside a single `if (config.Voicemail.Enabled)` block
     in `Config/ConfigLoader.cs`, the same way `ValidateBridgeIdentity`/
     `ValidateTargetAndRelays` further down the same file are gated on
     `[nostr].enabled`: every setting these checks cover is only ever read
@@ -394,14 +394,14 @@ string?`, `null` meaning nothing could be transcribed), selected by
     while recording, not a size budget, so a value that would buffer more
     than intended fails at startup rather than only after a caller has
     already left a message. Whether the configured `delivery` mode's own
-    requirement (`[voicemail.transcription].model_path` for `"text"`,
-    `[voicemail.blossom].servers` for `"audio"`) is actually configured is
+    requirement (`[voicemail].transcription_model_path` for `"text"`,
+    `[voicemail].blossom_servers` for `"audio"`) is actually configured is
     deliberately *not* checked here - `Program.cs` handles that with a
     warning and `FileDeliveryBackend`, not a startup failure, since leaving
     a mode's requirement unset is a valid choice, not a mistake (see
     Delivery backends above); what *is* still checked is whether a present
-    `[voicemail.transcription].engine`/`model_path` or
-    `[voicemail.blossom].servers` entry is itself well-formed. There's a
+    `[voicemail].transcription_engine`/`transcription_model_path` or
+    `[voicemail].blossom_servers` entry is itself well-formed. There's a
     migration note worth calling out here too (also flagged in
     `config.example.toml`/`README.md`, where an operator upgrading a live
     config is more likely to see it): an older config's

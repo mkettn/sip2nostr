@@ -66,7 +66,7 @@ public class ConfigLoaderTests
             Assert.Equal("{timestamp}-{caller}.opus", config.Voicemail.RecordingFilename);
             Assert.Equal(VoicemailBudget.MaxRecordingSeconds, config.Voicemail.MaxRecordingSeconds);
             Assert.Equal(VoicemailBudget.OpusResamplerQuality, config.Voicemail.OpusResamplerQuality);
-            Assert.Empty(config.Voicemail.Blossom.Servers);
+            Assert.Empty(config.Voicemail.BlossomServers);
             Assert.Equal(15, config.WebRtc.ConnectionLossGraceSeconds);
         }
         finally
@@ -312,7 +312,7 @@ public class ConfigLoaderTests
     [Fact]
     public void Load_TextDeliveryWithoutModelPath_Succeeds()
     {
-        // Leaving [voicemail.transcription].model_path unset when
+        // Leaving [voicemail].transcription_model_path unset when
         // delivery = "text" isn't a ConfigLoader-level mistake - it's a
         // valid choice not to set transcription up. Program.cs is what
         // reacts to it (a startup warning, falling back to
@@ -323,7 +323,7 @@ public class ConfigLoaderTests
         {
             var config = ConfigLoader.Load(path);
             Assert.Equal("text", config.Voicemail.Delivery);
-            Assert.Null(config.Voicemail.Transcription.ModelPath);
+            Assert.Null(config.Voicemail.TranscriptionModelPath);
         }
         finally
         {
@@ -334,8 +334,8 @@ public class ConfigLoaderTests
     [Fact]
     public void Load_TextDeliveryWithMissingModelFile_Throws()
     {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\ndelivery = \"text\"\n\n" +
-            "[voicemail.transcription]\nmodel_path = \"does-not-exist.bin\"\n";
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\ndelivery = \"text\"\n" +
+            "transcription_model_path = \"does-not-exist.bin\"\n";
         var path = WriteTempConfig(toml);
         try
         {
@@ -354,8 +354,8 @@ public class ConfigLoaderTests
         var modelPath = WriteTempFile("fake-model-bytes");
         try
         {
-            var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\ndelivery = \"text\"\n\n" +
-                $"[voicemail.transcription]\nengine = \"bogus\"\nmodel_path = \"{EscapeTomlString(modelPath)}\"\n";
+            var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\ndelivery = \"text\"\n" +
+                $"transcription_engine = \"bogus\"\ntranscription_model_path = \"{EscapeTomlString(modelPath)}\"\n";
             var path = WriteTempConfig(toml);
             try
             {
@@ -376,11 +376,11 @@ public class ConfigLoaderTests
     [Fact]
     public void Load_UnknownTranscriptionEngine_ThrowsEvenUnderAudioDelivery()
     {
-        // [voicemail.transcription].engine is validated whenever it's set
+        // [voicemail].transcription_engine is validated whenever it's set
         // to something, regardless of the active [voicemail].delivery -
         // unlike an unconfigured model_path, a bogus engine name is
         // always a typo, never a legitimate "not set up" choice.
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\n\n[voicemail.transcription]\nengine = \"bogus\"\n";
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\ntranscription_engine = \"bogus\"\n";
         var path = WriteTempConfig(toml);
         try
         {
@@ -399,15 +399,15 @@ public class ConfigLoaderTests
         var modelPath = WriteTempFile("fake-model-bytes");
         try
         {
-            var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"text\"\n\n" +
-                $"[voicemail.transcription]\nmodel_path = \"{EscapeTomlString(modelPath)}\"\nlanguage = \"en\"\n";
+            var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"text\"\n" +
+                $"transcription_model_path = \"{EscapeTomlString(modelPath)}\"\ntranscription_language = \"en\"\n";
             var path = WriteTempConfig(toml);
             try
             {
                 var config = ConfigLoader.Load(path);
                 Assert.Equal("text", config.Voicemail.Delivery);
-                Assert.Equal("whisper", config.Voicemail.Transcription.Engine);
-                Assert.Equal("en", config.Voicemail.Transcription.Language);
+                Assert.Equal("whisper", config.Voicemail.TranscriptionEngine);
+                Assert.Equal("en", config.Voicemail.TranscriptionLanguage);
             }
             finally
             {
@@ -499,7 +499,7 @@ public class ConfigLoaderTests
     public void Load_AudioDeliveryWithoutBlossomServers_Succeeds()
     {
         // Same reasoning as Load_TextDeliveryWithoutModelPath_Succeeds:
-        // an empty [voicemail.blossom].servers under delivery = "audio"
+        // an empty [voicemail].blossom_servers under delivery = "audio"
         // isn't a mistake ConfigLoader should block startup over -
         // Program.cs degrades to FileDeliveryBackend instead.
         var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"audio\"\n";
@@ -508,7 +508,7 @@ public class ConfigLoaderTests
         {
             var config = ConfigLoader.Load(path);
             Assert.Equal("audio", config.Voicemail.Delivery);
-            Assert.Empty(config.Voicemail.Blossom.Servers);
+            Assert.Empty(config.Voicemail.BlossomServers);
         }
         finally
         {
@@ -519,14 +519,14 @@ public class ConfigLoaderTests
     [Fact]
     public void Load_AudioDeliveryWithBlossomServers_Succeeds()
     {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"audio\"\n\n[voicemail.blossom]\n" +
-            "servers = [\"https://blossom.example.com\", \"https://blossom2.example.com\"]\n";
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"audio\"\n" +
+            "blossom_servers = [\"https://blossom.example.com\", \"https://blossom2.example.com\"]\n";
         var path = WriteTempConfig(toml);
         try
         {
             var config = ConfigLoader.Load(path);
             Assert.Equal("audio", config.Voicemail.Delivery);
-            Assert.Equal(["https://blossom.example.com", "https://blossom2.example.com"], config.Voicemail.Blossom.Servers);
+            Assert.Equal(["https://blossom.example.com", "https://blossom2.example.com"], config.Voicemail.BlossomServers);
         }
         finally
         {
@@ -540,13 +540,13 @@ public class ConfigLoaderTests
     [InlineData("blossom.example.com")]
     public void Load_BlossomServerInvalidUrl_Throws(string server)
     {
-        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\n\n" +
-            $"[voicemail.blossom]\nservers = [\"{EscapeTomlString(server)}\"]\n";
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\n" +
+            $"blossom_servers = [\"{EscapeTomlString(server)}\"]\n";
         var path = WriteTempConfig(toml);
         try
         {
             var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
-            Assert.Contains("[voicemail.blossom].servers", exception.Message);
+            Assert.Contains("[voicemail].blossom_servers", exception.Message);
         }
         finally
         {
@@ -557,20 +557,20 @@ public class ConfigLoaderTests
     [Fact]
     public void Load_BlossomServersValidatedAsTextDeliveryFallback_Throws()
     {
-        // [voicemail.blossom].servers can be configured purely as a
+        // [voicemail].blossom_servers can be configured purely as a
         // fallback under delivery = "text" - a malformed entry there
         // should still fail at startup, not just under delivery = "audio".
         var modelPath = WriteTempFile("fake-model-bytes");
         try
         {
-            var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\ndelivery = \"text\"\n\n" +
-                $"[voicemail.transcription]\nmodel_path = \"{EscapeTomlString(modelPath)}\"\n\n" +
-                "[voicemail.blossom]\nservers = [\"not a url\"]\n";
+            var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\ndelivery = \"text\"\n" +
+                $"transcription_model_path = \"{EscapeTomlString(modelPath)}\"\n" +
+                "blossom_servers = [\"not a url\"]\n";
             var path = WriteTempConfig(toml);
             try
             {
                 var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
-                Assert.Contains("[voicemail.blossom].servers", exception.Message);
+                Assert.Contains("[voicemail].blossom_servers", exception.Message);
             }
             finally
             {

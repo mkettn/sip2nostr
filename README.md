@@ -177,15 +177,13 @@ ring_timeout_seconds = 20
 max_recording_seconds = 600    # replaces the old max_text_recording_seconds; drop that key if your config still has it
 # greeting_sound = "sounds/greeting.opus"   # optional; a short tone plays if unset
 # dm_relays = ["wss://dm-relay.example.com"] # optional; defaults to [nostr].relays
-delivery = "file"              # or "audio"/"text" - see [voicemail.blossom]/[voicemail.transcription] below
+delivery = "file"              # or "audio"/"text" - see blossom_servers/transcription_* below
 
-[voicemail.blossom]            # consulted when delivery = "audio", or as a "text" fallback on transcription failure
-# servers = ["https://blossom.example.com"]   # required for delivery = "audio" to actually deliver anything
+# blossom_servers = ["https://blossom.example.com"]   # consulted when delivery = "audio", or as a "text" fallback on transcription failure; required for delivery = "audio" to actually deliver anything
 
-[voicemail.transcription]      # only consulted when delivery = "text"
-engine = "whisper"
-# model_path = "models/ggml-base.en.bin"   # required for delivery = "text" to actually deliver anything
-# language = "en"                          # optional; auto-detected if unset
+transcription_engine = "whisper"   # only consulted when delivery = "text"
+# transcription_model_path = "models/ggml-base.en.bin"   # required for delivery = "text" to actually deliver anything
+# transcription_language = "en"                          # optional; auto-detected if unset
 ```
 
 ## Voicemail: answering-machine fallback
@@ -212,7 +210,7 @@ notice, needing no other setup - the recording is already saved to
 `recordings_dir` regardless of `delivery`, so this is the zero-setup
 option; `"audio"` AES-GCM encrypts the recording and uploads only the
 ciphertext to a [Blossom](https://github.com/hzrd149/blossom) server
-from `[voicemail.blossom].servers`, sending a NIP-17 file message with
+from `[voicemail].blossom_servers`, sending a NIP-17 file message with
 the URL and decryption key instead; `"text"` transcribes it offline via
 Whisper.net and sends the transcript instead, no relay-side or
 third-party involvement needed for the transcription itself (just a
