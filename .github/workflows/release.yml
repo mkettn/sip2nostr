@@ -32,7 +32,6 @@ jobs:
     strategy:
       matrix:
         rid: [linux-x64, linux-arm64]
-        mode: [selfcontained, framework]
     steps:
       - uses: actions/checkout@v7
 
@@ -41,37 +40,44 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
-      - name: Publish (self-contained)
-        if: matrix.mode == 'selfcontained'
-        run: |
-          dotnet publish src/Sip2Nostr/Sip2Nostr.csproj \
-            -c Release \
-            -r ${{ matrix.rid }} \
-            --self-contained true \
-            -p:PublishSingleFile=true \
-            -p:IncludeNativeLibrariesForSelfExtract=true \
-            -o out/${{ matrix.rid }}-${{ matrix.mode }}
-
-      - name: Publish (framework-dependent)
-        if: matrix.mode == 'framework'
+      # Framework-dependent (needs the .NET 8 runtime installed on the
+      # target - not bundled) but single-file: every managed dependency is
+      # packed into the one executable, and IncludeNativeLibrariesForSelfExtract
+      # does the same for Whisper.net.Runtime's native library, so there's
+      # nothing left to ship alongside it as a separate file.
+      - name: Publish
         run: |
           dotnet publish src/Sip2Nostr/Sip2Nostr.csproj \
             -c Release \
             -r ${{ matrix.rid }} \
             --self-contained false \
-            -o out/${{ matrix.rid }}-${{ matrix.mode }}
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -o out/${{ matrix.rid }}
+
+      # Whisper.net.Runtime ships every platform's native binaries
+      # regardless of target RID (docs/voicemail.md's "Known limitations"),
+      # and dotnet publish -r doesn't prune them - IncludeNativeLibrariesForSelfExtract
+      # above only embeds the one this RID actually needs into the single
+      # file; the rest of runtimes/ (win-x64, macos-arm64, ...) plus a
+      # macOS-only Metal shader resource are left behind as loose, useless
+      # files that would otherwise still ship in the tarball.
+      - name: Remove other platforms' bundled native libraries
+        run: |
+          rm -rf out/${{ matrix.rid }}/runtimes
+          find out/${{ matrix.rid }} -name '*.metal' -delete
 
       - name: Package tarball
         run: |
-          cp config.example.toml README.md out/${{ matrix.rid }}-${{ matrix.mode }}/
-          tar -czf sip2nostr-${{ needs.version.outputs.version }}-${{ matrix.rid }}-${{ matrix.mode }}.tar.gz \
-            -C out/${{ matrix.rid }}-${{ matrix.mode }} .
+          cp config.example.toml README.md out/${{ matrix.rid }}/
+          tar -czf sip2nostr-${{ needs.version.outputs.version }}-${{ matrix.rid }}.tar.gz \
+            -C out/${{ matrix.rid }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: sip2nostr-${{ matrix.rid }}-${{ matrix.mode }}
-          path: sip2nostr-${{ needs.version.outputs.version }}-${{ matrix.rid }}-${{ matrix.mode }}.tar.gz
+          name: sip2nostr-${{ matrix.rid }}
+          path: sip2nostr-${{ needs.version.outputs.version }}-${{ matrix.rid }}.tar.gz
 
   release:
     needs: [version, publish]

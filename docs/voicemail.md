@@ -578,16 +578,18 @@ so there's no engine selection setting - just its own requirements:
   project's stack, and bundles every platform's native binaries
   regardless of target RID.** Unlike Concentus (pure C#), it ships
   prebuilt whisper.cpp libraries; confirmed via `dotnet publish -r
-  linux-x64 --self-contained true` that the output still includes
-  `runtimes/win-x64`, `runtimes/macos-arm64`, etc. alongside
-  `runtimes/linux-x64` (~103 MB total for that one RID) - `dotnet
-  publish -r` doesn't trim it down to just the target platform the way
-  it does for packages using the standard `runtimes/{rid}/native/`
-  convention. This directly bloats the linux-x64/linux-arm64 release
-  artifacts built by `.github/workflows/release.yml`. Worth fixing
-  (either pruning the unused `runtimes/*` folders as a post-publish
-  build step, or finding whether a newer `Whisper.net.Runtime` version
-  fixes the packaging) before shipping this in a release build.
+  linux-x64 -p:PublishSingleFile=true
+  -p:IncludeNativeLibrariesForSelfExtract=true` that the output still
+  includes `runtimes/win-x64`, `runtimes/macos-arm64`, etc. (plus a
+  macOS-only `ggml-metal.metal` resource) alongside the target RID's own
+  native library, which does get correctly embedded into the single file
+  - `dotnet publish -r` doesn't prune the others the way it does for
+  packages using the standard `runtimes/{rid}/native/` convention.
+  `.github/workflows/release.yml` deletes `runtimes/` and any `*.metal`
+  file as a post-publish step for exactly this reason, so the shipped
+  release binary doesn't carry the other platforms' dead weight - a
+  build outside that workflow (a local `dotnet publish`) still will,
+  unless it does the same cleanup.
 - **`delivery = "audio"` hasn't been verified against a real Blossom
   server or a real NIP-17 client.** `AudioDeliveryBackendTests.cs`
   exercises the encryption, BUD-02 auth event, and upload request/response
