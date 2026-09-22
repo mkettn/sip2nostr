@@ -21,7 +21,15 @@ public sealed class ConfiguredDnsResolver
             return;
         }
 
-        var nameServers = config.Resolvers.Select(ParseNameServer).ToArray();
+        // ConfigLoader.Validate already rejected any entry TryParseNameServer
+        // can't parse, so a failure here would mean that check was bypassed
+        // (e.g. an AppConfig built directly rather than via ConfigLoader.Load) -
+        // a bug to surface loudly, not a startup-time operator mistake.
+        var nameServers = config.Resolvers.Select(value =>
+            TryParseNameServer(value, out var server, out var failureReason)
+                ? server!
+                : throw new InvalidOperationException($"Invalid [dns].resolvers entry \"{value}\": {failureReason}"))
+            .ToArray();
         _lookupClient = new LookupClient(new LookupClientOptions(nameServers)
         {
             Timeout = TimeSpan.FromMilliseconds(config.TimeoutMs),
@@ -51,12 +59,66 @@ public sealed class ConfiguredDnsResolver
         return address;
     }
 
-    private static NameServer ParseNameServer(string hostPort)
+    // Accepts a bare IP ("1.1.1.1", "2606:4700:4700::1111" - no port, since
+    // an unbracketed IPv6 literal's own colons make a trailing ":port"
+    // ambiguous), "ip:port" for IPv4, or bracketed "[ipv6]"/"[ipv6]:port"
+    // for IPv6 with an explicit port. Shared between ConfigLoader.Validate
+    // (which needs a clean per-entry failure reason for
+    // ConfigurationException, not a crash on first use) and the
+    // constructor above.
+    public static bool TryParseNameServer(string value, out NameServer? server, out string? failureReason)
     {
-        var parts = hostPort.Split(':', 2);
-        var ip = IPAddress.Parse(parts[0]);
-        var port = parts.Length == 2 ? int.Parse(parts[1]) : 53;
-        return new NameServer(ip, port);
+        server = null;
+        failureReason = null;
+
+        var host = value;
+        var port = 53;
+
+        if (value.StartsWith('['))
+        {
+            var closeIndex = value.IndexOf(']');
+            if (closeIndex < 0)
+            {
+                failureReason = "missing closing ']' for a bracketed IPv6 address";
+                return false;
+            }
+
+            host = value[1..closeIndex];
+            var remainder = value[(closeIndex + 1)..];
+            if (remainder.Length > 0)
+            {
+                if (!remainder.StartsWith(':') || !int.TryParse(remainder[1..], out port))
+                {
+                    failureReason = "expected \":<port>\" after the closing ']'";
+                    return false;
+                }
+            }
+        }
+        else if (!IPAddress.TryParse(host, out _))
+        {
+            // Not a bare IP literal (with or without unbracketed IPv6
+            // colons) - see if it's "ip:port" (exactly one colon, so not
+            // an unbracketed IPv6 literal, which always has more than one).
+            var lastColon = value.LastIndexOf(':');
+            if (lastColon >= 0 && value.IndexOf(':') == lastColon)
+            {
+                host = value[..lastColon];
+                if (!int.TryParse(value[(lastColon + 1)..], out port))
+                {
+                    failureReason = $"\"{value[(lastColon + 1)..]}\" is not a valid port";
+                    return false;
+                }
+            }
+        }
+
+        if (!IPAddress.TryParse(host, out var ip))
+        {
+            failureReason = $"\"{value}\" is not a valid IP address, \"ip:port\", or \"[ipv6]:port\"";
+            return false;
+        }
+
+        server = new NameServer(ip, port);
+        return true;
     }
 }
 

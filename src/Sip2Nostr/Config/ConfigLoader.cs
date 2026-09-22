@@ -1,6 +1,7 @@
 using Nostr.Sdk;
 using Serilog.Events;
 using Tomlyn;
+using Sip2Nostr.Dns;
 using Sip2Nostr.Shared;
 
 namespace Sip2Nostr.Config;
@@ -42,12 +43,28 @@ public static class ConfigLoader
     // See docs/voicemail.md for why these fail fast here.
     private static void Validate(AppConfig config)
     {
-        // [TomlRequired] only guarantees the `resolvers` key was present,
-        // not that it's non-empty - an operator who writes [dns] at all
-        // meant to configure at least one nameserver.
-        if (config.Dns is not null && config.Dns.Resolvers.Count == 0)
+        if (config.Dns is not null)
         {
-            throw new ConfigurationException("[dns].resolvers must contain at least one entry when [dns] is present.");
+            // [TomlRequired] only guarantees the `resolvers` key was
+            // present, not that it's non-empty - an operator who writes
+            // [dns] at all meant to configure at least one nameserver.
+            if (config.Dns.Resolvers.Count == 0)
+            {
+                throw new ConfigurationException("[dns].resolvers must contain at least one entry when [dns] is present.");
+            }
+
+            // Each entry is parsed again at first use by ConfiguredDnsResolver
+            // (SipCallSource's field initializer) - checking format here
+            // turns a malformed entry into a clean startup failure instead
+            // of an unhandled FormatException surfacing as a full-trace
+            // crash from deep inside call setup.
+            foreach (var resolver in config.Dns.Resolvers)
+            {
+                if (!ConfiguredDnsResolver.TryParseNameServer(resolver, out _, out var failureReason))
+                {
+                    throw new ConfigurationException($"[dns].resolvers entry \"{resolver}\" is invalid: {failureReason}");
+                }
+            }
         }
 
         if (config.WebRtc.ConnectionLossGraceSeconds <= 0)

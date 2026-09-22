@@ -124,6 +124,50 @@ public class ConfigLoaderTests
     }
 
     [Theory]
+    [InlineData("1.1.1.1")]
+    [InlineData("1.1.1.1:53")]
+    [InlineData("2606:4700:4700::1111")]
+    [InlineData("[2606:4700:4700::1111]")]
+    [InlineData("[2606:4700:4700::1111]:53")]
+    public void Load_DnsResolversValidFormats_Succeed(string resolver)
+    {
+        var toml = $"{MinimalValidToml}\n\n[dns]\nresolvers = [\"{EscapeTomlString(resolver)}\"]\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal([resolver], config.Dns!.Resolvers);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("not-an-ip")]
+    [InlineData("1.1.1.1:not-a-port")]
+    [InlineData("[2606:4700:4700::1111")]
+    [InlineData("2606:4700:4700::1111:zz")]
+    public void Load_DnsResolversInvalidFormat_Throws(string resolver)
+    {
+        // A malformed entry must fail cleanly at startup (ConfigurationException),
+        // not crash later inside ConfiguredDnsResolver's field-initializer
+        // construction with an unhandled FormatException.
+        var toml = $"{MinimalValidToml}\n\n[dns]\nresolvers = [\"{EscapeTomlString(resolver)}\"]\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains("[dns].resolvers", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(-5)]
     public void Load_InvalidConnectionLossGraceSeconds_Throws(int graceSeconds)

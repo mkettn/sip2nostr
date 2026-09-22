@@ -81,10 +81,14 @@ public sealed class SipConfig
 // system resolver only when [dns] is absent from config.toml.
 public sealed class DnsConfig
 {
-    // Nameservers to query, in order - ConfiguredDnsResolver tries each in
-    // turn (DnsClient.NET's own fallback behavior). ConfigLoader.Validate
-    // rejects an empty list, since [dns] being present at all means at
-    // least one nameserver was intended.
+    // Nameservers DnsClient.NET's LookupClient may query - it picks among
+    // them per request rather than always preferring the first entry, so
+    // this isn't a strict primary/fallback ordering despite the old
+    // resolver/resolver_fallback naming having implied one. Each entry
+    // must parse as ConfiguredDnsResolver.TryParseNameServer expects
+    // ("ip", "ip:port", or "[ipv6]:port") - ConfigLoader.Validate checks
+    // both that and that the list isn't empty, since [dns] being present
+    // at all means at least one nameserver was intended.
     [property: TomlPropertyName("resolvers")]
     [property: TomlRequired]
     public required List<string> Resolvers { get; init; }
