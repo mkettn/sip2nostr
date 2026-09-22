@@ -40,23 +40,23 @@ dotnet run -- ../../config.toml
 
 Tagged releases (`vX.Y.Z`) are built automatically for Linux x86_64 and
 arm64 (Raspberry Pi 4/5 on the 64-bit OS) via GitHub Actions — see the
-[Releases](../../releases) page. Each release has two assets, one per
-architecture:
+[Releases](../../releases) page. Each release has two assets, one binary
+per architecture, no archive:
 
-| Asset suffix | Use when... |
+| Asset | Use when... |
 |---|---|
-| `linux-x64.tar.gz` | Deploying to an amd64 server/VM. |
-| `linux-arm64.tar.gz` | Deploying to a Raspberry Pi 4/5 (64-bit OS) or other arm64 target. |
+| `sip2nostr-vX.Y.Z-linux-x64` | Deploying to an amd64 server/VM. |
+| `sip2nostr-vX.Y.Z-linux-arm64` | Deploying to a Raspberry Pi 4/5 (64-bit OS) or other arm64 target. |
 
-Each is a single `Sip2Nostr` executable: a framework-dependent, single-file
-deployment. Framework-dependent means the
-[.NET 8 runtime](https://dotnet.microsoft.com/download/dotnet/8.0) needs
-to be installed on the target separately (not the SDK, just the runtime -
-`dotnet-runtime-8.0` on most distros); single-file means every dependency
-this project has, native libraries included, is packed into that one
-executable anyway. The tarball also includes `config.example.toml` and
-`README.md`. Extract it, copy `config.example.toml` to `config.toml`,
-fill in your credentials, and run the `Sip2Nostr` binary directly.
+Each is a framework-dependent, single-file deployment. Framework-dependent
+means the [.NET 8 runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
+needs to be installed on the target separately (not the SDK, just the
+runtime - `dotnet-runtime-8.0` on most distros); single-file means every
+dependency this project has, native libraries included, is packed into
+that one executable anyway. Download it, `chmod +x` it (a raw download
+doesn't preserve the executable bit), copy `config.example.toml` from
+this repo to `config.toml`, fill in your credentials, and run the binary
+directly.
 
 ## Architecture: single binary, C#/.NET
 
