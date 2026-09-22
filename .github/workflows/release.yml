@@ -57,11 +57,16 @@ jobs:
 
       # Whisper.net.Runtime ships every platform's native binaries
       # regardless of target RID, and dotnet publish -r doesn't prune
-      # them - IncludeNativeLibrariesForSelfExtract above only embeds the
-      # one this RID actually needs into the single file; the rest of
-      # runtimes/ (win-x64, macos-arm64, ...) plus a macOS-only Metal
-      # shader resource are left behind as loose files next to the binary
-      # that the next step would otherwise have to explicitly skip.
+      # them. Sip2Nostr.csproj's ExcludeMismatchedLinuxWhisperNatives
+      # target handles the other Linux architectures (without it,
+      # IncludeNativeLibrariesForSelfExtract above would embed all of
+      # linux-x64/linux-arm64/linux-arm into every single-file binary
+      # regardless of which one it's actually for - it only filters by
+      # "loadable on this OS" at bundle time, not by CPU architecture).
+      # Other operating systems' builds (win-x64, macos-arm64, ...) were
+      # never eligible for embedding in the first place and are left
+      # behind here as loose files, alongside a macOS-only Metal shader
+      # resource.
       - name: Remove other platforms' bundled native libraries
         run: |
           rm -rf out/${{ matrix.rid }}/runtimes
