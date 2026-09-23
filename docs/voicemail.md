@@ -1,9 +1,7 @@
 # Voicemail (Answer-Timeout Fallback)
 
-This documents the answering-machine behavior added to close the
-`receiving-calls.md` blind spot "No answer-timeout fallback": previously,
-if `target_npub` never answered a call over Nostr, the call was simply
-left connected to silence until the caller hung up. `[voicemail]` is
+This documents the answering-machine fallback for when `target_npub`
+never answers a call over Nostr. `[voicemail]` is
 **opt-in** - `enabled = false` by default, so out of the box nothing
 changes. With it turned on, a caller who isn't answered within
 `ring_timeout_seconds` hears a greeting and gets recorded for up to
@@ -404,7 +402,7 @@ so there's no engine selection setting - just its own requirements:
     `[voicemail].transcription_model_path` or `[voicemail].blossom_servers`
     entry is itself well-formed. There's a
     migration note worth calling out here too (also flagged in
-    `config.example.toml`/`README.md`, where an operator upgrading a live
+    `config.example.toml`, where an operator upgrading a live
     config is more likely to see it): an older config's
     `max_text_recording_seconds` (removed when the per-mode
     recording-length split collapsed into the single `max_recording_seconds`

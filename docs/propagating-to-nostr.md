@@ -17,9 +17,8 @@ before testing, or every signaling event will be silently dropped as
 The wire format below is **NIP-AC ("WebRTC Calls")**, a draft Nostr NIP,
 cross-checked against NosCall's actual Dart implementation
 (`lib/core/call/nip_ac_protocol.dart` and `lib/call/calling_controller.dart`
-from `sanah9/noscall`). This is sourced, not guessed — earlier attempts in
-this project used a standard NIP-59 gift wrap with made-up event kinds,
-which was never going to interoperate with a real NosCall install.
+from `sanah9/noscall`). This is sourced from NosCall's own implementation,
+not guessed.
 
 ## The protocol
 
@@ -45,10 +44,8 @@ use it, and it's out of scope here regardless — it's a mid-call concern.)
 3. NIP-44-encrypt the JSON as the ephemeral key, to the recipient.
 4. Publish an outer event: `kind = 21059`, `pubkey = <ephemeral pubkey>`,
    `content = <ciphertext>`, `tags = [['p', recipient]]` — just the single
-   `p` tag, for every inner kind including offers. (An earlier draft of
-   this doc claimed offers also carry a `['k', '25050']` tag, based on a
-   stale copy of NosCall's source; the real, shipping
-   `NipAcProtocol.wrap()` in NosCall 0.5.2-release never adds a `k` tag.)
+   `p` tag, for every inner kind including offers (the shipping
+   `NipAcProtocol.wrap()` in NosCall 0.5.2-release never adds a `k` tag).
    No seal layer (no kind-13 event).
 
 **Unwrapping** a received kind-21059 event tagged `p = <our pubkey>`:
@@ -196,13 +193,12 @@ finish saving, before the resources it depends on go away underneath it.
 A no-op when nothing's in flight, which is the common case for a shutdown
 that isn't racing an active call.
 
-The wrap/unwrap logic was first verified locally with a round-trip test
-(two throwaway keypairs, no network): build and sign an offer as the
-bridge, wrap it, decrypt and unwrap it as the target, confirm the SDP
-content and tags survive intact, the inner signature verifies, and a
-third key cannot decrypt the payload. It has since been confirmed against
-a real relay and a real NosCall install, ringing and carrying audio both
-ways.
+The wrap/unwrap logic is confirmed against a real relay and a real
+NosCall install, ringing and carrying audio both ways, and covered by a
+local round-trip unit test (two throwaway keypairs, no network): build
+and sign an offer as the bridge, wrap it, decrypt and unwrap it as the
+target, confirm the SDP content and tags survive intact, the inner
+signature verifies, and a third key cannot decrypt the payload.
 
 ## Startup requires a reachable relay
 

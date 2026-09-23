@@ -1,306 +1,53 @@
 # sip2nostr
 
-A small gateway that answers incoming calls on an existing VoIP landline
-SIP account and forwards them as a call-signaling request over Nostr to a
-compatible client (e.g. NosCall), bridging the audio between the SIP/RTP leg
-and a WebRTC leg.
+A gateway that answers incoming calls on an existing VoIP SIP account and
+forwards them as a call-signaling request over Nostr (NIP-AC) to a
+compatible client (e.g. NosCall), bridging audio between the SIP/RTP leg
+and a WebRTC leg. It replaces a softphone as the thing registered to your
+VoIP provider: an inbound call rings your Nostr identity instead of a
+phone. Configuration is a single TOML file - no UI.
 
-This replaces a softphone (e.g. Twinkle) as the thing registered to your VoIP
-provider. Instead of ringing a phone, an inbound call rings your Nostr
-identity on any device running a call-capable Nostr client.
-
-No UI — configuration is a single TOML file, no more.
-
-## Status
-
-Verified against a real SIP trunk: with `[nostr].enabled = false`, sip2nostr
-registers, answers an inbound call, plays a local test audio file, and
-tears the call down cleanly on `BYE` (see `docs/receiving-calls.md` for the
-full debugging trace and root cause). With `[nostr].enabled = true`,
-propagation to a real NosCall install is verified end-to-end over NIP-AC:
-NosCall rings, answers, and audio flows both ways — see
-`docs/propagating-to-nostr.md` for the protocol and its blind spots. Note
-NosCall only accepts calls from a followed contact, so the bridge's pubkey
-(from `bridge_nsec`) needs to be added as a contact there first - printed
-as `npub1...` on every startup so there's no need to derive it by hand.
-The `[voicemail]` answer-timeout fallback is also verified end-to-end
-against a real SIP trunk: the greeting/tone plays, the caller's audio is
-recorded, encoded to Opus/OGG, and delivered as a NIP-17 DM that a
-receiving client can decrypt and play back — see `docs/voicemail.md`.
-
-Copy `config.example.toml` to `config.toml`, fill in your SIP and Nostr
-credentials, and run:
-
-```
-cd src/Sip2Nostr
-dotnet run -- ../../config.toml
-```
-
-## Building and installing
+## Building
 
 Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
-to build (the target machine only needs the runtime, `dotnet-runtime-8.0`,
-to run it). Targets linux-x64 (amd64) and linux-arm64 (e.g. Raspberry Pi
-4/5 on the 64-bit OS) - `build.sh` picks the right one for the current
-machine automatically.
+(the target machine only needs the runtime, `dotnet-runtime-8.0`, to run
+it). Targets linux-x64 (amd64) and linux-arm64 (e.g. Raspberry Pi 4/5 on
+the 64-bit OS) - `build.sh` picks the right one for the current machine
+automatically.
 
 ```
 ./build.sh
+```
+
+## Installing
+
+```
 sudo ./install.sh
 ```
 
-`install.sh` installs to `/usr/local/lib/sip2nostr/` and symlinks
+Installs to `/usr/local/lib/sip2nostr/` and symlinks
 `/usr/local/bin/sip2nostr` to it. To uninstall:
 
 ```
 rm -rf /usr/local/lib/sip2nostr /usr/local/bin/sip2nostr
 ```
 
-Copy `config.example.toml` to a `config.toml` of your choosing, fill in
-your SIP and Nostr credentials, and run `sip2nostr /path/to/config.toml`.
+## Configuring
 
-## Architecture: single binary, C#/.NET
+Copy `config.example.toml` to a `config.toml` of your choosing and fill
+in your SIP and Nostr credentials - every option is documented inline
+there. See `docs/` for the caller allow/deny-list, voicemail fallback,
+and sound-file format in more detail.
+
+## Running
 
 ```
- VoIP provider (SIP trunk, possibly multiple lines)
-        │  REGISTER / INVITE / RTP (G.711)
-        ▼
- ┌───────────────────────────────────────┐
- │              sip2nostr                │
- │                                        │
- │  sipsorcery: SIP UA/RTP + WebRTC leg   │
- │  Nostr.Sdk (rust-nostr binding):        │
- │    call signaling over Nostr           │
- │  DnsClient.NET: configurable DNS       │
- │  Tomlyn: config.toml                   │
- └───────────────────┬───────────────────┘
-                      ▼
-           Nostr relay(s) (wss://)
-                      │
-                      ▼
-           NosCall (or compatible client)
+sip2nostr /path/to/config.toml
 ```
 
-One language, one binary, no IPC boundary. This supersedes an earlier
-two-binary (C++/PJSIP + Rust) design: **sipsorcery** is a pure C# library
-that covers both the SIP/RTP leg and the WebRTC leg in one place, which is
-what previously required two separate mature libraries in two different
-languages. Combined with **Nostr.Sdk** — the official C# binding for
-rust-nostr — a single C#/.NET process now covers every concern without
-needing to split languages.
+Or, from source:
 
-| Concern              | Library                          | Notes |
-|-----------------------|-----------------------------------|-------|
-| SIP / RTP + WebRTC    | **sipsorcery**                    | Pure C#, actively maintained (~1.9k stars, commits as recent as mid-2026). Covers SIP registration/INVITE/RTP and WebRTC/ICE/DTLS-SRTP in one library — no audio device capture needed here since audio is bridged programmatically, not played to a soundcard. Opus codec support may need a supplementary package; confirm at implementation time. |
-| Nostr protocol        | **Nostr.Sdk**                     | Official rust-nostr binding (UniFFI-generated, same project as the Rust/Swift/Kotlin bindings, not third-party). NIP-17/NIP-44/NIP-59 support inherited from the core Rust crate. Marked **ALPHA** upstream — expect breaking API changes between versions. |
-| DNS resolution        | **DnsClient.NET**                 | Mature .NET resolver library with explicit, configurable nameserver support (required feature, see below). |
-| Config                | **Tomlyn**                        | TOML parser for .NET. |
-
-Tradeoff worth naming: sipsorcery is newer and less battle-tested at telecom
-scale than PJSIP (which has ~20 years of production deployment behind it),
-and Nostr.Sdk's alpha status carries some API-churn risk. For a single-line
-personal MVP, both are a reasonable bet; revisit if either becomes a
-blocker once building.
-
-Internally, call handling follows a hub/source/sink pattern: a `CallHub`
-routes every call from an `ICallSource` (today, `SipCallSource`) through a
-configured chain of `ICallSink`s (`NosCallSink`, `VoicemailSink`,
-`LocalTestAudioSink`) — see `docs/hub-architecture.md` for why, and for how
-this keeps the door open to future sources (e.g. a modem/D-Bus line) and
-sinks without reshaping the core interfaces.
-
-## Required feature: configurable DNS resolver
-
-The hostname resolution used to reach the VoIP provider's SIP registrar/proxy
-**must not** be hardcoded to the OS-configured resolver. It must be
-configurable per deployment (custom DNS server, custom port), independent of
-whatever the host machine uses system-wide — implemented via a
-`DnsClient.NET` `LookupClient` configured from `[dns]` in `config.toml` and
-used explicitly for the SIP transport's hostname resolution, rather than
-relying on `System.Net.Dns`/the OS resolver.
-
-## Configuration (`config.toml`)
-
-```toml
-[sip]
-provider_host = "sip.your-provider.de"
-username = "YOUR_SIP_USER"
-password = "YOUR_SIP_PASS"
-# Optional: set this to the public host/IP your SIP provider should use
-# for inbound calls if REGISTER succeeds but no INVITE reaches this process.
-# contact_host = "203.0.113.10"
-# Local RTP port for SIP audio.
-rtp_port = 8000
-
-[dns]
-# Nameservers to use for SIP hostname lookups - each entry is an IP,
-# "ip:port", or "[ipv6]:port" (default port 53); DnsClient.NET picks
-# among them per request rather than always preferring the first one.
-# Falls back to the system resolver if [dns] is omitted entirely.
-resolvers = ["1.1.1.1:53", "9.9.9.9:53"]
-timeout_ms = 2000
-
-[logging]
-# Optional: write each process run to its own log file.
-# Relative paths are resolved next to this config file. If the path does
-# not include {timestamp} or {run}, a timestamp is added before the extension.
-file = "logs/sip2nostr-{timestamp}.log"
-console_level = "warning"       # or "verbose"/"debug"/"information"/"error"/"fatal" - default shown
-file_level = "information"      # same values, independent of console_level, only used when `file` is set - default shown
-console_quiet = false           # true suppresses the startup "running, press Ctrl+C" stdout line
-# Includes a leading timestamp on console lines (the file always keeps
-# its own regardless). Set false under systemd/journald - it stamps every
-# captured line on arrival anyway, so leaving this on double-stamps them.
-console_timestamps = true
-
-[[lines]]
-uri = "sip:+4989123456@sip.your-provider.de"
-label = "main"
-# Optional: when [nostr].enabled is false, answer calls on this line and
-# play this file on loop to test SIP audio. Raw 8 kHz 16-bit PCM works
-# directly; mono Opus (.opus) is decoded in-process - see
-# docs/sound-files.md for exactly what's supported and how to convert a file.
-# sound = "sounds/test.opus"
-
-[[lines]]
-uri = "sip:+4989123457@sip.your-provider.de"
-label = "fax"
-
-[nostr]
-enabled = true
-relays = ["wss://relay.example.com", "wss://relay2.example.com"]
-bridge_nsec = "nsec1..."      # this daemon's own identity, added as a contact in the receiving client
-target_npub = "npub1..."      # your identity — every call latches here in the MVP (see below)
-
-[webrtc]
-stun_servers = ["stun:stun.l.google.com:19302"]
-turn_server = ""               # optional, recommended for NAT traversal
-connection_loss_grace_seconds = 15  # how long a bridged call's WebRTC connection can sit "disconnected" before it's ended
-
-[voicemail]
-enabled = false                # opt-in: falls back to a greeting + recording if target_npub doesn't answer
-ring_timeout_seconds = 20
-max_recording_seconds = 600    # replaces the old max_text_recording_seconds; drop that key if your config still has it
-# greeting_sound = "sounds/greeting.opus"   # optional; a short tone plays if unset
-# dm_relays = ["wss://dm-relay.example.com"] # optional; defaults to [nostr].relays
-delivery = "file"              # or "audio"/"text" - see blossom_servers/transcription_* below
-
-# blossom_servers = ["https://blossom.example.com"]   # consulted when delivery = "audio", or as a "text" fallback on transcription failure; required for delivery = "audio" to actually deliver anything
-
-# transcription_model_path = "models/ggml-base.en.bin"   # only consulted when delivery = "text"; required for it to actually deliver anything
-# transcription_language = "en"                          # optional; auto-detected if unset
 ```
-
-## Voicemail: answering-machine fallback
-
-Opt-in (`[voicemail].enabled = false` by default). When enabled, if
-`target_npub` doesn't answer a call over Nostr within
-`[voicemail].ring_timeout_seconds`, the call diverts to a local greeting
-(or a short tone if `greeting_sound` isn't configured) followed by a
-recording of up to `max_recording_seconds`, encoded and saved locally as
-Opus (in-process via `Concentus` — pure C#, no external program
-required) under `[voicemail].recordings_dir`, named per
-`[voicemail].recording_filename` (a template with `{timestamp}`,
-`{caller}`, and `{call_id}` placeholders — defaults to
-`{timestamp}-{caller}.opus`), and the SIP call hung up immediately —
-delivery happens off the call's critical path, handed to a
-background worker (`Voicemail/VoicemailSender.cs`, one instance shared
-for the process lifetime) that connects to `[voicemail].dm_relays` (or
-`[nostr].relays` as a fallback — a NIP-17 DM inbox, kind:10050, can
-legitimately differ from the relays used for call signaling) only when
-something's queued, sends it as a Nostr direct message, then disconnects.
-How the recording turns into DM content is pluggable via
-`[voicemail].delivery`: `"file"` (default) sends only a plain-text
-notice, needing no other setup - the recording is already saved to
-`recordings_dir` regardless of `delivery`, so this is the zero-setup
-option; `"audio"` AES-GCM encrypts the recording and uploads only the
-ciphertext to a [Blossom](https://github.com/hzrd149/blossom) server
-from `[voicemail].blossom_servers`, sending a NIP-17 file message with
-the URL and decryption key instead; `"text"` transcribes it offline via
-Whisper.net and sends the transcript instead, no relay-side or
-third-party involvement needed for the transcription itself (just a
-local GGML model file). If `"audio"`/`"text"`'s own requirement isn't
-configured (no Blossom servers, no model), sip2nostr logs a startup
-warning and falls back to `"file"`'s plain-text notice instead of
-failing to start - it does not fall back to inlining the recording in
-the DM. If transcription produces nothing, `"text"` falls back to a
-Blossom upload when one is configured, before falling back further to
-that same plain-text notice. Exactly one DM per missed call either way:
-the recording's URL, its transcript, or a plain-text notice - never more
-than one, never none. Recordings on disk don't depend on delivery
-succeeding. See `docs/voicemail.md` for the full flow and known
-limitations — notably, `delivery = "audio"`'s Blossom upload hasn't been
-verified against a real Blossom server yet.
-
-## Multiple lines, single identity (MVP)
-
-A VoIP gateway/account may expose multiple lines (multiple registered SIP
-URIs/DIDs), hence `[[lines]]` above. In the MVP, **every inbound call on
-every configured line latches to the same single `target_npub`** — there is
-no per-line routing yet. The config still lists lines explicitly so the
-shape is in place for later per-line routing without a breaking config
-change; the line label is available internally when a call comes in, it's
-just not used for routing decisions yet.
-
-## Components
-
-### 1. SIP/RTP + WebRTC (sipsorcery)
-Registers to the VoIP provider (one or more lines), rings the caller on an
-inbound INVITE until something is ready to take the call and answers it
-then, and owns both the SIP/RTP leg and the WebRTC leg — the same
-library handles the audio path on both sides, so bridging is in-process
-rather than across a socket or FFI boundary.
-
-### 2. Nostr signaling (Nostr.Sdk)
-On an inbound call, opens a WebRTC peer connection via sipsorcery,
-generates an SDP offer, wraps it per NIP-AC (NIP-44, ephemeral per-message
-keypair, no seal layer) via Nostr.Sdk, and publishes it to `target_npub` on
-the configured relays. Waits for the answer + ICE candidates back over
-Nostr, feeds them into sipsorcery's WebRTC session. See
-`docs/propagating-to-nostr.md` for the protocol, sourced directly from
-NosCall's own implementation.
-
-### 3. DNS resolution (DnsClient.NET)
-Wraps a configurable `LookupClient` from `[dns]` in `config.toml`, used for
-the SIP transport's hostname resolution instead of relying on the OS
-resolver. Falls back to the system resolver only if no `[dns]` section is
-present.
-
-### 4. Config (Tomlyn)
-Parses `config.toml` (SIP credentials, lines, DNS resolver, Nostr
-keys/relays, WebRTC STUN/TURN) at startup. No runtime UI or admin surface.
-
-## Dependencies (planned)
-
-- sipsorcery
-- Nostr.Sdk
-- DnsClient.NET
-- Tomlyn
-
-## Open questions / TODO
-
-- [x] Confirm exact call-signaling event format expected by the target
-      Nostr client (NosCall) — pulled from its source (NIP-AC), verified
-      end-to-end against a real install. See `docs/propagating-to-nostr.md`.
-- [x] Codec: implemented using G.711 (PCMU/PCMA) on both the SIP and WebRTC
-      legs, no transcoding — sipsorcery supports this out of the box via
-      `MediaStreamTrack(SDPWellKnownMediaFormatsEnum[])`, no supplementary
-      Opus package needed. Revisit if NosCall doesn't offer PCMU/PCMA.
-- [x] Per-line routing: not needed for MVP, confirmed — every line still
-      latches to the single configured `target_npub`.
-- [ ] TURN server requirement — verified working over a local network with
-      STUN only; TURN/NAT behavior across the open internet is still
-      untested (see `docs/propagating-to-nostr.md` blind spots).
-- [x] Fallback behavior: implemented, opt-in (`[voicemail].enabled = false`
-      by default), verified end-to-end against a real SIP trunk — if
-      enabled and the Nostr side doesn't answer within
-      `[voicemail].ring_timeout_seconds`, the call falls back to a local
-      greeting + recording, sent to `target_npub` as a Nostr DM. See
-      `docs/voicemail.md`.
-- [ ] DoT/DoH support for the configurable resolver (currently plain DNS
-      only in the initial design).
-- [ ] Monitor Nostr.Sdk releases for breaking changes given its alpha status.
-
-## License
-
-TBD.
+cd src/Sip2Nostr
+dotnet run -- /path/to/config.toml
+```
