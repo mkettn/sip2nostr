@@ -23,6 +23,16 @@ WorkingDirectory=/var/local/lib/sip2nostr
 ExecStart=/usr/local/bin/sip2nostr /var/local/lib/sip2nostr/config.toml
 Restart=on-failure
 RestartSec=5
+# Program.cs only registers Console.CancelKeyPress (SIGINT) - there's no
+# PosixSignalRegistration for SIGTERM anywhere in it, so cts.Cancel()
+# (and everything gated on it: hub.DrainAsync, sink disposal, the final
+# log flush) never runs on systemd's default stop signal. Route the
+# stop signal to the one this binary actually handles instead of
+# silently skipping the drain sip2nostr does on every other shutdown
+# path. A native SIGTERM handler in Program.cs would be the more
+# durable fix (works under any supervisor, not just this unit) but is
+# a source change outside this file's scope.
+KillSignal=SIGINT
 
 # journald captures stdout/stderr on its own - leave [logging].file
 # unset in config.toml and use `journalctl -u sip2nostr` instead of a
@@ -59,7 +69,14 @@ LockPersonality=true
 RemoveIPC=true
 CapabilityBoundingSet=
 AmbientCapabilities=
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# AF_NETLINK is required, not defense-in-depth padding: SIPSorcery
+# enumerates local addresses for WebRTC ICE host candidates on every
+# bridged call, which reaches .NET's NetworkInterface.GetAllNetworkInterfaces()
+# -> getifaddrs() -> an AF_NETLINK/NETLINK_ROUTE socket on Linux.
+# Without it that enumeration throws and a bridged call rings with no
+# audio - registration and the SIP leg alone don't exercise this path,
+# so it only shows up on the first real call.
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 UMask=0077
