@@ -5,10 +5,11 @@ using Sip2Nostr.Config;
 
 namespace Sip2Nostr.Dns;
 
-// Required feature (README): SIP hostname resolution must not rely on
-// System.Net.Dns / the OS resolver. This wraps a DnsClient.NET LookupClient
-// configured from [dns] in config.toml, with a fallback nameserver and a
-// system-resolver fallback only when [dns] is absent entirely.
+// Required feature (docs/receiving-calls.md): SIP hostname resolution must
+// not rely on System.Net.Dns / the OS resolver. This wraps a DnsClient.NET
+// LookupClient configured from [dns] in config.toml, with a fallback
+// nameserver and a system-resolver fallback only when [dns] is absent
+// entirely.
 public sealed class ConfiguredDnsResolver
 {
     private readonly LookupClient? _lookupClient;

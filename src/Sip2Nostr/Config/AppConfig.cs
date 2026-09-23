@@ -76,9 +76,9 @@ public sealed class SipConfig
     public int RtpPort { get; init; } = 8000;
 }
 
-// Required feature (README): SIP hostname resolution must go through this
-// configurable resolver instead of the OS resolver. Falls back to the
-// system resolver only when [dns] is absent from config.toml.
+// Required feature (docs/receiving-calls.md): SIP hostname resolution must
+// go through this configurable resolver instead of the OS resolver. Falls
+// back to the system resolver only when [dns] is absent from config.toml.
 public sealed class DnsConfig
 {
     // Nameservers DnsClient.NET's LookupClient may query - it picks among

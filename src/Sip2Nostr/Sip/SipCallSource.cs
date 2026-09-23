@@ -14,11 +14,11 @@ using Sip2Nostr.Hub;
 namespace Sip2Nostr.Sip;
 
 // Registers to the VoIP provider and raises OnIncomingCall for CallHub to
-// route while the caller is ringing. One REGISTER for the whole account (per
-// README: [sip] carries a single set of credentials for the trunk);
-// [[lines]] are the DIDs that can ring on it. In the MVP every line rings
-// the same target_npub (no per-line routing yet), so the matched line is
-// only used for logging and for LocalTestAudioSink's per-line sound.
+// route while the caller is ringing. One REGISTER covers the whole account
+// - [sip] carries a single set of credentials for the trunk; [[lines]] are
+// the DIDs that can ring on it. In the MVP every line rings the same
+// target_npub (no per-line routing yet), so the matched line is only used
+// for logging and for LocalTestAudioSink's per-line sound.
 public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSource, IAsyncDisposable
 {
     private const int RegistrationExpirySeconds = 3600;
