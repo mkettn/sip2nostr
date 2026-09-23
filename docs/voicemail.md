@@ -477,8 +477,7 @@ so there's no engine selection setting - just its own requirements:
     by the time `VoicemailSender` ever sees the job (`Sinks/VoicemailSink.cs`
     encodes it at record time; deliberately not `ffmpeg`/any external
     process, so encoding needs nothing installed on the host beyond
-    what `install.sh` already puts there - see "Known limitations"
-    below for what that is and why). The
+    what `install.sh` already puts there). The
     backend's result `Kind` decides how it's sent: `PrivateMessage`
     (`TranscribedTextDeliveryBackend`, `FileDeliveryBackend`) calls
     `Client.SendPrivateMsgTo(relayUrls, ...)` - NIP-17: rumor, seal, gift
@@ -571,35 +570,6 @@ so there's no engine selection setting - just its own requirements:
   `delivery = "text"` requires manually obtaining a model file and
   pointing `model_path` at it - nothing wires up
   `Whisper.net.Ggml.WhisperGgmlDownloader` to fetch one automatically.
-- **`Whisper.net`'s native library can't be embedded into a single-file
-  build - it has to ship as an ordinary sibling file, which shapes how
-  `install.sh` installs everything.** `WhisperNetTranscriber` P/Invokes
-  into a native whisper.cpp library, and `Whisper.net`'s own loader
-  resolves it by building a path from `AppContext.BaseDirectory` plus a
-  hardcoded `runtimes/<rid>/` subdirectory - nothing else. That's fine
-  for an ordinary multi-file publish, where the native library already
-  lands exactly there. `dotnet publish -p:PublishSingleFile=true
-  -p:IncludeNativeLibrariesForSelfExtract=true`, which would otherwise be
-  the obvious way to fold it into the one executable, breaks this
-  instead: the library gets bundled into the executable and
-  self-extracted to a *different* directory (a per-process temp cache,
-  not `AppContext.BaseDirectory`) the first time the process starts, and
-  `Whisper.net`'s loader never finds it there - confirmed with `strace`:
-  it never even reaches a real `dlopen()` call, so a plain `NativeLibrary`
-  fallback wouldn't help either, and neither does installing the library
-  to a standard system path like `/usr/local/lib` (also confirmed
-  directly - `ldconfig`-registering it there changes nothing, since the
-  loader gives up in managed code before ever asking the OS to search
-  anywhere). `build.sh` therefore never sets
-  `IncludeNativeLibrariesForSelfExtract`, and `install.sh` installs the
-  executable and its `runtimes/<rid>/` directory together as siblings in
-  one directory (`/usr/local/lib/sip2nostr/`) rather than splitting the
-  binary into `bin/` and its dependencies into `lib/` the way a
-  traditional Unix install would - `Whisper.net`'s relative-path search
-  requires them to stay that way. A symlink into `/usr/local/bin/` still
-  works correctly on top of that arrangement (confirmed -
-  `AppContext.BaseDirectory` resolves through a symlink to the real
-  file's directory, not the symlink's own location).
 - **CPU/memory cost on constrained hardware is unmeasured.** Whisper
   transcription is CPU-bound and model-size-dependent; how it performs
   on something like a Raspberry Pi hasn't been measured for any model

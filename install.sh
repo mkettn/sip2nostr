@@ -33,14 +33,10 @@ fi
 rm -rf "$install_dir"
 mkdir -p "$install_dir/runtimes/$rid"
 
-# Only what sip2nostr actually needs at runtime: the executable, any
-# root-level native library (currently just Nostr.Sdk's, but globbed
-# rather than named so a future dependency that adds one doesn't get
-# silently left behind), and Whisper.net's native library for this
-# architecture (has to stay under runtimes/<rid>/ next to the executable
-# - that's where its own loader looks). Everything else dotnet publish
-# leaves behind - debug symbols, other architectures' and operating
-# systems' native builds - is simply never copied.
+# Only what sip2nostr actually needs at runtime - see Sip2Nostr.csproj
+# for why runtimes/<rid>/ has to stay a sibling of the executable.
+# Everything else dotnet publish leaves behind (debug symbols, other
+# architectures/operating systems' native builds) is simply never copied.
 cp "$build_dir/Sip2Nostr" "$install_dir/"
 cp "$build_dir"/*.so "$install_dir/"
 cp "$build_dir/runtimes/$rid/"* "$install_dir/runtimes/$rid/"

@@ -24,27 +24,10 @@
   </ItemGroup>
 
   <!--
-    Whisper.net.Runtime's own build/Whisper.net.Runtime.targets adds every
-    Linux architecture's native library (linux-x64, linux-arm64, linux-arm)
-    unconditionally whenever TargetFramework is a plain moniker like
-    net8.0 - it never checks $(RuntimeIdentifier), unlike the standard
-    NuGet runtimes/{rid}/native/ convention. That leaves every
-    architecture's copy sitting in out/<rid>/runtimes/ after a build, not
-    just the one this RID needs - harmless, not something this needs to
-    prune for correctness, since install.sh only ever copies
-    runtimes/$(RuntimeIdentifier)/ out of that directory (see there).
-    What actually matters is checking that this RID's own native library
-    is really among what got shipped, and failing the build loudly if
-    it's not, rather than leaving delivery = "text" to fail at first use
-    with a runtime "native library not found".
-
-    _WhisperLinuxNatives is captured separately from
-    _WhisperNativeForRid so a future Whisper.net.Runtime version that
-    stops shipping these as plain None items entirely - by moving to the
-    standard runtimes/{rid}/native/ convention, say - reads as "this
-    check no longer applies" (both empty, silent) rather than "no native
-    for this RID" (a false failure blamed on the RID for what would
-    actually be a fixed, differently-packaged upstream).
+    Whisper.net's native loader only finds its library loose beside the
+    executable, never self-extracted (see install.sh) - and
+    Whisper.net.Runtime bundles every Linux arch unconditionally, so
+    this fails the build if this RID's own copy is missing.
   -->
   <Target Name="RequireWhisperNativeForRid" BeforeTargets="AssignTargetPaths;ComputeResolvedFilesToPublishList"
           Condition="$(RuntimeIdentifier.StartsWith('linux-'))">
