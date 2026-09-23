@@ -131,6 +131,10 @@ password = "YOUR_SIP_PASS"
 # contact_host = "203.0.113.10"
 # Local RTP port for SIP audio.
 rtp_port = 8000
+# SIP signaling goes out over TLS (SIPS, port 5061) by default - sip2nostr
+# fails to start if that can't be established. Set false only if the
+# provider has no TLS/SIPS option (logs a startup warning as a reminder).
+# tls = true
 
 [dns]
 # Nameservers to use for SIP hostname lookups - each entry is an IP,

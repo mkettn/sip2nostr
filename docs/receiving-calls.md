@@ -17,9 +17,12 @@ Since the hub-architecture refactor (see `docs/hub-architecture.md`),
 owning the SIP leg and deciding what to do with a call are two separate
 concerns. `SipCallSource` (an `ICallSource`) registers once for the whole
 SIP trunk (`[sip]` in `config.toml`), keeps a single `SIPUserAgent`
-listening for inbound `INVITE` requests on UDP port 5060, and accepts
-every call itself — regardless of which configured `[[lines]]` DID it
-targets. It raises `OnIncomingCall` with a transport-agnostic `Call` while
+listening for inbound `INVITE` requests on TLS port 5061 (`[sip].tls`,
+the default) or UDP port 5060 (`[sip].tls = false`), and accepts every
+call itself — regardless of which configured `[[lines]]` DID it targets.
+The real-trunk verification below predates `[sip].tls` and ran over
+plain UDP - see `docs/propagating-to-nostr.md`'s Blind spots for the
+TLS path's own (more limited) verification. It raises `OnIncomingCall` with a transport-agnostic `Call` while
 the caller is still ringing, and `CallHub` routes that through the
 configured `ICallSink` chain (`NosCallSink`, `VoicemailSink`,
 `LocalTestAudioSink`). The `200 OK` goes out only when a sink calls

@@ -7,6 +7,13 @@ password = "YOUR_SIP_PASS"
 # contact_host = "203.0.113.10"
 # Local RTP port for SIP audio. Twinkle commonly uses 8000.
 rtp_port = 8000
+# SIP signaling (REGISTER/INVITE/etc.) goes out over TLS (SIPS, port 5061)
+# by default - sip2nostr fails to start if a TLS connection to
+# provider_host can't actually be established. Set false only if the
+# provider genuinely has no TLS/SIPS option; a warning is then logged on
+# every startup as a reminder that signaling (credentials, caller ID, call
+# metadata) is in cleartext.
+# tls = true
 
 [dns]
 # Nameservers to use for SIP hostname lookups - each entry is an IP,

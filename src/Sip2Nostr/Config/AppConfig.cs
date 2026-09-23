@@ -74,6 +74,16 @@ public sealed class SipConfig
 
     [property: TomlPropertyName("rtp_port")]
     public int RtpPort { get; init; } = 8000;
+
+    // Default true: SIP signaling (REGISTER/INVITE/etc.) goes out over TLS
+    // (SIPS, port 5061) rather than plain UDP. SipCallSource fails startup
+    // if a TLS connection to provider_host can't actually be established -
+    // set this false only if the provider genuinely has no TLS/SIPS option,
+    // which trades that credential/metadata exposure for the ability to
+    // start at all; a startup warning is logged as a standing reminder.
+    // See issue #35 and docs/propagating-to-nostr.md.
+    [property: TomlPropertyName("tls")]
+    public bool Tls { get; init; } = true;
 }
 
 // Required feature (README): SIP hostname resolution must go through this

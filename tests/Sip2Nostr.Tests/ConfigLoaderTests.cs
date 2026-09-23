@@ -76,6 +76,39 @@ public class ConfigLoaderTests
     }
 
     [Fact]
+    public void Load_DefaultSipConfig_Succeeds()
+    {
+        var path = WriteTempConfig(MinimalValidToml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.True(config.Sip.Tls);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_SipTlsFalse_Succeeds()
+    {
+        var toml = $"{MinimalValidToml}\n".Replace(
+            "[sip]\n",
+            "[sip]\ntls = false\n");
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.False(config.Sip.Tls);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Load_DnsSectionAbsent_Succeeds()
     {
         var path = WriteTempConfig(MinimalValidToml);

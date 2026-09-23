@@ -281,14 +281,31 @@ itself failing to reach that one relay.
   validating them would only block the documented
   `[nostr].enabled = false` local SIP-test path
   (`docs/receiving-calls.md`) over values it never uses.
-- **SIP registrar reachability stays soft, unlike Nostr relay
+- **SIP *registration* success stays soft, unlike Nostr relay
   reachability** (see "Startup requires a reachable relay" above) - a bad
   username/password against the SIP provider never stops the process
   starting, only registering (`SipCallSource`'s `SIPRegistrationUserAgent`
-  retries every 30s indefinitely on its own). An open asymmetry, not a
-  principled distinction: nothing here says a SIP registrar being
-  unreachable is any less fatal to sip2nostr's one job than a Nostr relay
-  being unreachable is - it just hasn't been asked for.
+  retries every 30s indefinitely on its own). Transport-level reachability
+  is now checked the same way Nostr's is (see below), but auth success
+  itself isn't - an open asymmetry, not a principled distinction: nothing
+  here says a SIP registrar rejecting the configured credentials forever
+  is any less fatal to sip2nostr's one job than a Nostr relay being
+  unreachable is - it just hasn't been asked for.
+- **SIP signaling encryption (`[sip].tls`, default true) covers the
+  transport only, not the RTP media.** `SipCallSource` fails startup if a
+  TLS connection to `provider_host` can't be established (mirroring "Startup
+  requires a reachable relay" above - a throwaway TLS handshake, checked
+  before the real `SIPTLSChannel`/`SIPRegistrationUserAgent` are involved),
+  unless `[sip].tls = false` opts into plain UDP with a standing startup
+  warning instead. Either way, the caller's actual audio (RTP) is still
+  unencrypted - SRTP for the media leg is tracked separately (issue #35).
+  Also unverified against a real TLS-capable SIP trunk: everything else in
+  this document was checked against sip2nostr's real trunk (see the top
+  level README's Status section), but that trunk doesn't offer SIPS, so
+  this path is only verified against a local TLS listener with a
+  self-signed cert (confirming the handshake and the cert-rejection
+  failure path both behave as expected) - not against a provider's real
+  certificate chain.
 - **No busy/reject signaling sent.** If sip2nostr is somehow mid-call
   already, it doesn't auto-reject a second offer the way NIP-AC recommends.
 - **No multi-device self-notification.** Not applicable — sip2nostr is a

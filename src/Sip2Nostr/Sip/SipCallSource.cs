@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
 using Serilog;
 using SIPSorcery.Net;
@@ -24,6 +25,9 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
     private const int RegistrationExpirySeconds = 3600;
     private const int RegistrationAttemptTimeoutSeconds = 20;
     private const int MaxRegisterAttemptsBeforeTemporaryFailure = 3;
+    private const int UdpSipPort = 5060;
+    private const int TlsSipPort = 5061;
+    private static readonly TimeSpan TlsConnectivityCheckTimeout = TimeSpan.FromSeconds(10);
 
     private static readonly SDPWellKnownMediaFormatsEnum[] PreferredAudioFormats =
     [
@@ -43,40 +47,70 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
     private bool _registerResponseReceived;
     private bool _hasLoggedOperational;
     private string? _contactHost;
+    private string _contactScheme = "sip";
     private readonly ConcurrentDictionary<string, byte> _loggedInviteCallIds = new();
 
     public event Func<Call, Task>? OnIncomingCall;
 
     public async Task StartAsync(CancellationToken ct)
     {
-        logger.Information("Starting SIP transport on UDP {ListenEndpoint}.", "0.0.0.0:5060");
+        var sipProtocol = config.Sip.Tls ? SIPProtocolsEnum.tls : SIPProtocolsEnum.udp;
+        var sipPort = config.Sip.Tls ? TlsSipPort : UdpSipPort;
+        _contactScheme = config.Sip.Tls ? "sips" : "sip";
+
+        logger.Information("Starting SIP transport on {Protocol} 0.0.0.0:{Port}.", sipProtocol, sipPort);
         InstallSipTraceLogging();
 
-        SIPUDPChannel sipChannel;
+        logger.Information("Resolving SIP provider host {ProviderHost}.", config.Sip.ProviderHost);
+        var providerIp = await _dns.ResolveAsync(config.Sip.ProviderHost, ct);
+
+        if (config.Sip.Tls)
+        {
+            // A throwaway handshake before the real SIPTLSChannel/
+            // SIPRegistrationUserAgent get involved - same reasoning as
+            // NostrSignalingClient.CheckConnectivityAsync: sip2nostr can't
+            // do its one job without a working SIP connection, so an
+            // operator who opted into [sip].tls (the default) should see
+            // that fail loudly at startup, not as an unexplained 30s-retry
+            // warning from SIPRegistrationUserAgent later.
+            await CheckTlsConnectivityAsync(providerIp, sipPort, ct);
+        }
+        else
+        {
+            logger.Warning(
+                "[sip].tls is false: SIP signaling to {ProviderHost} is unencrypted plain UDP - credentials, " +
+                "caller ID, and call metadata travel in cleartext. Set [sip].tls = true (the default) unless " +
+                "the provider genuinely has no TLS/SIPS option.",
+                config.Sip.ProviderHost);
+        }
+
+        SIPChannel sipChannel;
         try
         {
-            sipChannel = new SIPUDPChannel(IPAddress.Any, 5060);
+            sipChannel = config.Sip.Tls
+                ? new SIPTLSChannel(new IPEndPoint(IPAddress.Any, sipPort), useDualMode: false, remoteCertificateValidation: null)
+                : new SIPUDPChannel(IPAddress.Any, sipPort);
         }
         catch (ApplicationException exception) when (exception.Message.Contains("Unable to bind socket"))
         {
             throw new ConfigurationException(
-                "Could not bind UDP port 5060 - it's likely already in use by another process " +
-                "(a previous sip2nostr run that didn't exit cleanly, or another SIP application " +
-                "such as a softphone still registered to the provider). Free the port and try again.",
+                $"Could not bind {(config.Sip.Tls ? "TCP/TLS" : "UDP")} port {sipPort} - it's likely already in " +
+                "use by another process (a previous sip2nostr run that didn't exit cleanly, or another SIP " +
+                "application such as a softphone still registered to the provider). Free the port and try again.",
                 exception);
         }
 
         _sipTransport.AddSIPChannel(sipChannel);
 
-        logger.Information("Resolving SIP provider host {ProviderHost}.", config.Sip.ProviderHost);
-        var providerIp = await _dns.ResolveAsync(config.Sip.ProviderHost, ct);
-        var providerEndpoint = new SIPEndPoint(SIPProtocolsEnum.udp, providerIp, 5060);
+        var providerEndpoint = new SIPEndPoint(sipProtocol, providerIp, sipPort);
         _localMediaAddress = GetLocalAddressFor(providerIp);
         _contactHost = string.IsNullOrWhiteSpace(config.Sip.ContactHost)
             ? _localMediaAddress.ToString()
             : config.Sip.ContactHost;
         logger.Information("Using SIP Contact host {ContactHost}.", _contactHost);
-        var registrar = $"{config.Sip.ProviderHost}:5060";
+        var registrar = config.Sip.Tls
+            ? $"sips:{config.Sip.ProviderHost}:{sipPort}"
+            : $"{config.Sip.ProviderHost}:{sipPort}";
         logger.Information(
             "Resolved SIP provider {ProviderHost} to {ProviderEndpoint}; local media address is {LocalMediaAddress}; registrar URI host remains {Registrar}.",
             config.Sip.ProviderHost,
@@ -181,6 +215,44 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
         _registration.Start();
         logger.Information("SIP registration agent started.");
         _ = MonitorRegistrationStartupAsync(_registration, ct);
+    }
+
+    private async Task CheckTlsConnectivityAsync(IPAddress providerIp, int port, CancellationToken ct)
+    {
+        using var tcpClient = new TcpClient(providerIp.AddressFamily);
+        try
+        {
+            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            connectCts.CancelAfter(TlsConnectivityCheckTimeout);
+            await tcpClient.ConnectAsync(providerIp, port, connectCts.Token);
+
+            await using var sslStream = new SslStream(tcpClient.GetStream(), leaveInnerStreamOpen: false);
+            await sslStream.AuthenticateAsClientAsync(config.Sip.ProviderHost);
+
+            logger.Information(
+                "Confirmed TLS reachability of SIP provider {ProviderHost}:{Port}.",
+                config.Sip.ProviderHost,
+                port);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            throw new ConfigurationException(
+                $"[sip].tls is true, but connecting to {config.Sip.ProviderHost}:{port} over TLS timed out " +
+                $"after {TlsConnectivityCheckTimeout.TotalSeconds:0}s. Set [sip].tls = false to allow " +
+                "unencrypted SIP signaling instead (a warning is logged on every startup as a reminder).");
+        }
+        catch (Exception exception)
+        {
+            throw new ConfigurationException(
+                $"[sip].tls is true, but a TLS connection to {config.Sip.ProviderHost}:{port} could not be " +
+                $"established: {exception.Message}. Set [sip].tls = false to allow unencrypted SIP signaling " +
+                "instead (a warning is logged on every startup as a reminder).",
+                exception);
+        }
     }
 
     private void HandleIncomingCall(SIPUserAgent ua, SIPRequest inviteRequest, CancellationToken ct)
@@ -425,7 +497,7 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
             if (request.Method == SIPMethodsEnum.REGISTER)
             {
                 request.Header.Contact = SIPContactHeader.ParseContactHeader(
-                    $"<sip:{config.Sip.Username}@{_contactHost}>;expires={RegistrationExpirySeconds}");
+                    $"<{_contactScheme}:{config.Sip.Username}@{_contactHost}>;expires={RegistrationExpirySeconds}");
                 request.Header.Allow = "INVITE,ACK,BYE,CANCEL,OPTIONS,PRACK,REFER,NOTIFY,SUBSCRIBE,INFO,MESSAGE";
                 request.Header.UserAgent = "Twinkle/1.10.2";
             }
@@ -440,7 +512,7 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
                 if ((int)response.StatusCode >= 180)
                 {
                     response.Header.Contact = SIPContactHeader.ParseContactHeader(
-                        $"<sip:{config.Sip.Username}@{_contactHost}>");
+                        $"<{_contactScheme}:{config.Sip.Username}@{_contactHost}>");
                 }
 
                 if (response.StatusCode == 200)
