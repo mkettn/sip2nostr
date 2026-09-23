@@ -299,13 +299,15 @@ itself failing to reach that one relay.
   unless `[sip].tls = false` opts into plain UDP with a standing startup
   warning instead. Either way, the caller's actual audio (RTP) is still
   unencrypted - SRTP for the media leg is tracked separately (issue #35).
-  Also unverified against a real TLS-capable SIP trunk: everything else in
-  this document was checked against sip2nostr's real trunk (see the top
-  level README's Status section), but that trunk doesn't offer SIPS, so
-  this path is only verified against a local TLS listener with a
-  self-signed cert (confirming the handshake and the cert-rejection
-  failure path both behave as expected) - not against a provider's real
-  certificate chain.
+  Confirmed against sip2nostr's real trunk (see the top level README's
+  Status section) that the trunk doesn't offer SIPS at all: both 5061
+  (IANA-standard) and 5071 (a common alternate) time out rather than
+  refuse the connection, and `[sip].tls = false` correctly falls back to
+  registering over plain UDP, as designed. What that real trunk hasn't
+  confirmed is a TLS handshake actually succeeding against a provider's
+  real certificate chain - that half is only verified against a local TLS
+  listener with a self-signed cert (confirming the handshake and the
+  cert-rejection failure path both behave as expected).
 - **No busy/reject signaling sent.** If sip2nostr is somehow mid-call
   already, it doesn't auto-reject a second offer the way NIP-AC recommends.
 - **No multi-device self-notification.** Not applicable — sip2nostr is a
