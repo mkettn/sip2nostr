@@ -51,3 +51,55 @@ Or, from source:
 cd src/Sip2Nostr
 dotnet run -- /path/to/config.toml
 ```
+
+## Running as a systemd service
+
+`systemd/` ships a hardened unit and a `sysusers.d` file that create and
+confine a dedicated `sip2nostr` user, whose home directory
+(`/var/local/lib/sip2nostr`) is the only place the service can write -
+`config.toml` holds your SIP password and `bridge_nsec`, so it's kept
+there at `0700`/`0600`, readable by no one else:
+
+```
+sudo cp systemd/sysusers.d/sip2nostr.conf /etc/sysusers.d/
+sudo systemd-sysusers
+sudo install -d -o sip2nostr -g sip2nostr -m 0700 /var/local/lib/sip2nostr
+sudo install -o sip2nostr -g sip2nostr -m 0600 config.toml /var/local/lib/sip2nostr/config.toml
+sudo cp systemd/sip2nostr.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now sip2nostr
+```
+
+Put anything else `config.toml` is set to read locally in that same
+directory too: `[[lines]].sound`/`[voicemail].greeting_sound` files,
+`[voicemail].transcription_model_path`'s GGML model, and - unless
+redirected elsewhere, see below - `[voicemail].recordings_dir`.
+
+journald already captures and timestamps everything sip2nostr prints, so
+leave `[logging].file` unset in `config.toml` and use
+`journalctl -u sip2nostr` instead of a log file; set `console_quiet =
+true` and `console_timestamps = false` under `[logging]` there too, or
+its own startup line and timestamps just double up on journald's.
+
+### Voicemail recordings on a shared volume
+
+If `[voicemail].recordings_dir` points outside
+`/var/local/lib/sip2nostr` - a NAS mount shared with other services,
+say, `/shared/voicemail_recordings` - `ProtectSystem=strict` in the unit
+blocks writes there until you add it explicitly. Use a drop-in rather
+than editing the shipped unit file:
+
+```
+sudo systemctl edit sip2nostr
+```
+
+```ini
+[Service]
+ReadWritePaths=/shared/voicemail_recordings
+```
+
+and make sure the `sip2nostr` user can actually write there - add it to
+whatever group owns the share and `chmod g+w` the directory, or `chown`
+it directly. `sysusers.d/sip2nostr.conf` only creates the `sip2nostr`
+user/group themselves; group membership on a shared external path is
+deployment-specific and left to you.

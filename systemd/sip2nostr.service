@@ -1,0 +1,72 @@
+# Install to /etc/systemd/system/sip2nostr.service, then
+# `systemctl daemon-reload && systemctl enable --now sip2nostr`. See
+# README's "Running as a systemd service" for the full setup, including
+# creating the sip2nostr user (sysusers.d/sip2nostr.conf) and its data
+# directory.
+
+[Unit]
+Description=sip2nostr - SIP-to-Nostr call gateway
+Documentation=https://github.com/mkettn/sip2nostr
+After=network-online.target
+Wants=network-online.target
+# A ConfigurationException (bad SIP/Nostr config, an unreachable relay
+# at startup) exits non-zero on every attempt - stop retrying after a
+# handful of failures instead of restarting forever every RestartSec.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=sip2nostr
+Group=sip2nostr
+WorkingDirectory=/var/local/lib/sip2nostr
+ExecStart=/usr/local/bin/sip2nostr /var/local/lib/sip2nostr/config.toml
+Restart=on-failure
+RestartSec=5
+
+# journald captures stdout/stderr on its own - leave [logging].file
+# unset in config.toml and use `journalctl -u sip2nostr` instead of a
+# log file. Also set console_quiet = true and console_timestamps =
+# false under [logging] there: journald timestamps and captures every
+# line regardless, so sip2nostr's own startup line and timestamps would
+# just be noise here.
+
+# Sandboxing. sip2nostr only ever needs the network and its own data
+# directory - everything else below locks the rest of the filesystem
+# and the kernel surface down accordingly.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/local/lib/sip2nostr
+# If [voicemail].recordings_dir points outside /var/local/lib/sip2nostr
+# (e.g. a shared volume), add its path here too via a drop-in
+# (`systemctl edit sip2nostr`) rather than editing this file directly -
+# see README's "Voicemail recordings on a shared volume".
+PrivateTmp=true
+PrivateDevices=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RemoveIPC=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+# MemoryDenyWriteExecute is deliberately left out: the .NET JIT needs
+# W^X-violating mmap/mprotect calls during normal operation, and this
+# flag is a well-known way to make a dotnet service fail to start or
+# crash under load.
+
+[Install]
+WantedBy=multi-user.target
