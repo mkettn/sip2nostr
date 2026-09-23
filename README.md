@@ -55,16 +55,18 @@ dotnet run -- /path/to/config.toml
 ## Running as a systemd service
 
 `systemd/` ships a hardened unit and a `sysusers.d` file that create and
-confine a dedicated `sip2nostr` user, whose home directory
-(`/var/local/lib/sip2nostr`) is the only place the service can write -
-`config.toml` holds your SIP password and `bridge_nsec`, so it's kept
-there at `0700`/`0600`, readable by no one else:
+confine a dedicated `sip2nostr` user. The unit's `StateDirectory=`
+creates `/var/lib/sip2nostr` - the only place the service can write -
+owned by `sip2nostr`, mode `0700`, recreated with that same ownership
+and mode on every start if it's ever missing. `config.toml` (your SIP
+password and `bridge_nsec`) goes there too, so create it ahead of the
+first start:
 
 ```
 sudo cp systemd/sysusers.d/sip2nostr.conf /etc/sysusers.d/
 sudo systemd-sysusers
-sudo install -d -o sip2nostr -g sip2nostr -m 0700 /var/local/lib/sip2nostr
-sudo install -o sip2nostr -g sip2nostr -m 0600 config.toml /var/local/lib/sip2nostr/config.toml
+sudo install -d -o sip2nostr -g sip2nostr -m 0700 /var/lib/sip2nostr
+sudo install -o sip2nostr -g sip2nostr -m 0600 config.toml /var/lib/sip2nostr/config.toml
 sudo cp systemd/sip2nostr.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now sip2nostr
@@ -83,9 +85,9 @@ its own startup line and timestamps just double up on journald's.
 
 ### Voicemail recordings on a shared volume
 
-If `[voicemail].recordings_dir` points outside
-`/var/local/lib/sip2nostr` - a NAS mount shared with other services,
-say, `/shared/voicemail_recordings` - `ProtectSystem=strict` in the unit
+If `[voicemail].recordings_dir` points outside `/var/lib/sip2nostr` - a
+NAS mount shared with other services, say,
+`/shared/voicemail_recordings` - `ProtectSystem=strict` in the unit
 blocks writes there until you add it explicitly. Use a drop-in rather
 than editing the shipped unit file:
 

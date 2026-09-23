@@ -1,8 +1,8 @@
 # Install to /etc/systemd/system/sip2nostr.service, then
 # `systemctl daemon-reload && systemctl enable --now sip2nostr`. See
 # README's "Running as a systemd service" for the full setup, including
-# creating the sip2nostr user (sysusers.d/sip2nostr.conf) and its data
-# directory.
+# creating the sip2nostr user (sysusers.d/sip2nostr.conf). Its data
+# directory (StateDirectory= below) is created automatically on start.
 
 [Unit]
 Description=sip2nostr - SIP-to-Nostr call gateway
@@ -19,8 +19,15 @@ StartLimitBurst=5
 Type=simple
 User=sip2nostr
 Group=sip2nostr
-WorkingDirectory=/var/local/lib/sip2nostr
-ExecStart=/usr/local/bin/sip2nostr /var/local/lib/sip2nostr/config.toml
+# Creates /var/lib/sip2nostr on every start, owned sip2nostr:sip2nostr,
+# mode 0700 (StateDirectoryMode below) - config.toml lives there (SIP
+# password, bridge_nsec), so no one else can even list the directory.
+# Implies ReadWritePaths for it under ProtectSystem=strict below, so no
+# separate ReadWritePaths= entry is needed for this path specifically.
+StateDirectory=sip2nostr
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/sip2nostr
+ExecStart=/usr/local/bin/sip2nostr /var/lib/sip2nostr/config.toml
 Restart=on-failure
 RestartSec=5
 # Program.cs only registers Console.CancelKeyPress (SIGINT) - there's no
@@ -47,9 +54,8 @@ KillSignal=SIGINT
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/local/lib/sip2nostr
-# If [voicemail].recordings_dir points outside /var/local/lib/sip2nostr
-# (e.g. a shared volume), add its path here too via a drop-in
+# If [voicemail].recordings_dir points outside /var/lib/sip2nostr (e.g.
+# a shared volume), add ReadWritePaths=<that path> via a drop-in
 # (`systemctl edit sip2nostr`) rather than editing this file directly -
 # see README's "Voicemail recordings on a shared volume".
 PrivateTmp=true
