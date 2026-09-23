@@ -37,10 +37,11 @@ See `docs/hub-architecture.md` for the full design.
 - `ICallAudio`'s exchange format is RTP, not PCM. The hub relays raw RTP
   frames between sources and sinks; decoding/re-encoding is a
   sink/source-boundary concern, never the hub's.
-- A `Call` handed to a sink is always already answered, with audio
-  flowing (`src/Sip2Nostr/Hub/Call.cs`). Sinks decide what to do once a
-  call is live, not whether to answer it (see issue #18 for why
-  changing this is a real architecture change, not a one-line fix).
+- A `Call` handed to a sink is still ringing, not yet answered
+  (`src/Sip2Nostr/Hub/Call.cs`). A sink decides whether and when to call
+  `AnswerAsync` - that decision belongs to the sink, not the hub or
+  source - and no audio flows until it does. See `docs/hub-architecture.md`'s
+  "Who answers, and when" for what each existing sink does with that.
 
 ### Config validates fail-fast at load, not at first use
 
