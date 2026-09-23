@@ -59,6 +59,11 @@ rm -rf /usr/local/lib/sip2nostr /usr/local/bin/sip2nostr
 Copy `config.example.toml` to a `config.toml` of your choosing, fill in
 your SIP and Nostr credentials, and run `sip2nostr /path/to/config.toml`.
 
+`sip2nostr -v` prints the version and exits. `build.sh` bakes it in as
+`v1.2.3-<short commit>` (or `v1.2.3-rc5-<short commit>` for a pre-release
+tag), taken from the nearest git tag; a `VERSION` file at the repo root
+overrides the tag if present.
+
 ## Architecture: single binary, C#/.NET
 
 ```

@@ -18,11 +18,30 @@ esac
 out_dir="$script_dir/out/$rid"
 rm -rf "$out_dir"
 
+# Version format: v1.2.3-<short commit> or v1.2.3-rc5-<short commit>. The
+# base version normally comes from the nearest git tag; a VERSION file
+# overrides that (e.g. for a build from a tarball with no tags reachable).
+# Falls back to v0.0.0-xxxxxx when neither git nor VERSION is available.
+version_file="$script_dir/VERSION"
+if [ -f "$version_file" ]; then
+    base_version="$(tr -d '[:space:]' < "$version_file")"
+else
+    base_version="$(git -C "$script_dir" describe --tags --abbrev=0 2>/dev/null || true)"
+    [ -n "$base_version" ] || base_version="v0.0.0"
+fi
+
+short_commit="$(git -C "$script_dir" rev-parse --short HEAD 2>/dev/null || true)"
+[ -n "$short_commit" ] || short_commit="xxxxxx"
+
+version="$base_version-$short_commit"
+
 dotnet publish "$script_dir/src/Sip2Nostr/Sip2Nostr.csproj" \
     -c Release \
     -r "$rid" \
     --self-contained false \
     -p:PublishSingleFile=true \
+    -p:InformationalVersion="$version" \
+    -p:IncludeSourceRevisionInInformationalVersion=false \
     -o "$out_dir"
 
 echo ""
