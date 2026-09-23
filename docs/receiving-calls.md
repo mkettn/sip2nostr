@@ -142,8 +142,9 @@ something is actually ready to take the call.
 
 ## Why response routing needs the configurable DNS resolver to actually work
 
-The README requires a configurable DNS resolver instead of the OS
-resolver, for reaching the provider's registrar. That same resolver
+sip2nostr requires a configurable DNS resolver (`[dns]` in
+`config.toml`) instead of the OS resolver, for reaching the provider's
+registrar. That same resolver
 machinery also has to handle a case that's easy to overlook: **every
 response sip2nostr sends back to a caller is addressed using the literal
 IP address taken from the request's `Via` header** — never a hostname.
@@ -216,13 +217,12 @@ registrar.
   codebase asserts or tests directly.
 - **`Server`/`User-Agent` headers currently claim to be Twinkle**
   (`Twinkle/1.10.2`), left over from early debugging that turned out to be
-  unrelated to the actual bug (see git history). This works, but
-  identifying as another product isn't something to rely on long-term and
-  is a reasonable thing to revisit — either drop it or replace it with an
-  honest identifier.
+  unrelated to the actual bug. This works, but identifying as another
+  product isn't something to rely on long-term and is a reasonable thing
+  to revisit — either drop it or replace it with an honest identifier.
 - **IPv6 is untested.** The SIP transport binds to `IPAddress.Any` (IPv4
   wildcard) and all verified testing has been over IPv4.
 - **TURN/NAT behavior for the WebRTC leg is untested beyond the local
-  network the `docs/propagating-to-nostr.md` verification ran on.** The
-  README notes TURN as "likely needed" but this hasn't been confirmed
-  either way.
+  network the `docs/propagating-to-nostr.md` verification ran on** -
+  recommended for NAT traversal, but not confirmed necessary or
+  sufficient across the open internet.

@@ -67,7 +67,7 @@ label = "fax"
 enabled = true
 relays = ["wss://relay.example.com", "wss://relay2.example.com"]
 bridge_nsec = "nsec1..."      # this daemon's own identity, added as a contact in the receiving client
-target_npub = "npub1..."      # your identity - every call latches here in the MVP (see README)
+target_npub = "npub1..."      # your identity - every call latches here; no per-line routing yet
 
 [webrtc]
 stun_servers = ["stun:stun.l.google.com:19302"]
