@@ -23,4 +23,22 @@
     <PackageReference Include="Whisper.net.Runtime" Version="1.8.1" />
   </ItemGroup>
 
+  <!--
+    Whisper.net's native loader only finds its library loose beside the
+    executable, and Whisper.net.Runtime bundles every Linux arch 
+    unconditionally, so this fails the build if this RID's own copy is 
+    missing.
+  -->
+  <Target Name="RequireWhisperNativeForRid" BeforeTargets="AssignTargetPaths;ComputeResolvedFilesToPublishList"
+          Condition="$(RuntimeIdentifier.StartsWith('linux-'))">
+    <ItemGroup>
+      <_WhisperLinuxNatives Include="@(None)"
+          Condition="$([System.String]::Copy('%(None.TargetPath)').StartsWith('runtimes/linux-'))" />
+      <_WhisperNativeForRid Include="@(None)"
+          Condition="$([System.String]::Copy('%(None.TargetPath)').StartsWith('runtimes/$(RuntimeIdentifier)/'))" />
+    </ItemGroup>
+    <Error Condition="'@(_WhisperLinuxNatives)' != '' AND '@(_WhisperNativeForRid)' == ''"
+           Text="Whisper.net.Runtime ships no native library for RuntimeIdentifier '$(RuntimeIdentifier)' - delivery = 'text' would fail to load it at first use instead of failing here at build time. Confirm Whisper.net.Runtime actually supports this RID before adding it to &lt;RuntimeIdentifiers&gt;." />
+  </Target>
+
 </Project>

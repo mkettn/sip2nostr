@@ -476,8 +476,8 @@ so there's no engine selection setting - just its own requirements:
     encoding anything itself - the recording is already Opus on disk
     by the time `VoicemailSender` ever sees the job (`Sinks/VoicemailSink.cs`
     encodes it at record time; deliberately not `ffmpeg`/any external
-    process, keeping the whole feature working in a self-contained
-    single-file binary with nothing to install on the host). The
+    process, so encoding needs nothing installed on the host beyond
+    what `install.sh` already puts there). The
     backend's result `Kind` decides how it's sent: `PrivateMessage`
     (`TranscribedTextDeliveryBackend`, `FileDeliveryBackend`) calls
     `Client.SendPrivateMsgTo(relayUrls, ...)` - NIP-17: rumor, seal, gift
@@ -572,22 +572,8 @@ so there's no engine selection setting - just its own requirements:
   `Whisper.net.Ggml.WhisperGgmlDownloader` to fetch one automatically.
 - **CPU/memory cost on constrained hardware is unmeasured.** Whisper
   transcription is CPU-bound and model-size-dependent; how it performs
-  on something like a Raspberry Pi (the README's arm64 release target)
-  hasn't been measured for any model size.
-- **`Whisper.net.Runtime` is a heavier dependency than the rest of this
-  project's stack, and bundles every platform's native binaries
-  regardless of target RID.** Unlike Concentus (pure C#), it ships
-  prebuilt whisper.cpp libraries; confirmed via `dotnet publish -r
-  linux-x64 --self-contained true` that the output still includes
-  `runtimes/win-x64`, `runtimes/macos-arm64`, etc. alongside
-  `runtimes/linux-x64` (~103 MB total for that one RID) - `dotnet
-  publish -r` doesn't trim it down to just the target platform the way
-  it does for packages using the standard `runtimes/{rid}/native/`
-  convention. This directly bloats the linux-x64/linux-arm64 release
-  artifacts built by `.github/workflows/release.yml`. Worth fixing
-  (either pruning the unused `runtimes/*` folders as a post-publish
-  build step, or finding whether a newer `Whisper.net.Runtime` version
-  fixes the packaging) before shipping this in a release build.
+  on something like a Raspberry Pi hasn't been measured for any model
+  size.
 - **`delivery = "audio"` hasn't been verified against a real Blossom
   server or a real NIP-17 client.** `AudioDeliveryBackendTests.cs`
   exercises the encryption, BUD-02 auth event, and upload request/response
