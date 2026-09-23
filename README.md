@@ -49,11 +49,5 @@ Or, from source:
 
 ```
 cd src/Sip2Nostr
-dotnet run -- ../../config.toml
+dotnet run -- /path/to/config.toml
 ```
-
-`sip2nostr -v`/`--version` prints the build version.
-
-## License
-
-TBD.
