@@ -25,9 +25,9 @@
 
   <!--
     Whisper.net's native loader only finds its library loose beside the
-    executable, never self-extracted (see install.sh) - and
-    Whisper.net.Runtime bundles every Linux arch unconditionally, so
-    this fails the build if this RID's own copy is missing.
+    executable, and Whisper.net.Runtime bundles every Linux arch 
+    unconditionally, so this fails the build if this RID's own copy is 
+    missing.
   -->
   <Target Name="RequireWhisperNativeForRid" BeforeTargets="AssignTargetPaths;ComputeResolvedFilesToPublishList"
           Condition="$(RuntimeIdentifier.StartsWith('linux-'))">
