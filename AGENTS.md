@@ -66,14 +66,14 @@ Don't assume a duration or input-size cap keeps the output small.
 
 ### Build and test before every commit
 
-No top-level `.sln`. Build and test each project individually:
-
 ```
-dotnet build src/Sip2Nostr/Sip2Nostr.csproj
-dotnet test tests/Sip2Nostr.Tests/Sip2Nostr.Tests.csproj
+dotnet build
+dotnet test
 ```
 
-0 warnings and a fully passing suite, not just "it compiles." Add tests
+Runs against `Sip2Nostr.sln` from the repo root - both projects at
+once, no path needed. 0 warnings and a fully passing suite, not just
+"it compiles." Add tests
 for new `ConfigLoader` validation branches and new pure logic (see
 `tests/Sip2Nostr.Tests/ConfigLoaderTests.cs`).
 
