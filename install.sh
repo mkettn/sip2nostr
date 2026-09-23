@@ -1,9 +1,8 @@
 #!/bin/sh
 # Installs a build produced by ./build.sh to /usr/local. Everything this
-# writes lives in exactly two places - a symlink at $BIN_LINK and a
-# directory at $INSTALL_DIR - so uninstalling is always just:
+# writes lives in exactly two places - a symlink at $bin_link and a
+# directory at $install_dir - so uninstalling is always just:
 #   rm -rf /usr/local/lib/sip2nostr /usr/local/bin/sip2nostr
-# No package manager state, no systemd unit, nothing else touched.
 set -eu
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
@@ -12,7 +11,7 @@ case "$(uname -m)" in
     x86_64) rid="linux-x64" ;;
     aarch64|arm64) rid="linux-arm64" ;;
     *)
-        echo "Unsupported architecture: $(uname -m) - sip2nostr targets linux-x64 and linux-arm64 only." >&2
+        echo "Unsupported architecture: $(uname -m) - sip2nostr targets linux-x64 (amd64) and linux-arm64 (e.g. Raspberry Pi 4/5) only." >&2
         exit 1
         ;;
 esac
@@ -26,16 +25,21 @@ fi
 install_dir="/usr/local/lib/sip2nostr"
 bin_link="/usr/local/bin/sip2nostr"
 
-# Whisper.net resolves its native library relative to wherever Sip2Nostr
-# itself lives (see build.sh's comment on PublishSingleFile) - the exe
-# and runtimes/<rid>/ have to land in the same directory together, which
-# is why this installs everything as one directory rather than splitting
-# the binary into bin/ and its dependencies into lib/ the way a
-# traditional Unix install would.
 rm -rf "$install_dir"
-mkdir -p "$install_dir"
-cp -a "$build_dir/." "$install_dir/"
+mkdir -p "$install_dir/runtimes/$rid"
+
+# Only what sip2nostr actually needs at runtime: the executable,
+# Nostr.Sdk's native library (a plain sibling file), and Whisper.net's
+# native library for this architecture (has to stay under
+# runtimes/<rid>/ next to the executable - that's where its own loader
+# looks). Everything else dotnet publish leaves behind - debug symbols,
+# other architectures' and operating systems' native builds - is simply
+# never copied.
+cp "$build_dir/Sip2Nostr" "$install_dir/"
+cp "$build_dir/libnostr_sdk_ffi.so" "$install_dir/"
+cp "$build_dir/runtimes/$rid/"* "$install_dir/runtimes/$rid/"
 chmod +x "$install_dir/Sip2Nostr"
+
 ln -sf "$install_dir/Sip2Nostr" "$bin_link"
 
 echo ""

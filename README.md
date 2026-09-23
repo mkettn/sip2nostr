@@ -38,37 +38,23 @@ dotnet run -- ../../config.toml
 
 ## Building and installing
 
-No prebuilt releases - build from source with the
-[.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) installed
-(the target machine only needs the runtime, `dotnet-runtime-8.0`; the SDK
-is only for building):
+Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+to build (the target machine only needs the runtime, `dotnet-runtime-8.0`,
+to run it). Targets linux-x64 (amd64) and linux-arm64 (e.g. Raspberry Pi
+4/5 on the 64-bit OS) - `build.sh` picks the right one for the current
+machine automatically.
 
 ```
-./build.sh      # publishes a framework-dependent, single-file build for
-                 # the current machine's architecture into out/<rid>/
-sudo ./install.sh   # installs it - see below for exactly what this touches
+./build.sh
+sudo ./install.sh
 ```
 
-`install.sh` copies the build to `/usr/local/lib/sip2nostr/` and symlinks
-`/usr/local/bin/sip2nostr` to the binary in there. That's the entire
-install - no package manager state, no systemd unit, nothing else
-touched - so uninstalling is always just:
+`install.sh` installs to `/usr/local/lib/sip2nostr/` and symlinks
+`/usr/local/bin/sip2nostr` to it. To uninstall:
 
 ```
 rm -rf /usr/local/lib/sip2nostr /usr/local/bin/sip2nostr
 ```
-
-The build isn't truly a single self-sufficient file, despite
-`PublishSingleFile` - Whisper.net's native whisper.cpp library can't be
-embedded into it (its own loader can't find a library that's been
-self-extracted from a single-file bundle at runtime, only one sitting
-loose next to the executable - see `docs/voicemail.md`), so
-`runtimes/<rid>/` ships alongside the binary as a sibling directory
-instead. That's why installing means copying a small directory rather
-than dropping one file into `/usr/local/bin` directly: the executable and
-`runtimes/<rid>/` have to stay siblings for Whisper to find its library,
-which is what `install.sh`'s single install directory + symlink
-achieves.
 
 Copy `config.example.toml` to a `config.toml` of your choosing, fill in
 your SIP and Nostr credentials, and run `sip2nostr /path/to/config.toml`.
