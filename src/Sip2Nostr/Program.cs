@@ -1,3 +1,4 @@
+using System.Reflection;
 using Nostr.Sdk;
 using Serilog;
 using Serilog.Events;
@@ -10,6 +11,20 @@ using Sip2Nostr.Voicemail;
 
 const string LogOutputTemplate = "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}";
 const string LogOutputTemplateNoTimestamp = "[{Level:u3}] {Message:lj}{NewLine}{Exception}";
+
+if (args.Length > 0 && (args[0] == "-v" || args[0] == "--version"))
+{
+    Console.WriteLine(GetVersion());
+    return;
+}
+
+// build.sh bakes the real version in via -p:InformationalVersion; a plain
+// `dotnet build`/`dotnet run` (no build.sh) keeps the SDK's own default
+// (1.0.0+<full sha>) instead. The ?? only matters for an assembly with no
+// version info attribute at all (e.g. GenerateAssemblyInfo=false).
+static string GetVersion() =>
+    Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+    ?? "v0.0.0-xxxxxx";
 
 Log.Logger = CreateLogger(null, Directory.GetCurrentDirectory(), out _);
 
