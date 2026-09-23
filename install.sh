@@ -25,18 +25,24 @@ fi
 install_dir="/usr/local/lib/sip2nostr"
 bin_link="/usr/local/bin/sip2nostr"
 
+if [ "$(id -u)" -ne 0 ]; then
+    echo "install.sh writes to /usr/local - run it with sudo." >&2
+    exit 1
+fi
+
 rm -rf "$install_dir"
 mkdir -p "$install_dir/runtimes/$rid"
 
-# Only what sip2nostr actually needs at runtime: the executable,
-# Nostr.Sdk's native library (a plain sibling file), and Whisper.net's
-# native library for this architecture (has to stay under
-# runtimes/<rid>/ next to the executable - that's where its own loader
-# looks). Everything else dotnet publish leaves behind - debug symbols,
-# other architectures' and operating systems' native builds - is simply
-# never copied.
+# Only what sip2nostr actually needs at runtime: the executable, any
+# root-level native library (currently just Nostr.Sdk's, but globbed
+# rather than named so a future dependency that adds one doesn't get
+# silently left behind), and Whisper.net's native library for this
+# architecture (has to stay under runtimes/<rid>/ next to the executable
+# - that's where its own loader looks). Everything else dotnet publish
+# leaves behind - debug symbols, other architectures' and operating
+# systems' native builds - is simply never copied.
 cp "$build_dir/Sip2Nostr" "$install_dir/"
-cp "$build_dir/libnostr_sdk_ffi.so" "$install_dir/"
+cp "$build_dir"/*.so "$install_dir/"
 cp "$build_dir/runtimes/$rid/"* "$install_dir/runtimes/$rid/"
 chmod +x "$install_dir/Sip2Nostr"
 
