@@ -36,27 +36,42 @@ cd src/Sip2Nostr
 dotnet run -- ../../config.toml
 ```
 
-## Downloading a release
+## Building and installing
 
-Tagged releases (`vX.Y.Z`) are built automatically for Linux x86_64 and
-arm64 (Raspberry Pi 4/5 on the 64-bit OS) via GitHub Actions — see the
-[Releases](../../releases) page. Each release has two assets, one binary
-per architecture, no archive:
+No prebuilt releases - build from source with the
+[.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) installed
+(the target machine only needs the runtime, `dotnet-runtime-8.0`; the SDK
+is only for building):
 
-| Asset | Use when... |
-|---|---|
-| `sip2nostr-vX.Y.Z-linux-x64` | Deploying to an amd64 server/VM. |
-| `sip2nostr-vX.Y.Z-linux-arm64` | Deploying to a Raspberry Pi 4/5 (64-bit OS) or other arm64 target. |
+```
+./build.sh      # publishes a framework-dependent, single-file build for
+                 # the current machine's architecture into out/<rid>/
+sudo ./install.sh   # installs it - see below for exactly what this touches
+```
 
-Each is a framework-dependent, single-file deployment. Framework-dependent
-means the [.NET 8 runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
-needs to be installed on the target separately (not the SDK, just the
-runtime - `dotnet-runtime-8.0` on most distros); single-file means every
-dependency this project has, native libraries included, is packed into
-that one executable anyway. Download it, `chmod +x` it (a raw download
-doesn't preserve the executable bit), copy `config.example.toml` from
-this repo to `config.toml`, fill in your credentials, and run the binary
-directly.
+`install.sh` copies the build to `/usr/local/lib/sip2nostr/` and symlinks
+`/usr/local/bin/sip2nostr` to the binary in there. That's the entire
+install - no package manager state, no systemd unit, nothing else
+touched - so uninstalling is always just:
+
+```
+rm -rf /usr/local/lib/sip2nostr /usr/local/bin/sip2nostr
+```
+
+The build isn't truly a single self-sufficient file, despite
+`PublishSingleFile` - Whisper.net's native whisper.cpp library can't be
+embedded into it (its own loader can't find a library that's been
+self-extracted from a single-file bundle at runtime, only one sitting
+loose next to the executable - see `docs/voicemail.md`), so
+`runtimes/<rid>/` ships alongside the binary as a sibling directory
+instead. That's why installing means copying a small directory rather
+than dropping one file into `/usr/local/bin` directly: the executable and
+`runtimes/<rid>/` have to stay siblings for Whisper to find its library,
+which is what `install.sh`'s single install directory + symlink
+achieves.
+
+Copy `config.example.toml` to a `config.toml` of your choosing, fill in
+your SIP and Nostr credentials, and run `sip2nostr /path/to/config.toml`.
 
 ## Architecture: single binary, C#/.NET
 
