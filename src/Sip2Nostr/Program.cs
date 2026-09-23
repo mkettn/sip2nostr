@@ -19,9 +19,9 @@ if (args.Length > 0 && (args[0] == "-v" || args[0] == "--version"))
 }
 
 // build.sh bakes the real version in via -p:InformationalVersion; a plain
-// `dotnet build`/`dotnet run` (no build.sh) never sets that, so this falls
-// back to the same "no version info available" default build.sh itself
-// uses when it has neither a git checkout nor a VERSION file to work from.
+// `dotnet build`/`dotnet run` (no build.sh) keeps the SDK's own default
+// (1.0.0+<full sha>) instead. The ?? only matters for an assembly with no
+// version info attribute at all (e.g. GenerateAssemblyInfo=false).
 static string GetVersion() =>
     Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
     ?? "v0.0.0-xxxxxx";
