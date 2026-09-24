@@ -6,11 +6,6 @@ test-audio path). It also covers the parts of the flow that carry over
 unchanged once Nostr/WebRTC propagation is finished, and lists the known
 blind spots and loose ends in the current implementation.
 
-Design choices here were sanity-checked against a working Twinkle
-softphone trace on the same trunk — Twinkle is not a dependency or a
-runtime component, just a known-good reference for what a compliant
-response looks like on this provider.
-
 ## Overview
 
 Since the hub-architecture refactor (see `docs/hub-architecture.md`),
@@ -215,11 +210,6 @@ registrar.
   send-from socket) that isn't part of sipsorcery's public API contract —
   it happens to work on the installed version but isn't something this
   codebase asserts or tests directly.
-- **`Server`/`User-Agent` headers currently claim to be Twinkle**
-  (`Twinkle/1.10.2`), left over from early debugging that turned out to be
-  unrelated to the actual bug. This works, but identifying as another
-  product isn't something to rely on long-term and is a reasonable thing
-  to revisit — either drop it or replace it with an honest identifier.
 - **IPv6 is untested.** The SIP transport binds to `IPAddress.Any` (IPv4
   wildcard) and all verified testing has been over IPv4.
 - **TURN/NAT behavior for the WebRTC leg is untested beyond the local

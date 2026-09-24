@@ -5,7 +5,7 @@ password = "YOUR_SIP_PASS"
 # Optional: set this to the public host/IP your SIP provider should use
 # for inbound calls if REGISTER succeeds but no INVITE reaches this process.
 # contact_host = "203.0.113.10"
-# Local RTP port for SIP audio. Twinkle commonly uses 8000.
+# Local RTP port for SIP audio.
 rtp_port = 8000
 
 [dns]
