@@ -306,10 +306,11 @@ public sealed class VoicemailConfig
     // Voicemail/TranscribedTextDeliveryBackend.cs) - see docs/voicemail.md.
     // Blossom (BUD-01/BUD-02) server base URLs, tried in order until one
     // accepts the upload. Every entry present must be an absolute
-    // http(s) URL - ConfigLoader rejects a malformed one at startup - but
-    // an empty list isn't itself an error: Program.cs logs a warning and
-    // falls back to delivery = "file"'s behavior instead (see
-    // docs/voicemail.md).
+    // http(s) URL, or "unix:<absolute path>" to reach a server listening
+    // on a local Unix domain socket instead - ConfigLoader rejects a
+    // malformed one at startup - but an empty list isn't itself an
+    // error: Program.cs logs a warning and falls back to delivery =
+    // "file"'s behavior instead (see docs/voicemail.md).
     [property: TomlPropertyName("blossom_servers")]
     public List<string> BlossomServers { get; init; } = [];
 }

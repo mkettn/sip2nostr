@@ -167,6 +167,7 @@ delivery = "file"
 # identity (a signed, time-limited kind 24242 event per BUD-02) - the
 # server never sees the bridge's actual Nostr identity's private key, and
 # never sees the recording's plaintext, only the AES-GCM ciphertext.
-# Leaving this empty when delivery = "audio" isn't an error - see the
-# delivery comment above.
+# An entry can also be "unix:<absolute path>" to reach a server over a
+# local Unix domain socket instead of TCP. Leaving this empty when
+# delivery = "audio" isn't an error - see the delivery comment above.
 # blossom_servers = ["https://blossom.example.com"]

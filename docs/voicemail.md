@@ -160,7 +160,11 @@ failing to start or trying to inline the recording:
   plaintext, or the bridge's actual Nostr key beyond a signed auth event)
   to a [Blossom](https://github.com/hzrd149/blossom) (BUD-01/BUD-02)
   server from `[voicemail].blossom_servers` - tried in order until one
-  accepts it. It then sends a NIP-17 **kind 15** file message: `content`
+  accepts it. Each entry is normally a plain http(s) base URL; a
+  `unix:<absolute path>` entry instead reaches a server listening on a
+  local Unix domain socket - the upload `HttpClient` dials that path
+  directly and speaks plain HTTP/1.1 over it, same as it would over TCP.
+  It then sends a NIP-17 **kind 15** file message: `content`
   is the uploaded URL, tags carry `decryption-key`/`decryption-nonce`
   (hex-encoded), `encryption-algorithm` (`aes-gcm`), `x`/`ox` (sha256 of
   the encrypted/original bytes), and `size`. Authentication is a signed,
@@ -579,6 +583,11 @@ so there's no engine selection setting - just its own requirements:
   (a specific server's exact error responses, whether Amethyst or another
   client actually renders a kind 15 `audio/ogg` attachment the way this
   implementation expects) are unverified.
+- **`unix:` Blossom entries are exercised against a hand-rolled fake
+  socket server in `AudioDeliveryBackendTests.cs`, not a real Blossom
+  implementation listening on a Unix socket** - same caveat as the rest
+  of `delivery = "audio"` above, just for the socket transport
+  specifically rather than the protocol.
 - **No BUD-06 `HEAD /upload` preflight.** A client MAY ask a server
   whether it would accept an upload (size, content type) before sending
   the bytes; `AudioDeliveryBackend` always goes straight to `PUT`.

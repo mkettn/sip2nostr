@@ -585,10 +585,29 @@ public class ConfigLoaderTests
         }
     }
 
+    [Fact]
+    public void Load_AudioDeliveryWithUnixSocketBlossomServer_Succeeds()
+    {
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\ndelivery = \"audio\"\n" +
+            "blossom_servers = [\"unix:/run/blossom/blossom.sock\"]\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal(["unix:/run/blossom/blossom.sock"], config.Voicemail.BlossomServers);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Theory]
     [InlineData("not a url")]
     [InlineData("ftp://blossom.example.com")]
     [InlineData("blossom.example.com")]
+    [InlineData("unix:")]
+    [InlineData("unix:relative/path.sock")]
     public void Load_BlossomServerInvalidUrl_Throws(string server)
     {
         var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\n" +

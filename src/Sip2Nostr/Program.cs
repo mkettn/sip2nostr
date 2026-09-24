@@ -131,7 +131,7 @@ static IVoicemailDeliveryBackend CreateVoicemailDeliveryBackend(AppConfig config
 
 static AudioDeliveryBackend CreateAudioDeliveryBackend(AppConfig config, ILogger logger)
 {
-    var servers = config.Voicemail.BlossomServers.Select(s => new Uri(s)).ToList();
+    var servers = config.Voicemail.BlossomServers.Select(BlossomServer.Parse).ToList();
     return new AudioDeliveryBackend(servers, config.Nostr, logger.ForContext<AudioDeliveryBackend>());
 }
 

@@ -179,11 +179,21 @@ public static class ConfigLoader
 
             foreach (var server in config.Voicemail.BlossomServers)
             {
+                if (server.StartsWith("unix:", StringComparison.Ordinal))
+                {
+                    if (!Path.IsPathRooted(server["unix:".Length..]))
+                    {
+                        throw new ConfigurationException(
+                            $"[voicemail].blossom_servers entry \"{server}\" does not name an absolute path after \"unix:\".");
+                    }
+                    continue;
+                }
+
                 if (!Uri.TryCreate(server, UriKind.Absolute, out var serverUri) ||
                     (serverUri.Scheme != Uri.UriSchemeHttp && serverUri.Scheme != Uri.UriSchemeHttps))
                 {
                     throw new ConfigurationException(
-                        $"[voicemail].blossom_servers entry \"{server}\" is not a valid absolute http(s) URL.");
+                        $"[voicemail].blossom_servers entry \"{server}\" is not a valid absolute http(s) URL or \"unix:<absolute path>\".");
                 }
             }
         }

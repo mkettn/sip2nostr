@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using Nostr.Sdk;
@@ -27,7 +28,7 @@ public class AudioDeliveryBackendTests
         try
         {
             var backend = new AudioDeliveryBackend(
-                [server.BaseUri],
+                [BlossomServer.Parse(server.BaseUri.ToString())],
                 new NostrConfig { BridgeNsec = BridgeNsec },
                 Log.Logger);
 
@@ -89,6 +90,40 @@ public class AudioDeliveryBackendTests
     }
 
     [Fact]
+    public async Task BuildContentAsync_UnixSocketServer_UploadsOverSocket()
+    {
+        var plaintext = Encoding.UTF8.GetBytes("fake opus bytes over a unix socket");
+        var opusPath = Path.GetTempFileName();
+        await File.WriteAllBytesAsync(opusPath, plaintext);
+
+        using var server = new FakeUnixBlossomServer("https://cdn.example.com/unix-socket-blob");
+        try
+        {
+            var backend = new AudioDeliveryBackend(
+                [BlossomServer.Parse($"unix:{server.SocketPath}")],
+                new NostrConfig { BridgeNsec = BridgeNsec },
+                Log.Logger);
+
+            var job = new VoicemailAudioJob(opusPath, [], 8000, 5, "+15551234567", "call-unix");
+            var (content, _, _, kind) = await backend.BuildContentAsync(job, CancellationToken.None);
+
+            Assert.Equal(VoicemailContentKind.FileMessage, kind);
+            Assert.Equal("https://cdn.example.com/unix-socket-blob", content);
+
+            // Proves the request actually crossed the socket, not just
+            // that BlossomServer.Parse split the string correctly.
+            Assert.NotNull(server.ReceivedBody);
+            Assert.Equal(plaintext.Length + 16, server.ReceivedBody!.Length);
+            Assert.NotNull(server.ReceivedAuthorizationHeader);
+            Assert.StartsWith("Nostr ", server.ReceivedAuthorizationHeader);
+        }
+        finally
+        {
+            File.Delete(opusPath);
+        }
+    }
+
+    [Fact]
     public async Task BuildContentAsync_FirstServerRejects_FallsBackToSecond()
     {
         var opusPath = Path.GetTempFileName();
@@ -99,7 +134,7 @@ public class AudioDeliveryBackendTests
         try
         {
             var backend = new AudioDeliveryBackend(
-                [failingServer.BaseUri, workingServer.BaseUri],
+                [BlossomServer.Parse(failingServer.BaseUri.ToString()), BlossomServer.Parse(workingServer.BaseUri.ToString())],
                 new NostrConfig { BridgeNsec = BridgeNsec },
                 Log.Logger);
 
@@ -124,7 +159,7 @@ public class AudioDeliveryBackendTests
         try
         {
             var backend = new AudioDeliveryBackend(
-                [server.BaseUri],
+                [BlossomServer.Parse(server.BaseUri.ToString())],
                 new NostrConfig { BridgeNsec = BridgeNsec },
                 Log.Logger);
 
@@ -209,6 +244,134 @@ public class AudioDeliveryBackendTests
             }
 
             _listener.Close();
+        }
+    }
+
+    // Exercises the Unix-socket transport end to end: a raw Socket bound
+    // to a temp path, speaking just enough hand-rolled HTTP/1.1 to
+    // receive AudioDeliveryBackend's PUT and reply with a blob
+    // descriptor - HttpListener (used by FakeBlossomServer above) has no
+    // Unix-socket support on .NET, hence rolling this by hand instead.
+    private sealed class FakeUnixBlossomServer : IDisposable
+    {
+        private readonly Socket _listener;
+        private readonly Task _acceptTask;
+
+        public string SocketPath { get; }
+
+        public byte[]? ReceivedBody { get; private set; }
+
+        public string? ReceivedAuthorizationHeader { get; private set; }
+
+        public FakeUnixBlossomServer(string uploadedUrl)
+        {
+            SocketPath = Path.Combine(Path.GetTempPath(), $"blossom-test-{Guid.NewGuid():N}.sock");
+            _listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            _listener.Bind(new UnixDomainSocketEndPoint(SocketPath));
+            _listener.Listen(1);
+            _acceptTask = AcceptOnceAsync(uploadedUrl);
+        }
+
+        private async Task AcceptOnceAsync(string uploadedUrl)
+        {
+            using var client = await _listener.AcceptAsync();
+            using var stream = new NetworkStream(client, ownsSocket: false);
+
+            var received = new List<byte>();
+            var readBuffer = new byte[4096];
+            int headerEnd;
+            while ((headerEnd = IndexOfHeaderEnd(received)) < 0)
+            {
+                var n = await stream.ReadAsync(readBuffer);
+                if (n == 0)
+                {
+                    return;
+                }
+
+                received.AddRange(readBuffer[..n]);
+            }
+
+            var bytes = received.ToArray();
+            var headers = ParseHeaders(Encoding.ASCII.GetString(bytes, 0, headerEnd));
+            ReceivedAuthorizationHeader = headers.GetValueOrDefault("Authorization");
+            var contentLength = int.Parse(headers["Content-Length"]);
+
+            var body = new byte[contentLength];
+            var alreadyRead = bytes[(headerEnd + 4)..];
+            alreadyRead.CopyTo(body, 0);
+            var bodyReceived = alreadyRead.Length;
+            while (bodyReceived < contentLength)
+            {
+                var n = await stream.ReadAsync(body.AsMemory(bodyReceived));
+                if (n == 0)
+                {
+                    break;
+                }
+
+                bodyReceived += n;
+            }
+
+            ReceivedBody = body;
+
+            var responseBody = $$"""{"url": "{{uploadedUrl}}", "sha256": "0", "size": {{body.Length}}, "type": "application/octet-stream"}""";
+            var responseBytes = Encoding.UTF8.GetBytes(responseBody);
+            var response = "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: application/json\r\n" +
+                $"Content-Length: {responseBytes.Length}\r\n" +
+                "Connection: close\r\n\r\n";
+            await stream.WriteAsync(Encoding.ASCII.GetBytes(response));
+            await stream.WriteAsync(responseBytes);
+        }
+
+        private static int IndexOfHeaderEnd(List<byte> buffer)
+        {
+            for (var i = 0; i + 3 < buffer.Count; i++)
+            {
+                if (buffer[i] == '\r' && buffer[i + 1] == '\n' && buffer[i + 2] == '\r' && buffer[i + 3] == '\n')
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private static Dictionary<string, string> ParseHeaders(string headerText)
+        {
+            var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var line in headerText.Split("\r\n").Skip(1))
+            {
+                var separator = line.IndexOf(':');
+                if (separator > 0)
+                {
+                    headers[line[..separator].Trim()] = line[(separator + 1)..].Trim();
+                }
+            }
+
+            return headers;
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                _acceptTask.Wait(TimeSpan.FromSeconds(5));
+            }
+            catch
+            {
+                // Best-effort - the test's own assertions already failed
+                // by this point if the server never got a request.
+            }
+
+            _listener.Close();
+            try
+            {
+                File.Delete(SocketPath);
+            }
+            catch
+            {
+                // Best-effort cleanup of the socket file.
+            }
         }
     }
 }

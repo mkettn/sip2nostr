@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -25,13 +26,22 @@ namespace Sip2Nostr.Voicemail;
 // failed upload is a routine failure to plan for, not a rare edge case.
 // See docs/voicemail.md.
 public sealed class AudioDeliveryBackend(
-    IReadOnlyList<Uri> servers,
+    IReadOnlyList<BlossomServer> servers,
     NostrConfig nostrConfig,
     ILogger logger) : IVoicemailDeliveryBackend
 {
     private static readonly TimeSpan UploadTimeout = TimeSpan.FromSeconds(30);
     private static readonly HttpClient Http = new() { Timeout = UploadTimeout };
     private readonly FileDeliveryBackend _fallback = new();
+
+    // One HttpClient per distinct Unix socket path, built once rather
+    // than per upload so a busy queue reuses the same connection instead
+    // of re-dialing the socket every time.
+    private readonly Dictionary<string, HttpClient> _unixSocketClients = servers
+        .Select(server => server.SocketPath)
+        .OfType<string>()
+        .Distinct()
+        .ToDictionary(path => path, CreateUnixSocketClient);
 
     public bool RequiresPcm => false;
 
@@ -113,17 +123,18 @@ public sealed class AudioDeliveryBackend(
     // <base64(signed kind 24242 event)>` header. No BUD-06 HEAD
     // preflight - servers accept a direct PUT per spec, and a voicemail
     // blob is small enough that skipping it costs nothing on a rejection.
-    private async Task<string> UploadAsync(Uri server, byte[] blob, string blobHashHex, Keys bridgeKeys, CancellationToken ct)
+    private async Task<string> UploadAsync(BlossomServer server, byte[] blob, string blobHashHex, Keys bridgeKeys, CancellationToken ct)
     {
         var authEvent = BuildAuthEvent(blobHashHex, bridgeKeys);
         var authHeader = "Nostr " + Convert.ToBase64String(Encoding.UTF8.GetBytes(authEvent.AsJson()));
 
-        // Not new Uri(server, "upload") - relative URI combination drops
-        // the last path segment of a server URL with no trailing slash
-        // (e.g. ".../api" + "upload" => ".../upload", silently losing
-        // "/api"), which a configured [voicemail].blossom_servers entry
-        // has no reason to have but shouldn't be able to break like this.
-        var uploadUrl = new Uri($"{server.ToString().TrimEnd('/')}/upload");
+        // Not new Uri(server.RequestUri, "upload") - relative URI
+        // combination drops the last path segment of a server URL with
+        // no trailing slash (e.g. ".../api" + "upload" => ".../upload",
+        // silently losing "/api"), which a configured
+        // [voicemail].blossom_servers entry has no reason to have but
+        // shouldn't be able to break like this.
+        var uploadUrl = new Uri($"{server.RequestUri.ToString().TrimEnd('/')}/upload");
         using var request = new HttpRequestMessage(HttpMethod.Put, uploadUrl)
         {
             Content = new ByteArrayContent(blob),
@@ -131,7 +142,7 @@ public sealed class AudioDeliveryBackend(
         request.Headers.TryAddWithoutValidation("Authorization", authHeader);
         request.Content!.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
 
-        using var response = await Http.SendAsync(request, ct);
+        using var response = await GetHttpClient(server).SendAsync(request, ct);
         var body = await response.Content.ReadAsStringAsync(ct);
         if (!response.IsSuccessStatusCode)
         {
@@ -146,6 +157,39 @@ public sealed class AudioDeliveryBackend(
         }
 
         return url;
+    }
+
+    private HttpClient GetHttpClient(BlossomServer server)
+    {
+        var socketPath = server.SocketPath;
+        return socketPath is null ? Http : _unixSocketClients[socketPath];
+    }
+
+    // A Unix-socket entry has no real TCP host/port - ConnectCallback
+    // dials the configured socket path directly instead of whatever
+    // host SocketsHttpHandler would otherwise resolve from the request
+    // URI, and hands back the raw connection for HttpClient to speak
+    // plain HTTP/1.1 over.
+    private static HttpClient CreateUnixSocketClient(string socketPath)
+    {
+        var handler = new SocketsHttpHandler
+        {
+            ConnectCallback = async (_, ct) =>
+            {
+                var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+                try
+                {
+                    await socket.ConnectAsync(new UnixDomainSocketEndPoint(socketPath), ct);
+                    return new NetworkStream(socket, ownsSocket: true);
+                }
+                catch
+                {
+                    socket.Dispose();
+                    throw;
+                }
+            },
+        };
+        return new HttpClient(handler) { Timeout = UploadTimeout };
     }
 
     // BUD-02 auth event (kind 24242): "t" = the action it authorizes,
@@ -163,5 +207,12 @@ public sealed class AudioDeliveryBackend(
         return new EventBuilder(new Kind(24242), "sip2nostr voicemail upload").Tags(tags).SignWithKeys(bridgeKeys);
     }
 
-    public ValueTask DisposeAsync() => _fallback.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        await _fallback.DisposeAsync();
+        foreach (var client in _unixSocketClients.Values)
+        {
+            client.Dispose();
+        }
+    }
 }
