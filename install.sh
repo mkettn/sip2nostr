@@ -1,8 +1,4 @@
 #!/bin/sh
-# Installs a build produced by ./build.sh to /usr/local. Everything this
-# writes lives in exactly two places - a symlink at $bin_link and a
-# directory at $install_dir - so uninstalling is always just:
-#   rm -rf /usr/local/lib/sip2nostr /usr/local/bin/sip2nostr
 set -eu
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
@@ -23,29 +19,45 @@ if [ ! -x "$build_dir/Sip2Nostr" ]; then
 fi
 
 install_dir="/usr/local/lib/sip2nostr"
-bin_link="/usr/local/bin/sip2nostr"
+sysusers_file="/usr/local/lib/sysusers.d/sip2nostr.conf"
+unit_file="/usr/local/lib/systemd/system/sip2nostr.service"
+data_dir="/var/local/lib/sip2nostr"
+
+if ! command -v systemctl >/dev/null 2>&1; then
+    echo "install.sh installs sip2nostr as a systemd service - no systemd found on this host." >&2
+    exit 1
+fi
 
 if [ "$(id -u)" -ne 0 ]; then
-    echo "install.sh writes to /usr/local - run it with sudo." >&2
+    echo "install.sh writes to /usr/local/lib and /var/local/lib - run it with sudo." >&2
     exit 1
 fi
 
 rm -rf "$install_dir"
 mkdir -p "$install_dir/runtimes/$rid"
-
-# Only what sip2nostr actually needs at runtime - see Sip2Nostr.csproj
-# for why runtimes/<rid>/ has to stay a sibling of the executable.
-# Everything else dotnet publish leaves behind (debug symbols, other
-# architectures/operating systems' native builds) is simply never copied.
 cp "$build_dir/Sip2Nostr" "$install_dir/"
 cp "$build_dir"/*.so "$install_dir/"
 cp "$build_dir/runtimes/$rid/"* "$install_dir/runtimes/$rid/"
 chmod +x "$install_dir/Sip2Nostr"
 
-ln -sf "$install_dir/Sip2Nostr" "$bin_link"
+mkdir -p "$(dirname "$sysusers_file")"
+cp "$script_dir/systemd/sysusers.d/sip2nostr.conf" "$sysusers_file"
+systemd-sysusers "$sysusers_file"
+
+install -d -o sip2nostr -g sip2nostr -m 0700 "$data_dir"
+# /var/local is setgid staff on Debian-family systems; install -d inherits the bit.
+chmod g-s "$data_dir"
+
+if [ ! -e "$data_dir/config.toml" ]; then
+    install -o sip2nostr -g sip2nostr -m 0600 "$script_dir/config.example.toml" "$data_dir/config.toml"
+fi
+
+mkdir -p "$(dirname "$unit_file")"
+cp "$script_dir/systemd/sip2nostr.service" "$unit_file"
+systemctl daemon-reload
 
 echo ""
-echo "Installed to $install_dir, linked as $bin_link."
-echo "Copy config.example.toml to a config.toml of your choosing, fill in your credentials, and run: sip2nostr /path/to/config.toml"
-echo ""
-echo "To uninstall: rm -rf $install_dir $bin_link"
+echo "sip2nostr needs to be configured:"
+echo "  sudo nano $data_dir/config.toml"
+echo "then enabled:"
+echo "  sudo systemctl enable --now sip2nostr"

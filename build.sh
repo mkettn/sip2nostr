@@ -1,7 +1,7 @@
 #!/bin/sh
 # Publishes a framework-dependent, single-file build of sip2nostr for the
 # current machine's architecture into out/<rid>/. Run ./install.sh
-# afterward to put it on $PATH.
+# afterward to install it as a systemd service.
 set -eu
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
@@ -52,4 +52,4 @@ dotnet publish "$script_dir/src/Sip2Nostr/Sip2Nostr.csproj" \
 
 echo ""
 echo "Built $out_dir/Sip2Nostr"
-echo "Run ./install.sh to install it to /usr/local."
+echo "Run ./install.sh to install it and its systemd service."

@@ -1,0 +1,60 @@
+# Installed automatically by ../install.sh. Manual install: copy to
+# /usr/local/lib/systemd/system/sip2nostr.service, then
+# `systemctl daemon-reload`. See README's "Installing as a systemd
+# service" section for the rest of the setup.
+
+[Unit]
+Description=sip2nostr - SIP-to-Nostr call gateway
+Documentation=https://github.com/mkettn/sip2nostr
+After=network-online.target
+Wants=network-online.target
+# ConfigurationException (bad config, unreachable relay) exits non-zero
+# on every attempt - stop retrying after a few failures instead of forever.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=sip2nostr
+Group=sip2nostr
+WorkingDirectory=/var/local/lib/sip2nostr
+ExecStart=/usr/local/lib/sip2nostr/Sip2Nostr /var/local/lib/sip2nostr/config.toml
+Restart=on-failure
+RestartSec=5
+# Program.cs only handles SIGINT, not systemd's default SIGTERM - without
+# this, a stop/restart would skip its graceful shutdown entirely.
+KillSignal=SIGINT
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/local/lib/sip2nostr
+# Redirecting [voicemail].recordings_dir elsewhere needs its own
+# ReadWritePaths= too, via `systemctl edit sip2nostr`.
+PrivateTmp=true
+PrivateDevices=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RemoveIPC=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# AF_NETLINK is required: SIPSorcery needs it (via getifaddrs) to gather
+# WebRTC ICE candidates - without it, calls ring with no audio.
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+# MemoryDenyWriteExecute is deliberately omitted - it breaks the .NET JIT.
+
+[Install]
+WantedBy=multi-user.target
