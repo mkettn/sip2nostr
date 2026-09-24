@@ -99,7 +99,7 @@ public class AudioDeliveryBackendTests
         using var server = new FakeUnixBlossomServer("https://cdn.example.com/unix-socket-blob");
         try
         {
-            var backend = new AudioDeliveryBackend(
+            await using var backend = new AudioDeliveryBackend(
                 [BlossomServer.Parse($"unix:{server.SocketPath}")],
                 new NostrConfig { BridgeNsec = BridgeNsec },
                 Log.Logger);

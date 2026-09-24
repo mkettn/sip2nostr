@@ -602,6 +602,45 @@ public class ConfigLoaderTests
         }
     }
 
+    [Fact]
+    public void Load_BlossomServerUnixSocketPathAt107Bytes_Succeeds()
+    {
+        // sockaddr_un.sun_path is 108 bytes on Linux, one of which is the
+        // null terminator UnixDomainSocketEndPoint itself adds - 107 is
+        // the longest path that still fits.
+        var pathAt107Bytes = "/" + new string('a', 106);
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\n" +
+            $"blossom_servers = [\"unix:{pathAt107Bytes}\"]\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal([$"unix:{pathAt107Bytes}"], config.Voicemail.BlossomServers);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_BlossomServerUnixSocketPathOver107Bytes_Throws()
+    {
+        var pathAt108Bytes = "/" + new string('a', 107);
+        var toml = $"{MinimalValidToml}\n\n[voicemail]\nenabled = true\n" +
+            $"blossom_servers = [\"unix:{pathAt108Bytes}\"]\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains("107-byte limit", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Theory]
     [InlineData("not a url")]
     [InlineData("ftp://blossom.example.com")]
