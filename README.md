@@ -40,6 +40,10 @@ directly by name. If `config.toml` doesn't already exist in the data
 directory, install.sh also seeds it there from `config.example.toml` -
 see "Running as a systemd service" below to finish setup and start it.
 
+To upgrade an existing install: `./build.sh && sudo ./install.sh`, then
+`sudo systemctl restart sip2nostr` - install.sh replaces the files but
+never restarts an already-running service.
+
 ## Configuring
 
 Copy `config.example.toml` to a `config.toml` of your choosing and fill
@@ -118,4 +122,5 @@ sudo rm -rf /usr/local/lib/sip2nostr /usr/local/lib/sysusers.d/sip2nostr.conf /u
 sudo systemctl daemon-reload
 # also deletes config.toml and any voicemail recordings:
 sudo rm -rf /var/local/lib/sip2nostr
+sudo userdel sip2nostr
 ```

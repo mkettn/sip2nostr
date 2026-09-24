@@ -23,6 +23,11 @@ sysusers_file="/usr/local/lib/sysusers.d/sip2nostr.conf"
 unit_file="/usr/local/lib/systemd/system/sip2nostr.service"
 data_dir="/var/local/lib/sip2nostr"
 
+if ! command -v systemctl >/dev/null 2>&1; then
+    echo "install.sh installs sip2nostr as a systemd service - no systemd found on this host." >&2
+    exit 1
+fi
+
 if [ "$(id -u)" -ne 0 ]; then
     echo "install.sh writes to /usr/local/lib and /var/local/lib - run it with sudo." >&2
     exit 1
@@ -40,6 +45,7 @@ cp "$script_dir/systemd/sysusers.d/sip2nostr.conf" "$sysusers_file"
 systemd-sysusers "$sysusers_file"
 
 install -d -o sip2nostr -g sip2nostr -m 0700 "$data_dir"
+# /var/local is setgid staff on Debian-family systems; install -d inherits the bit.
 chmod g-s "$data_dir"
 
 if [ ! -e "$data_dir/config.toml" ]; then
