@@ -1,14 +1,4 @@
 #!/bin/sh
-# Installs a build produced by ./build.sh, the sip2nostr system user, and
-# the systemd service that runs it. Nothing is put on $PATH - sip2nostr
-# is meant to run under systemd, not invoked directly by name. sip2nostr
-# isn't a distro package, so everything fixed lives under /usr/local/lib
-# - the binary, the sysusers.d file, and the systemd unit itself are all
-# canonical /usr/local/lib locations for locally installed software, not
-# ad hoc choices - and everything variable lives under /var/local/lib
-# instead (not a systemd StateDirectory=; this script owns creating and
-# permissioning that directory itself, not systemd). See "To uninstall"
-# below for exactly what that means to remove.
 set -eu
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
@@ -40,59 +30,28 @@ fi
 
 rm -rf "$install_dir"
 mkdir -p "$install_dir/runtimes/$rid"
-
-# Only what sip2nostr actually needs at runtime - see Sip2Nostr.csproj
-# for why runtimes/<rid>/ has to stay a sibling of the executable.
-# Everything else dotnet publish leaves behind (debug symbols, other
-# architectures/operating systems' native builds) is simply never copied.
 cp "$build_dir/Sip2Nostr" "$install_dir/"
 cp "$build_dir"/*.so "$install_dir/"
 cp "$build_dir/runtimes/$rid/"* "$install_dir/runtimes/$rid/"
 chmod +x "$install_dir/Sip2Nostr"
 
-# /usr/local/lib/sysusers.d is sysusers.d(5)'s own location for locally
-# installed, non-distro-packaged software (as opposed to
-# /usr/lib/sysusers.d, for the latter) - systemd-sysusers scans it
-# automatically, but most base installs don't ship the directory itself
-# until something actually uses it, so create it if needed.
 mkdir -p "$(dirname "$sysusers_file")"
 cp "$script_dir/systemd/sysusers.d/sip2nostr.conf" "$sysusers_file"
 systemd-sysusers "$sysusers_file"
 
-# Safe to repeat on an existing install - install -d only touches
-# ownership and mode, never a directory's contents - so a live
-# deployment's config.toml and recordings survive a re-run untouched.
 install -d -o sip2nostr -g sip2nostr -m 0700 "$data_dir"
-# Debian's stock /usr/local and /var/local are root:staff with the
-# setgid bit, which a directory newly created underneath inherits at
-# creation time regardless of the mode just given it - confirmed here:
-# install -d's own -m 0700 left this setgid, and even a follow-up
-# numeric `chmod 0700` didn't clear it. Grants nothing extra by itself
-# (group perms are 000 either way), but strip it anyway so the mode
-# actually is 0700, matching what every comment/doc elsewhere calls it.
 chmod g-s "$data_dir"
 
-# /usr/local/lib/systemd/system is systemd.unit(5)'s own location for
-# locally installed, non-distro-packaged units - scanned automatically,
-# lower priority than /etc/systemd/system (admin overrides) but higher
-# than /usr/lib/systemd/system (distro packages) - and, like the
-# sysusers.d directory above, not guaranteed to already exist.
+if [ ! -e "$data_dir/config.toml" ]; then
+    install -o sip2nostr -g sip2nostr -m 0600 "$script_dir/config.example.toml" "$data_dir/config.toml"
+fi
+
 mkdir -p "$(dirname "$unit_file")"
 cp "$script_dir/systemd/sip2nostr.service" "$unit_file"
 systemctl daemon-reload
 
 echo ""
-echo "Installed to $install_dir. Service unit: $unit_file."
-echo "The sip2nostr system user exists; its data directory, $data_dir,"
-echo "is ready and owned by it."
-echo ""
-echo "Copy config.example.toml to $data_dir/config.toml (owned by"
-echo "sip2nostr, mode 0600), fill in your credentials, then:"
-echo "  systemctl enable --now sip2nostr"
-echo ""
-echo "To uninstall:"
-echo "  systemctl disable --now sip2nostr"
-echo "  rm -rf $install_dir $sysusers_file $unit_file"
-echo "  systemctl daemon-reload"
-echo "(leaves $data_dir - your config.toml and any voicemail recordings -"
-echo "in place; remove that separately too if you want those gone as well)"
+echo "sip2nostr needs to be configured:"
+echo "  sudo nano $data_dir/config.toml"
+echo "then enabled:"
+echo "  sudo systemctl enable --now sip2nostr"

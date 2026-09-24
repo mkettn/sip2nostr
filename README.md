@@ -36,20 +36,9 @@ too, each in that directory tree's own canonical location for locally
 installed software rather than `/etc` or `/usr/lib`. Everything
 variable lives under `/var/local/lib` instead. Nothing is put on
 `$PATH` - sip2nostr is meant to run under systemd, not invoked
-directly by name. See "Running as a systemd service" below to finish
-setup and start it.
-
-To uninstall:
-
-```
-sudo systemctl disable --now sip2nostr
-sudo rm -rf /usr/local/lib/sip2nostr /usr/local/lib/sysusers.d/sip2nostr.conf /usr/local/lib/systemd/system/sip2nostr.service
-sudo systemctl daemon-reload
-```
-
-This leaves `/var/local/lib/sip2nostr` (your `config.toml` and any
-voicemail recordings) in place - remove that separately too if you
-want those gone as well.
+directly by name. If `config.toml` doesn't already exist in the data
+directory, install.sh also seeds it there from `config.example.toml` -
+see "Running as a systemd service" below to finish setup and start it.
 
 ## Configuring
 
@@ -76,13 +65,14 @@ For a long-running deployment, use systemd instead - see below.
 ## Running as a systemd service
 
 `sudo ./install.sh` (see "Installing" above) already creates the
-`sip2nostr` user, its data directory, and the service unit. The only
-thing left is `config.toml` (your SIP password and `bridge_nsec`) -
-install.sh never touches it, so a previous install's config survives a
-re-run:
+`sip2nostr` user, its data directory, the service unit, and -
+if `config.toml` doesn't already exist there - seeds one from
+`config.example.toml`; a previous install's config always survives a
+re-run either way. All that's left is filling in your SIP and Nostr
+credentials and starting the service:
 
 ```
-sudo install -o sip2nostr -g sip2nostr -m 0600 config.toml /var/local/lib/sip2nostr/config.toml
+sudo nano /var/local/lib/sip2nostr/config.toml
 sudo systemctl enable --now sip2nostr
 ```
 
@@ -119,3 +109,13 @@ whatever group owns the share and `chmod g+w` the directory, or `chown`
 it directly. `sysusers.d/sip2nostr.conf` only creates the `sip2nostr`
 user/group themselves; group membership on a shared external path is
 deployment-specific and left to you.
+
+## Uninstalling
+
+```
+sudo systemctl disable --now sip2nostr
+sudo rm -rf /usr/local/lib/sip2nostr /usr/local/lib/sysusers.d/sip2nostr.conf /usr/local/lib/systemd/system/sip2nostr.service
+sudo systemctl daemon-reload
+# also deletes config.toml and any voicemail recordings:
+sudo rm -rf /var/local/lib/sip2nostr
+```
