@@ -25,23 +25,25 @@ automatically.
 sudo ./install.sh
 ```
 
-Installs the binary to `/usr/local/lib/sip2nostr/`, creates the
-`sip2nostr` system user and its data directory (`/var/local/lib/sip2nostr`,
-mode `0700`, owned by that user), and installs the systemd service unit
-(`systemd/sip2nostr.service`, applied from
-`systemd/sysusers.d/sip2nostr.conf`). sip2nostr isn't a distro
-package, so everything fixed lives under `/usr/local` (not `/usr`) and
-everything variable under `/var/local` (not `/var`) - including the
-`sysusers.d` file itself, at `/usr/local/lib/sysusers.d/`, sysusers.d(5)'s
-own location for exactly this case. Nothing is put on `$PATH` -
-sip2nostr is meant to run under systemd, not invoked directly by name.
-See "Running as a systemd service" below to finish setup and start it.
+Installs the binary, the systemd service unit, and the `sysusers.d`
+file that creates the `sip2nostr` system user and its data directory
+(`/var/local/lib/sip2nostr`, mode `0700`, owned by that user).
+sip2nostr isn't a distro package, so everything fixed lives under
+`/usr/local/lib` - not just the binary (`/usr/local/lib/sip2nostr/`),
+but the `sysusers.d` file (`/usr/local/lib/sysusers.d/sip2nostr.conf`)
+and the unit itself (`/usr/local/lib/systemd/system/sip2nostr.service`)
+too, each in that directory tree's own canonical location for locally
+installed software rather than `/etc` or `/usr/lib`. Everything
+variable lives under `/var/local/lib` instead. Nothing is put on
+`$PATH` - sip2nostr is meant to run under systemd, not invoked
+directly by name. See "Running as a systemd service" below to finish
+setup and start it.
 
 To uninstall:
 
 ```
 sudo systemctl disable --now sip2nostr
-sudo rm -rf /usr/local/lib/sip2nostr /usr/local/lib/sysusers.d/sip2nostr.conf /etc/systemd/system/sip2nostr.service
+sudo rm -rf /usr/local/lib/sip2nostr /usr/local/lib/sysusers.d/sip2nostr.conf /usr/local/lib/systemd/system/sip2nostr.service
 sudo systemctl daemon-reload
 ```
 

@@ -3,7 +3,9 @@
 # (/var/local/lib/sip2nostr - install.sh creates and owns it directly;
 # this isn't a systemd StateDirectory=, since sip2nostr isn't a distro
 # package and doesn't need systemd itself managing that hierarchy).
-# Manual install: copy to /etc/systemd/system/sip2nostr.service, then
+# Manual install: copy to /usr/local/lib/systemd/system/sip2nostr.service
+# (not /etc/systemd/system - see systemd.unit(5) on why locally
+# installed, non-distro-packaged units belong there instead), then
 # `systemctl daemon-reload`. See README's "Running as a systemd
 # service" for what's still needed after either path: config.toml in
 # place, then `systemctl enable --now sip2nostr`.

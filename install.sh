@@ -2,13 +2,13 @@
 # Installs a build produced by ./build.sh, the sip2nostr system user, and
 # the systemd service that runs it. Nothing is put on $PATH - sip2nostr
 # is meant to run under systemd, not invoked directly by name. sip2nostr
-# isn't a distro package, so everything fixed lives under /usr/local (not
-# /usr) and everything variable under /var/local (not /var, and not a
-# systemd StateDirectory= - this script owns that job itself, not
-# systemd). Writes to four places: /usr/local/lib/sip2nostr (the
-# binary), /usr/local/lib/sysusers.d/sip2nostr.conf,
-# /etc/systemd/system/sip2nostr.service, and /var/local/lib/sip2nostr
-# (the service's data directory). See "To uninstall" below.
+# isn't a distro package, so everything fixed lives under /usr/local/lib
+# - the binary, the sysusers.d file, and the systemd unit itself are all
+# canonical /usr/local/lib locations for locally installed software, not
+# ad hoc choices - and everything variable lives under /var/local/lib
+# instead (not a systemd StateDirectory=; this script owns creating and
+# permissioning that directory itself, not systemd). See "To uninstall"
+# below for exactly what that means to remove.
 set -eu
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
@@ -30,11 +30,11 @@ fi
 
 install_dir="/usr/local/lib/sip2nostr"
 sysusers_file="/usr/local/lib/sysusers.d/sip2nostr.conf"
-unit_file="/etc/systemd/system/sip2nostr.service"
+unit_file="/usr/local/lib/systemd/system/sip2nostr.service"
 data_dir="/var/local/lib/sip2nostr"
 
 if [ "$(id -u)" -ne 0 ]; then
-    echo "install.sh writes to /usr/local/lib, /etc/systemd/system, and /var/local/lib - run it with sudo." >&2
+    echo "install.sh writes to /usr/local/lib and /var/local/lib - run it with sudo." >&2
     exit 1
 fi
 
@@ -72,6 +72,12 @@ install -d -o sip2nostr -g sip2nostr -m 0700 "$data_dir"
 # actually is 0700, matching what every comment/doc elsewhere calls it.
 chmod g-s "$data_dir"
 
+# /usr/local/lib/systemd/system is systemd.unit(5)'s own location for
+# locally installed, non-distro-packaged units - scanned automatically,
+# lower priority than /etc/systemd/system (admin overrides) but higher
+# than /usr/lib/systemd/system (distro packages) - and, like the
+# sysusers.d directory above, not guaranteed to already exist.
+mkdir -p "$(dirname "$unit_file")"
 cp "$script_dir/systemd/sip2nostr.service" "$unit_file"
 systemctl daemon-reload
 
