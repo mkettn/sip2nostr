@@ -25,12 +25,25 @@ automatically.
 sudo ./install.sh
 ```
 
-Installs to `/usr/local/lib/sip2nostr/` and symlinks
-`/usr/local/bin/sip2nostr` to it. To uninstall:
+Installs the binary to `/usr/local/lib/sip2nostr/`, creates the
+`sip2nostr` system user and its data directory (`/var/lib/sip2nostr`,
+mode `0700`, owned by that user), and installs the systemd service unit
+(`systemd/sip2nostr.service`, `systemd/sysusers.d/sip2nostr.conf`).
+Nothing is put on `$PATH` - sip2nostr is meant to run under systemd,
+not invoked directly by name. See "Running as a systemd service" below
+to finish setup and start it.
+
+To uninstall:
 
 ```
-rm -rf /usr/local/lib/sip2nostr /usr/local/bin/sip2nostr
+sudo systemctl disable --now sip2nostr
+sudo rm -rf /usr/local/lib/sip2nostr /etc/sysusers.d/sip2nostr.conf /etc/systemd/system/sip2nostr.service
+sudo systemctl daemon-reload
 ```
+
+This leaves `/var/lib/sip2nostr` (your `config.toml` and any voicemail
+recordings) in place - remove that separately too if you want those
+gone as well.
 
 ## Configuring
 
@@ -42,7 +55,7 @@ and sound-file format in more detail.
 ## Running
 
 ```
-sip2nostr /path/to/config.toml
+/usr/local/lib/sip2nostr/Sip2Nostr /path/to/config.toml
 ```
 
 Or, from source:
@@ -52,23 +65,18 @@ cd src/Sip2Nostr
 dotnet run -- /path/to/config.toml
 ```
 
+For a long-running deployment, use systemd instead - see below.
+
 ## Running as a systemd service
 
-`systemd/` ships a hardened unit and a `sysusers.d` file that create and
-confine a dedicated `sip2nostr` user. The unit's `StateDirectory=`
-creates `/var/lib/sip2nostr` - the only place the service can write -
-owned by `sip2nostr`, mode `0700`, recreated with that same ownership
-and mode on every start if it's ever missing. `config.toml` (your SIP
-password and `bridge_nsec`) goes there too, so create it ahead of the
-first start:
+`sudo ./install.sh` (see "Installing" above) already creates the
+`sip2nostr` user, its data directory, and the service unit. The only
+thing left is `config.toml` (your SIP password and `bridge_nsec`) -
+install.sh never touches it, so a previous install's config survives a
+re-run:
 
 ```
-sudo cp systemd/sysusers.d/sip2nostr.conf /etc/sysusers.d/
-sudo systemd-sysusers
-sudo install -d -o sip2nostr -g sip2nostr -m 0700 /var/lib/sip2nostr
 sudo install -o sip2nostr -g sip2nostr -m 0600 config.toml /var/lib/sip2nostr/config.toml
-sudo cp systemd/sip2nostr.service /etc/systemd/system/
-sudo systemctl daemon-reload
 sudo systemctl enable --now sip2nostr
 ```
 

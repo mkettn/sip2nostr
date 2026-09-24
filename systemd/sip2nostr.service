@@ -1,8 +1,9 @@
-# Install to /etc/systemd/system/sip2nostr.service, then
-# `systemctl daemon-reload && systemctl enable --now sip2nostr`. See
-# README's "Running as a systemd service" for the full setup, including
-# creating the sip2nostr user (sysusers.d/sip2nostr.conf). Its data
-# directory (StateDirectory= below) is created automatically on start.
+# Installed automatically by ../install.sh, along with the sip2nostr
+# user (sysusers.d/sip2nostr.conf) and its data directory. Manual
+# install: copy to /etc/systemd/system/sip2nostr.service, then
+# `systemctl daemon-reload`. See README's "Running as a systemd
+# service" for what's still needed after either path: config.toml in
+# place, then `systemctl enable --now sip2nostr`.
 
 [Unit]
 Description=sip2nostr - SIP-to-Nostr call gateway
@@ -27,7 +28,10 @@ Group=sip2nostr
 StateDirectory=sip2nostr
 StateDirectoryMode=0700
 WorkingDirectory=/var/lib/sip2nostr
-ExecStart=/usr/local/bin/sip2nostr /var/lib/sip2nostr/config.toml
+# The installed binary, not a $PATH lookup - install.sh doesn't symlink
+# it anywhere; sip2nostr is meant to run under this unit, not invoked
+# directly by name.
+ExecStart=/usr/local/lib/sip2nostr/Sip2Nostr /var/lib/sip2nostr/config.toml
 Restart=on-failure
 RestartSec=5
 # Program.cs only registers Console.CancelKeyPress (SIGINT) - there's no
