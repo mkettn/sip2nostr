@@ -446,7 +446,6 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
                 {
                     response.Header.Allow = "INVITE,ACK,BYE,CANCEL,OPTIONS,PRACK,REFER,NOTIFY,SUBSCRIBE,INFO,MESSAGE";
                     response.Header.Supported = "replaces,norefersub";
-                    response.Header.Server = "Twinkle/1.10.2";
                     response.Header.ContentLength = response.Body?.Length ?? 0;
                 }
             }
