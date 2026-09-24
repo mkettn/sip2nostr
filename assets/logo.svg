@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="sip2nostr logo: a purple ostrich head wearing a headset">
+<rect width="512" height="512" rx="112" fill="#17112B"/>
+<g>
+<rect x="24" y="16" width="464" height="48" rx="10" fill="#2D2C36"></rect>
+<circle cx="52" cy="40" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="52" cy="40" r="6" fill="#4ADE80"></circle>
+<circle cx="72" cy="40" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="72" cy="40" r="6" fill="#4ADE80"></circle>
+<circle cx="92" cy="40" r="6" fill="#3F3E4A"></circle>
+<circle cx="428" cy="40" r="11" fill="#FACC15" opacity="0.22"></circle>
+<circle cx="428" cy="40" r="6" fill="#FACC15"></circle>
+<circle cx="448" cy="40" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="448" cy="40" r="6" fill="#4ADE80"></circle>
+<rect x="24" y="80" width="464" height="48" rx="10" fill="#2D2C36"></rect>
+<circle cx="52" cy="104" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="52" cy="104" r="6" fill="#4ADE80"></circle>
+<circle cx="72" cy="104" r="11" fill="#FB923C" opacity="0.22"></circle>
+<circle cx="72" cy="104" r="6" fill="#FB923C"></circle>
+<circle cx="92" cy="104" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="92" cy="104" r="6" fill="#4ADE80"></circle>
+<circle cx="428" cy="104" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="428" cy="104" r="6" fill="#4ADE80"></circle>
+<circle cx="448" cy="104" r="6" fill="#3F3E4A"></circle>
+<rect x="24" y="144" width="464" height="48" rx="10" fill="#2D2C36"></rect>
+<circle cx="52" cy="168" r="6" fill="#3F3E4A"></circle>
+<circle cx="72" cy="168" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="72" cy="168" r="6" fill="#4ADE80"></circle>
+<circle cx="92" cy="168" r="11" fill="#FACC15" opacity="0.22"></circle>
+<circle cx="92" cy="168" r="6" fill="#FACC15"></circle>
+<circle cx="428" cy="168" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="428" cy="168" r="6" fill="#4ADE80"></circle>
+<circle cx="448" cy="168" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="448" cy="168" r="6" fill="#4ADE80"></circle>
+<rect x="24" y="208" width="464" height="48" rx="10" fill="#2D2C36"></rect>
+<circle cx="52" cy="232" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="52" cy="232" r="6" fill="#4ADE80"></circle>
+<circle cx="72" cy="232" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="72" cy="232" r="6" fill="#4ADE80"></circle>
+<circle cx="92" cy="232" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="92" cy="232" r="6" fill="#4ADE80"></circle>
+<circle cx="428" cy="232" r="11" fill="#FB923C" opacity="0.22"></circle>
+<circle cx="428" cy="232" r="6" fill="#FB923C"></circle>
+<circle cx="448" cy="232" r="6" fill="#3F3E4A"></circle>
+<rect x="24" y="272" width="464" height="48" rx="10" fill="#2D2C36"></rect>
+<circle cx="52" cy="296" r="11" fill="#FACC15" opacity="0.22"></circle>
+<circle cx="52" cy="296" r="6" fill="#FACC15"></circle>
+<circle cx="72" cy="296" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="72" cy="296" r="6" fill="#4ADE80"></circle>
+<circle cx="92" cy="296" r="6" fill="#3F3E4A"></circle>
+<circle cx="428" cy="296" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="428" cy="296" r="6" fill="#4ADE80"></circle>
+<circle cx="448" cy="296" r="11" fill="#FACC15" opacity="0.22"></circle>
+<circle cx="448" cy="296" r="6" fill="#FACC15"></circle>
+<rect x="24" y="336" width="464" height="48" rx="10" fill="#2D2C36"></rect>
+<circle cx="52" cy="360" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="52" cy="360" r="6" fill="#4ADE80"></circle>
+<circle cx="72" cy="360" r="6" fill="#3F3E4A"></circle>
+<circle cx="92" cy="360" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="92" cy="360" r="6" fill="#4ADE80"></circle>
+<circle cx="428" cy="360" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="428" cy="360" r="6" fill="#4ADE80"></circle>
+<circle cx="448" cy="360" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="448" cy="360" r="6" fill="#4ADE80"></circle>
+<rect x="24" y="400" width="464" height="48" rx="10" fill="#2D2C36"></rect>
+<circle cx="52" cy="424" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="52" cy="424" r="6" fill="#4ADE80"></circle>
+<circle cx="72" cy="424" r="11" fill="#FACC15" opacity="0.22"></circle>
+<circle cx="72" cy="424" r="6" fill="#FACC15"></circle>
+<circle cx="92" cy="424" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="92" cy="424" r="6" fill="#4ADE80"></circle>
+<circle cx="428" cy="424" r="6" fill="#3F3E4A"></circle>
+<circle cx="448" cy="424" r="11" fill="#FB923C" opacity="0.22"></circle>
+<circle cx="448" cy="424" r="6" fill="#FB923C"></circle>
+<rect x="24" y="464" width="464" height="48" rx="10" fill="#2D2C36"></rect>
+<circle cx="52" cy="488" r="11" fill="#FB923C" opacity="0.22"></circle>
+<circle cx="52" cy="488" r="6" fill="#FB923C"></circle>
+<circle cx="72" cy="488" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="72" cy="488" r="6" fill="#4ADE80"></circle>
+<circle cx="92" cy="488" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="92" cy="488" r="6" fill="#4ADE80"></circle>
+<circle cx="428" cy="488" r="11" fill="#4ADE80" opacity="0.22"></circle>
+<circle cx="428" cy="488" r="6" fill="#4ADE80"></circle>
+<circle cx="448" cy="488" r="6" fill="#3F3E4A"></circle>
+</g>
+<g transform="translate(256 256) scale(2.25) translate(-324 -181)">
+<path d="M262 176 C256 92 336 84 338 148" fill="none" stroke="#F5F3FF" stroke-width="11" stroke-linecap="round"></path>
+<path d="M236 205 C228 250 226 285 220 330 L306 330 C300 290 302 262 296 240 Z" fill="#8B5CF6"></path>
+<path d="M232 190 C232 150 262 128 296 130 C322 132 340 148 348 164 L400 174 Q418 178 416 194 Q414 208 396 210 L346 214 C336 236 314 246 290 244 C256 242 232 224 232 190 Z" fill="#8B5CF6"></path>
+<path d="M346 166 L400 174 Q418 178 416 194 Q414 208 396 210 L342 215 Z" fill="#C4B5FD"></path>
+<circle cx="393" cy="185" r="3.5" fill="#6D28D9"></circle>
+<circle cx="316" cy="172" r="13" fill="#FFFFFF"></circle>
+<circle cx="319" cy="173" r="6.5" fill="#17112B"></circle>
+<path d="M311 157 L308 148 M320 158 L322 149 M328 162 L334 156" fill="none" stroke="#17112B" stroke-width="4" stroke-linecap="round"></path>
+<path d="M263 228 C263 268 326 272 348 238" fill="none" stroke="#F5F3FF" stroke-width="7" stroke-linecap="round"></path>
+<circle cx="351" cy="236" r="10" fill="#F5F3FF"></circle>
+<path d="M262 176 C259.3 138.2 274 115.8 291.2 108.4" fill="none" stroke="#F5F3FF" stroke-width="11" stroke-linecap="round"></path>
+<rect x="240" y="168" width="46" height="62" rx="21" fill="#F5F3FF"></rect>
+<rect x="252" y="180" width="22" height="38" rx="11" fill="#6D28D9"></rect>
+</g>
+</svg>

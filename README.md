@@ -1,3 +1,5 @@
+<img src="assets/logo.svg" width="120" height="120" alt="sip2nostr logo">
+
 # sip2nostr
 
 A gateway that answers incoming calls on an existing VoIP SIP account and
