@@ -1,6 +1,9 @@
 # Installed automatically by ../install.sh, along with the sip2nostr
-# user (sysusers.d/sip2nostr.conf) and its data directory. Manual
-# install: copy to /etc/systemd/system/sip2nostr.service, then
+# user (sysusers.d/sip2nostr.conf) and its data directory
+# (/var/local/lib/sip2nostr - install.sh creates and owns it directly;
+# this isn't a systemd StateDirectory=, since sip2nostr isn't a distro
+# package and doesn't need systemd itself managing that hierarchy).
+# Manual install: copy to /etc/systemd/system/sip2nostr.service, then
 # `systemctl daemon-reload`. See README's "Running as a systemd
 # service" for what's still needed after either path: config.toml in
 # place, then `systemctl enable --now sip2nostr`.
@@ -20,18 +23,15 @@ StartLimitBurst=5
 Type=simple
 User=sip2nostr
 Group=sip2nostr
-# Creates /var/lib/sip2nostr on every start, owned sip2nostr:sip2nostr,
-# mode 0700 (StateDirectoryMode below) - config.toml lives there (SIP
-# password, bridge_nsec), so no one else can even list the directory.
-# Implies ReadWritePaths for it under ProtectSystem=strict below, so no
-# separate ReadWritePaths= entry is needed for this path specifically.
-StateDirectory=sip2nostr
-StateDirectoryMode=0700
-WorkingDirectory=/var/lib/sip2nostr
+# install.sh creates and owns /var/local/lib/sip2nostr (sip2nostr:sip2nostr,
+# mode 0700) - config.toml lives there (SIP password, bridge_nsec), so
+# no one else can even list the directory. ReadWritePaths below grants
+# this unit write access to it under ProtectSystem=strict.
+WorkingDirectory=/var/local/lib/sip2nostr
 # The installed binary, not a $PATH lookup - install.sh doesn't symlink
 # it anywhere; sip2nostr is meant to run under this unit, not invoked
 # directly by name.
-ExecStart=/usr/local/lib/sip2nostr/Sip2Nostr /var/lib/sip2nostr/config.toml
+ExecStart=/usr/local/lib/sip2nostr/Sip2Nostr /var/local/lib/sip2nostr/config.toml
 Restart=on-failure
 RestartSec=5
 # Program.cs only registers Console.CancelKeyPress (SIGINT) - there's no
@@ -58,10 +58,11 @@ KillSignal=SIGINT
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-# If [voicemail].recordings_dir points outside /var/lib/sip2nostr (e.g.
-# a shared volume), add ReadWritePaths=<that path> via a drop-in
-# (`systemctl edit sip2nostr`) rather than editing this file directly -
-# see README's "Voicemail recordings on a shared volume".
+ReadWritePaths=/var/local/lib/sip2nostr
+# If [voicemail].recordings_dir points outside /var/local/lib/sip2nostr
+# (e.g. a shared volume), add ReadWritePaths=<that path> too via a
+# drop-in (`systemctl edit sip2nostr`) rather than editing this file
+# directly - see README's "Voicemail recordings on a shared volume".
 PrivateTmp=true
 PrivateDevices=true
 ProtectClock=true

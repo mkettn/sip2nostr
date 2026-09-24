@@ -1,12 +1,14 @@
 #!/bin/sh
 # Installs a build produced by ./build.sh, the sip2nostr system user, and
 # the systemd service that runs it. Nothing is put on $PATH - sip2nostr
-# is meant to run under systemd, not invoked directly by name. Writes to
-# four places: /usr/local/lib/sip2nostr (the binary),
-# /etc/sysusers.d/sip2nostr.conf, /etc/systemd/system/sip2nostr.service,
-# and /var/lib/sip2nostr (the service's data directory - created here,
-# not just left to the unit's own StateDirectory=, so config.toml has
-# somewhere to go before the first start). See "To uninstall" below.
+# is meant to run under systemd, not invoked directly by name. sip2nostr
+# isn't a distro package, so everything fixed lives under /usr/local (not
+# /usr) and everything variable under /var/local (not /var, and not a
+# systemd StateDirectory= - this script owns that job itself, not
+# systemd). Writes to four places: /usr/local/lib/sip2nostr (the
+# binary), /usr/local/lib/sysusers.d/sip2nostr.conf,
+# /etc/systemd/system/sip2nostr.service, and /var/local/lib/sip2nostr
+# (the service's data directory). See "To uninstall" below.
 set -eu
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
@@ -27,12 +29,12 @@ if [ ! -x "$build_dir/Sip2Nostr" ]; then
 fi
 
 install_dir="/usr/local/lib/sip2nostr"
-sysusers_file="/etc/sysusers.d/sip2nostr.conf"
+sysusers_file="/usr/local/lib/sysusers.d/sip2nostr.conf"
 unit_file="/etc/systemd/system/sip2nostr.service"
-data_dir="/var/lib/sip2nostr"
+data_dir="/var/local/lib/sip2nostr"
 
 if [ "$(id -u)" -ne 0 ]; then
-    echo "install.sh writes to /usr/local, /etc/sysusers.d, /etc/systemd/system, and /var/lib - run it with sudo." >&2
+    echo "install.sh writes to /usr/local/lib, /etc/systemd/system, and /var/local/lib - run it with sudo." >&2
     exit 1
 fi
 
@@ -48,19 +50,27 @@ cp "$build_dir"/*.so "$install_dir/"
 cp "$build_dir/runtimes/$rid/"* "$install_dir/runtimes/$rid/"
 chmod +x "$install_dir/Sip2Nostr"
 
-# Not every base install ships /etc/sysusers.d itself (only
-# /usr/lib/sysusers.d is guaranteed to exist), so create it if needed
-# rather than assuming it's there.
+# /usr/local/lib/sysusers.d is sysusers.d(5)'s own location for locally
+# installed, non-distro-packaged software (as opposed to
+# /usr/lib/sysusers.d, for the latter) - systemd-sysusers scans it
+# automatically, but most base installs don't ship the directory itself
+# until something actually uses it, so create it if needed.
 mkdir -p "$(dirname "$sysusers_file")"
 cp "$script_dir/systemd/sysusers.d/sip2nostr.conf" "$sysusers_file"
 systemd-sysusers "$sysusers_file"
 
-# The unit's own StateDirectory= would create this at first start
-# anyway (same owner and mode); doing it here too just means
-# config.toml has somewhere to go before that first start. Safe to
-# repeat on an existing install - install -d only touches ownership
-# and mode, never a directory's contents.
+# Safe to repeat on an existing install - install -d only touches
+# ownership and mode, never a directory's contents - so a live
+# deployment's config.toml and recordings survive a re-run untouched.
 install -d -o sip2nostr -g sip2nostr -m 0700 "$data_dir"
+# Debian's stock /usr/local and /var/local are root:staff with the
+# setgid bit, which a directory newly created underneath inherits at
+# creation time regardless of the mode just given it - confirmed here:
+# install -d's own -m 0700 left this setgid, and even a follow-up
+# numeric `chmod 0700` didn't clear it. Grants nothing extra by itself
+# (group perms are 000 either way), but strip it anyway so the mode
+# actually is 0700, matching what every comment/doc elsewhere calls it.
+chmod g-s "$data_dir"
 
 cp "$script_dir/systemd/sip2nostr.service" "$unit_file"
 systemctl daemon-reload

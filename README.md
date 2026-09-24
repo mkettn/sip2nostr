@@ -26,24 +26,28 @@ sudo ./install.sh
 ```
 
 Installs the binary to `/usr/local/lib/sip2nostr/`, creates the
-`sip2nostr` system user and its data directory (`/var/lib/sip2nostr`,
+`sip2nostr` system user and its data directory (`/var/local/lib/sip2nostr`,
 mode `0700`, owned by that user), and installs the systemd service unit
-(`systemd/sip2nostr.service`, `systemd/sysusers.d/sip2nostr.conf`).
-Nothing is put on `$PATH` - sip2nostr is meant to run under systemd,
-not invoked directly by name. See "Running as a systemd service" below
-to finish setup and start it.
+(`systemd/sip2nostr.service`, applied from
+`systemd/sysusers.d/sip2nostr.conf`). sip2nostr isn't a distro
+package, so everything fixed lives under `/usr/local` (not `/usr`) and
+everything variable under `/var/local` (not `/var`) - including the
+`sysusers.d` file itself, at `/usr/local/lib/sysusers.d/`, sysusers.d(5)'s
+own location for exactly this case. Nothing is put on `$PATH` -
+sip2nostr is meant to run under systemd, not invoked directly by name.
+See "Running as a systemd service" below to finish setup and start it.
 
 To uninstall:
 
 ```
 sudo systemctl disable --now sip2nostr
-sudo rm -rf /usr/local/lib/sip2nostr /etc/sysusers.d/sip2nostr.conf /etc/systemd/system/sip2nostr.service
+sudo rm -rf /usr/local/lib/sip2nostr /usr/local/lib/sysusers.d/sip2nostr.conf /etc/systemd/system/sip2nostr.service
 sudo systemctl daemon-reload
 ```
 
-This leaves `/var/lib/sip2nostr` (your `config.toml` and any voicemail
-recordings) in place - remove that separately too if you want those
-gone as well.
+This leaves `/var/local/lib/sip2nostr` (your `config.toml` and any
+voicemail recordings) in place - remove that separately too if you
+want those gone as well.
 
 ## Configuring
 
@@ -76,7 +80,7 @@ install.sh never touches it, so a previous install's config survives a
 re-run:
 
 ```
-sudo install -o sip2nostr -g sip2nostr -m 0600 config.toml /var/lib/sip2nostr/config.toml
+sudo install -o sip2nostr -g sip2nostr -m 0600 config.toml /var/local/lib/sip2nostr/config.toml
 sudo systemctl enable --now sip2nostr
 ```
 
@@ -93,8 +97,8 @@ its own startup line and timestamps just double up on journald's.
 
 ### Voicemail recordings on a shared volume
 
-If `[voicemail].recordings_dir` points outside `/var/lib/sip2nostr` - a
-NAS mount shared with other services, say,
+If `[voicemail].recordings_dir` points outside `/var/local/lib/sip2nostr`
+- a NAS mount shared with other services, say,
 `/shared/voicemail_recordings` - `ProtectSystem=strict` in the unit
 blocks writes there until you add it explicitly. Use a drop-in rather
 than editing the shipped unit file:
