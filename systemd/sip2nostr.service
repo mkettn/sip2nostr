@@ -1,23 +1,15 @@
-# Installed automatically by ../install.sh, along with the sip2nostr
-# user (sysusers.d/sip2nostr.conf) and its data directory
-# (/var/local/lib/sip2nostr - install.sh creates and owns it directly;
-# this isn't a systemd StateDirectory=, since sip2nostr isn't a distro
-# package and doesn't need systemd itself managing that hierarchy).
-# Manual install: copy to /usr/local/lib/systemd/system/sip2nostr.service
-# (not /etc/systemd/system - see systemd.unit(5) on why locally
-# installed, non-distro-packaged units belong there instead), then
-# `systemctl daemon-reload`. See README's "Running as a systemd
-# service" for what's still needed after either path: config.toml in
-# place, then `systemctl enable --now sip2nostr`.
+# Installed automatically by ../install.sh. Manual install: copy to
+# /usr/local/lib/systemd/system/sip2nostr.service, then
+# `systemctl daemon-reload`. See README's "Installing as a systemd
+# service" section for the rest of the setup.
 
 [Unit]
 Description=sip2nostr - SIP-to-Nostr call gateway
 Documentation=https://github.com/mkettn/sip2nostr
 After=network-online.target
 Wants=network-online.target
-# A ConfigurationException (bad SIP/Nostr config, an unreachable relay
-# at startup) exits non-zero on every attempt - stop retrying after a
-# handful of failures instead of restarting forever every RestartSec.
+# ConfigurationException (bad config, unreachable relay) exits non-zero
+# on every attempt - stop retrying after a few failures instead of forever.
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
@@ -25,46 +17,20 @@ StartLimitBurst=5
 Type=simple
 User=sip2nostr
 Group=sip2nostr
-# install.sh creates and owns /var/local/lib/sip2nostr (sip2nostr:sip2nostr,
-# mode 0700) - config.toml lives there (SIP password, bridge_nsec), so
-# no one else can even list the directory. ReadWritePaths below grants
-# this unit write access to it under ProtectSystem=strict.
 WorkingDirectory=/var/local/lib/sip2nostr
-# The installed binary, not a $PATH lookup - install.sh doesn't symlink
-# it anywhere; sip2nostr is meant to run under this unit, not invoked
-# directly by name.
 ExecStart=/usr/local/lib/sip2nostr/Sip2Nostr /var/local/lib/sip2nostr/config.toml
 Restart=on-failure
 RestartSec=5
-# Program.cs only registers Console.CancelKeyPress (SIGINT) - there's no
-# PosixSignalRegistration for SIGTERM anywhere in it, so cts.Cancel()
-# (and everything gated on it: hub.DrainAsync, sink disposal, the final
-# log flush) never runs on systemd's default stop signal. Route the
-# stop signal to the one this binary actually handles instead of
-# silently skipping the drain sip2nostr does on every other shutdown
-# path. A native SIGTERM handler in Program.cs would be the more
-# durable fix (works under any supervisor, not just this unit) but is
-# a source change outside this file's scope.
+# Program.cs only handles SIGINT, not systemd's default SIGTERM - without
+# this, a stop/restart would skip its graceful shutdown entirely.
 KillSignal=SIGINT
 
-# journald captures stdout/stderr on its own - leave [logging].file
-# unset in config.toml and use `journalctl -u sip2nostr` instead of a
-# log file. Also set console_quiet = true and console_timestamps =
-# false under [logging] there: journald timestamps and captures every
-# line regardless, so sip2nostr's own startup line and timestamps would
-# just be noise here.
-
-# Sandboxing. sip2nostr only ever needs the network and its own data
-# directory - everything else below locks the rest of the filesystem
-# and the kernel surface down accordingly.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/local/lib/sip2nostr
-# If [voicemail].recordings_dir points outside /var/local/lib/sip2nostr
-# (e.g. a shared volume), add ReadWritePaths=<that path> too via a
-# drop-in (`systemctl edit sip2nostr`) rather than editing this file
-# directly - see README's "Voicemail recordings on a shared volume".
+# Redirecting [voicemail].recordings_dir elsewhere needs its own
+# ReadWritePaths= too, via `systemctl edit sip2nostr`.
 PrivateTmp=true
 PrivateDevices=true
 ProtectClock=true
@@ -83,20 +49,12 @@ RemoveIPC=true
 CapabilityBoundingSet=
 AmbientCapabilities=
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
-# AF_NETLINK is required, not defense-in-depth padding: SIPSorcery
-# enumerates local addresses for WebRTC ICE host candidates on every
-# bridged call, which reaches .NET's NetworkInterface.GetAllNetworkInterfaces()
-# -> getifaddrs() -> an AF_NETLINK/NETLINK_ROUTE socket on Linux.
-# Without it that enumeration throws and a bridged call rings with no
-# audio - registration and the SIP leg alone don't exercise this path,
-# so it only shows up on the first real call.
+# AF_NETLINK is required: SIPSorcery needs it (via getifaddrs) to gather
+# WebRTC ICE candidates - without it, calls ring with no audio.
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 UMask=0077
-# MemoryDenyWriteExecute is deliberately left out: the .NET JIT needs
-# W^X-violating mmap/mprotect calls during normal operation, and this
-# flag is a well-known way to make a dotnet service fail to start or
-# crash under load.
+# MemoryDenyWriteExecute is deliberately omitted - it breaks the .NET JIT.
 
 [Install]
 WantedBy=multi-user.target
