@@ -427,7 +427,6 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
                 request.Header.Contact = SIPContactHeader.ParseContactHeader(
                     $"<sip:{config.Sip.Username}@{_contactHost}>;expires={RegistrationExpirySeconds}");
                 request.Header.Allow = "INVITE,ACK,BYE,CANCEL,OPTIONS,PRACK,REFER,NOTIFY,SUBSCRIBE,INFO,MESSAGE";
-                request.Header.UserAgent = "Twinkle/1.10.2";
             }
 
             return null;
