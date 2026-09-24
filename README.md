@@ -42,3 +42,38 @@ sudo systemctl enable --now sip2nostr
 
 See `docs/` for the caller allow/deny-list, voicemail fallback, and
 sound-file format.
+
+## Voicemail recordings on a shared volume
+
+If `[voicemail].recordings_dir` points outside `/var/local/lib/sip2nostr`
+- a NAS mount shared with other services, say,
+`/shared/voicemail_recordings` - `ProtectSystem=strict` in the unit
+blocks writes there until you add it explicitly. Use a drop-in rather
+than editing the shipped unit file:
+
+```
+sudo systemctl edit sip2nostr
+```
+
+```ini
+[Service]
+ReadWritePaths=/shared/voicemail_recordings
+```
+
+and make sure the `sip2nostr` user can actually write there - add it to
+whatever group owns the share and `chmod g+w` the directory, or `chown`
+it directly. `sysusers.d/sip2nostr.conf` only creates the `sip2nostr`
+user/group themselves; group membership on a shared external path is
+deployment-specific and left to you.
+
+
+## Uninstalling
+
+```
+sudo systemctl disable --now sip2nostr
+sudo rm -rf /usr/local/lib/sip2nostr /usr/local/lib/sysusers.d/sip2nostr.conf /usr/local/lib/systemd/system/sip2nostr.service
+sudo systemctl daemon-reload
+# also deletes config.toml and any voicemail recordings:
+sudo rm -rf /var/local/lib/sip2nostr
+sudo userdel sip2nostr
+```
