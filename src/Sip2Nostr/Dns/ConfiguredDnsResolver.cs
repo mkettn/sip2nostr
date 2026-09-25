@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Net;
+using System.Net.Sockets;
 using DnsClient;
 using Sip2Nostr.Config;
 
@@ -47,8 +48,19 @@ public sealed class ConfiguredDnsResolver
 
         if (_lookupClient is null)
         {
+            // IPv4 only, matching the configured path below (QueryType.A) -
+            // SipCallSource's SIP transport binds IPv4-only
+            // (new SIPUDPChannel(IPAddress.Any, 5060)), so an AAAA-only
+            // result can't be used and would otherwise surface as a
+            // confusing failure well past this point instead of here.
             var systemResult = await System.Net.Dns.GetHostAddressesAsync(host, ct);
-            return systemResult.First();
+            var systemAddress = systemResult.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork);
+            if (systemAddress is null)
+            {
+                throw new DnsResolutionException($"No IPv4 address found for '{host}' via the system resolver.");
+            }
+
+            return systemAddress;
         }
 
         var response = await _lookupClient.QueryAsync(host, QueryType.A, cancellationToken: ct);
