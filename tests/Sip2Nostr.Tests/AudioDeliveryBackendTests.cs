@@ -28,7 +28,7 @@ public class AudioDeliveryBackendTests
         try
         {
             var backend = new AudioDeliveryBackend(
-                [BlossomServer.Parse(server.BaseUri.ToString())],
+                [ServiceUri.Parse(server.BaseUri.ToString())],
                 new NostrConfig { BridgeNsec = BridgeNsec },
                 Log.Logger);
 
@@ -100,7 +100,7 @@ public class AudioDeliveryBackendTests
         try
         {
             await using var backend = new AudioDeliveryBackend(
-                [BlossomServer.Parse($"unix:{server.SocketPath}")],
+                [ServiceUri.Parse($"unix:{server.SocketPath}")],
                 new NostrConfig { BridgeNsec = BridgeNsec },
                 Log.Logger);
 
@@ -111,7 +111,7 @@ public class AudioDeliveryBackendTests
             Assert.Equal("https://cdn.example.com/unix-socket-blob", content);
 
             // Proves the request actually crossed the socket, not just
-            // that BlossomServer.Parse split the string correctly.
+            // that ServiceUri.Parse split the string correctly.
             Assert.NotNull(server.ReceivedBody);
             Assert.Equal(plaintext.Length + 16, server.ReceivedBody!.Length);
             Assert.NotNull(server.ReceivedAuthorizationHeader);
@@ -134,7 +134,7 @@ public class AudioDeliveryBackendTests
         try
         {
             var backend = new AudioDeliveryBackend(
-                [BlossomServer.Parse(failingServer.BaseUri.ToString()), BlossomServer.Parse(workingServer.BaseUri.ToString())],
+                [ServiceUri.Parse(failingServer.BaseUri.ToString()), ServiceUri.Parse(workingServer.BaseUri.ToString())],
                 new NostrConfig { BridgeNsec = BridgeNsec },
                 Log.Logger);
 
@@ -159,7 +159,7 @@ public class AudioDeliveryBackendTests
         try
         {
             var backend = new AudioDeliveryBackend(
-                [BlossomServer.Parse(server.BaseUri.ToString())],
+                [ServiceUri.Parse(server.BaseUri.ToString())],
                 new NostrConfig { BridgeNsec = BridgeNsec },
                 Log.Logger);
 

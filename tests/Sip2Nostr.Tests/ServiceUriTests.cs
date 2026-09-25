@@ -3,12 +3,12 @@ using Xunit;
 
 namespace Sip2Nostr.Tests;
 
-public class BlossomServerTests
+public class ServiceUriTests
 {
     [Fact]
     public void Parse_HttpUrl_KeepsItAsRequestUriWithNoSocketPath()
     {
-        var server = BlossomServer.Parse("https://blossom.example.com");
+        var server = ServiceUri.Parse("https://blossom.example.com");
 
         Assert.Equal(new Uri("https://blossom.example.com"), server.RequestUri);
         Assert.Null(server.SocketPath);
@@ -18,7 +18,7 @@ public class BlossomServerTests
     [Fact]
     public void Parse_UnixEntry_SplitsOffThePathAndKeepsAPlaceholderRequestUri()
     {
-        var server = BlossomServer.Parse("unix:/run/blossom/blossom.sock");
+        var server = ServiceUri.Parse("unix:/run/blossom/blossom.sock");
 
         Assert.Equal("/run/blossom/blossom.sock", server.SocketPath);
         Assert.True(server.RequestUri.IsAbsoluteUri);

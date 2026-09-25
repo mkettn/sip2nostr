@@ -26,7 +26,7 @@ namespace Sip2Nostr.Voicemail;
 // failed upload is a routine failure to plan for, not a rare edge case.
 // See docs/voicemail.md.
 public sealed class AudioDeliveryBackend(
-    IReadOnlyList<BlossomServer> servers,
+    IReadOnlyList<ServiceUri> servers,
     NostrConfig nostrConfig,
     ILogger logger) : IVoicemailDeliveryBackend
 {
@@ -123,7 +123,7 @@ public sealed class AudioDeliveryBackend(
     // <base64(signed kind 24242 event)>` header. No BUD-06 HEAD
     // preflight - servers accept a direct PUT per spec, and a voicemail
     // blob is small enough that skipping it costs nothing on a rejection.
-    private async Task<string> UploadAsync(BlossomServer server, byte[] blob, string blobHashHex, Keys bridgeKeys, CancellationToken ct)
+    private async Task<string> UploadAsync(ServiceUri server, byte[] blob, string blobHashHex, Keys bridgeKeys, CancellationToken ct)
     {
         var authEvent = BuildAuthEvent(blobHashHex, bridgeKeys);
         var authHeader = "Nostr " + Convert.ToBase64String(Encoding.UTF8.GetBytes(authEvent.AsJson()));
@@ -159,7 +159,7 @@ public sealed class AudioDeliveryBackend(
         return url;
     }
 
-    private HttpClient GetHttpClient(BlossomServer server)
+    private HttpClient GetHttpClient(ServiceUri server)
     {
         var socketPath = server.SocketPath;
         return socketPath is null ? Http : _unixSocketClients[socketPath];
