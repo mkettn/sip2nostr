@@ -137,9 +137,10 @@ something is actually ready to take the call.
 
 ## Why response routing needs the configurable DNS resolver to actually work
 
-sip2nostr requires a configurable DNS resolver (`[dns]` in
-`config.toml`) instead of the OS resolver, for reaching the provider's
-registrar. That same resolver
+sip2nostr strongly recommends a configurable DNS resolver (`[dns]` in
+`config.toml`, `enabled = true` - opt-in, off by default) over the OS
+resolver, for reaching the provider's registrar reliably. That same
+resolver
 machinery also has to handle a case that's easy to overlook: **every
 response sip2nostr sends back to a caller is addressed using the literal
 IP address taken from the request's `Via` header** — never a hostname.
@@ -210,8 +211,11 @@ registrar.
   send-from socket) that isn't part of sipsorcery's public API contract —
   it happens to work on the installed version but isn't something this
   codebase asserts or tests directly.
-- **IPv6 is untested.** The SIP transport binds to `IPAddress.Any` (IPv4
-  wildcard) and all verified testing has been over IPv4.
+- **The SIP leg is IPv4 only.** The transport binds to `IPAddress.Any`
+  (the IPv4 wildcard), and `ConfiguredDnsResolver` only ever returns
+  IPv4 addresses (`QueryType.A` for the configured resolver, filtered to
+  `AddressFamily.InterNetwork` for the system-resolver fallback) - an
+  IPv6-only `[sip].provider_host` can't work.
 - **TURN/NAT behavior for the WebRTC leg is untested beyond the local
   network the `docs/propagating-to-nostr.md` verification ran on** -
   recommended for NAT traversal, but not confirmed necessary or

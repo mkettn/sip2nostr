@@ -44,14 +44,13 @@ public static class ConfigLoader
     // See docs/voicemail.md for why these fail fast here.
     private static void Validate(AppConfig config)
     {
-        if (config.Dns is not null)
+        // A disabled [dns] block's resolvers aren't read by anything, so
+        // a stale/empty list there shouldn't block startup.
+        if (config.Dns.Enabled)
         {
-            // [TomlRequired] only guarantees the `resolvers` key was
-            // present, not that it's non-empty - an operator who writes
-            // [dns] at all meant to configure at least one nameserver.
             if (config.Dns.Resolvers.Count == 0)
             {
-                throw new ConfigurationException("[dns].resolvers must contain at least one entry when [dns] is present.");
+                throw new ConfigurationException("[dns].resolvers must contain at least one entry when [dns].enabled is true.");
             }
 
             // Each entry is parsed again at first use by ConfiguredDnsResolver

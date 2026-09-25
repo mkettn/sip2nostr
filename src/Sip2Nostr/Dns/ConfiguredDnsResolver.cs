@@ -1,22 +1,21 @@
 using System.Linq;
 using System.Net;
+using System.Net.Sockets;
 using DnsClient;
 using Sip2Nostr.Config;
 
 namespace Sip2Nostr.Dns;
 
-// Required feature (docs/receiving-calls.md): SIP hostname resolution must
-// not rely on System.Net.Dns / the OS resolver. This wraps a DnsClient.NET
-// LookupClient configured from [dns] in config.toml, with a fallback
-// nameserver and a system-resolver fallback only when [dns] is absent
-// entirely.
+// Wraps a DnsClient.NET LookupClient from [dns] in config.toml, falling
+// back to the system resolver when [dns].enabled is false. See
+// docs/receiving-calls.md.
 public sealed class ConfiguredDnsResolver
 {
     private readonly LookupClient? _lookupClient;
 
-    public ConfiguredDnsResolver(DnsConfig? config)
+    public ConfiguredDnsResolver(DnsConfig config)
     {
-        if (config is null)
+        if (!config.Enabled)
         {
             _lookupClient = null;
             return;
@@ -46,8 +45,16 @@ public sealed class ConfiguredDnsResolver
 
         if (_lookupClient is null)
         {
+            // IPv4 only, matching QueryType.A below - see
+            // docs/receiving-calls.md.
             var systemResult = await System.Net.Dns.GetHostAddressesAsync(host, ct);
-            return systemResult.First();
+            var systemAddress = systemResult.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork);
+            if (systemAddress is null)
+            {
+                throw new DnsResolutionException($"No IPv4 address found for '{host}' via the system resolver.");
+            }
+
+            return systemAddress;
         }
 
         var response = await _lookupClient.QueryAsync(host, QueryType.A, cancellationToken: ct);

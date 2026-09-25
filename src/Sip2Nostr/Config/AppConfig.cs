@@ -32,7 +32,7 @@ public sealed class AppConfig
     public required SipConfig Sip { get; init; }
 
     [property: TomlPropertyName("dns")]
-    public DnsConfig? Dns { get; init; }
+    public DnsConfig Dns { get; init; } = new();
 
     [property: TomlPropertyName("lines")]
     [property: TomlRequired]
@@ -76,22 +76,19 @@ public sealed class SipConfig
     public int RtpPort { get; init; } = 8000;
 }
 
-// Required feature (docs/receiving-calls.md): SIP hostname resolution must
-// go through this configurable resolver instead of the OS resolver. Falls
-// back to the system resolver only when [dns] is absent from config.toml.
+// Falls back to the system resolver unless enabled = true - see
+// docs/receiving-calls.md.
 public sealed class DnsConfig
 {
-    // Nameservers DnsClient.NET's LookupClient may query - it picks among
-    // them per request rather than always preferring the first entry, so
-    // this isn't a strict primary/fallback ordering despite the old
-    // resolver/resolver_fallback naming having implied one. Each entry
-    // must parse as ConfiguredDnsResolver.TryParseNameServer expects
-    // ("ip", "ip:port", or "[ipv6]:port") - ConfigLoader.Validate checks
-    // both that and that the list isn't empty, since [dns] being present
-    // at all means at least one nameserver was intended.
+    [property: TomlPropertyName("enabled")]
+    public bool Enabled { get; init; } = false;
+
+    // Nameservers DnsClient.NET's LookupClient may query - picked among
+    // them per request, not a strict primary/fallback order. Format:
+    // "ip", "ip:port", or "[ipv6]:port". Only required when enabled is
+    // true; ConfigLoader.Validate enforces that.
     [property: TomlPropertyName("resolvers")]
-    [property: TomlRequired]
-    public required List<string> Resolvers { get; init; }
+    public List<string> Resolvers { get; init; } = [];
 
     [property: TomlPropertyName("timeout_ms")]
     public int TimeoutMs { get; init; } = 2000;

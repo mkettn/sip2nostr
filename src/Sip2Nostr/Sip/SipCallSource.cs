@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using DnsClient;
 using Serilog;
 using SIPSorcery.Net;
 using SIPSorcery.SIP;
@@ -69,7 +70,19 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
         _sipTransport.AddSIPChannel(sipChannel);
 
         logger.Information("Resolving SIP provider host {ProviderHost}.", config.Sip.ProviderHost);
-        var providerIp = await _dns.ResolveAsync(config.Sip.ProviderHost, ct);
+        IPAddress providerIp;
+        try
+        {
+            providerIp = await _dns.ResolveAsync(config.Sip.ProviderHost, ct);
+        }
+        catch (Exception exception) when (exception is DnsResponseException or DnsResolutionException or SocketException)
+        {
+            throw new ConfigurationException(
+                $"Could not resolve SIP provider host \"{config.Sip.ProviderHost}\": {exception.Message} - " +
+                "check [sip].provider_host and [dns] network access.",
+                exception);
+        }
+
         var providerEndpoint = new SIPEndPoint(SIPProtocolsEnum.udp, providerIp, 5060);
         _localMediaAddress = GetLocalAddressFor(providerIp);
         _contactHost = string.IsNullOrWhiteSpace(config.Sip.ContactHost)

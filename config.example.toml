@@ -9,10 +9,10 @@ password = "YOUR_SIP_PASS"
 rtp_port = 8000
 
 [dns]
-# Nameservers to use for SIP hostname lookups - each entry is an IP,
-# "ip:port", or "[ipv6]:port" (default port 53); DnsClient.NET picks
-# among them per request rather than always preferring the first one.
-# Falls back to the system resolver if [dns] is omitted entirely.
+# Opt-in, defaults false - see docs/receiving-calls.md.
+enabled = false
+# Nameservers for SIP hostname lookups - each entry is an IP, "ip:port",
+# or "[ipv6]:port". Only consulted when enabled = true above.
 resolvers = ["1.1.1.1:53", "9.9.9.9:53"]
 timeout_ms = 2000
 

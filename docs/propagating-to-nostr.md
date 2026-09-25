@@ -277,14 +277,13 @@ itself failing to reach that one relay.
   validating them would only block the documented
   `[nostr].enabled = false` local SIP-test path
   (`docs/receiving-calls.md`) over values it never uses.
-- **SIP registrar reachability stays soft, unlike Nostr relay
-  reachability** (see "Startup requires a reachable relay" above) - a bad
-  username/password against the SIP provider never stops the process
-  starting, only registering (`SipCallSource`'s `SIPRegistrationUserAgent`
-  retries every 30s indefinitely on its own). An open asymmetry, not a
-  principled distinction: nothing here says a SIP registrar being
-  unreachable is any less fatal to sip2nostr's one job than a Nostr relay
-  being unreachable is - it just hasn't been asked for.
+- **SIP REGISTER failures stay soft, unlike DNS/Nostr relay
+  reachability.** A DNS failure resolving `[sip].provider_host` is
+  startup-fatal (`ConfigurationException`, same as an unreachable Nostr
+  relay - see "Startup requires a reachable relay" above); a bad
+  username/password, once DNS resolves, only keeps `SIPRegistrationUserAgent`
+  retrying REGISTER every 30s indefinitely. An open asymmetry, not a
+  principled one - it just hasn't been asked for.
 - **No busy/reject signaling sent.** If sip2nostr is somehow mid-call
   already, it doesn't auto-reject a second offer the way NIP-AC recommends.
 - **No multi-device self-notification.** Not applicable — sip2nostr is a
