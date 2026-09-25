@@ -25,7 +25,6 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
     private const int RegistrationExpirySeconds = 3600;
     private const int RegistrationAttemptTimeoutSeconds = 20;
     private const int MaxRegisterAttemptsBeforeTemporaryFailure = 3;
-    private const int DnsResolutionRetryDelaySeconds = 30;
 
     private static readonly SDPWellKnownMediaFormatsEnum[] PreferredAudioFormats =
     [
@@ -71,7 +70,19 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
         _sipTransport.AddSIPChannel(sipChannel);
 
         logger.Information("Resolving SIP provider host {ProviderHost}.", config.Sip.ProviderHost);
-        var providerIp = await ResolveProviderHostWithRetryAsync(ct);
+        IPAddress providerIp;
+        try
+        {
+            providerIp = await _dns.ResolveAsync(config.Sip.ProviderHost, ct);
+        }
+        catch (Exception exception) when (exception is DnsResponseException or DnsResolutionException or SocketException)
+        {
+            throw new ConfigurationException(
+                $"Could not resolve SIP provider host \"{config.Sip.ProviderHost}\": {exception.Message} - " +
+                "check [sip].provider_host and [dns] network access.",
+                exception);
+        }
+
         var providerEndpoint = new SIPEndPoint(SIPProtocolsEnum.udp, providerIp, 5060);
         _localMediaAddress = GetLocalAddressFor(providerIp);
         _contactHost = string.IsNullOrWhiteSpace(config.Sip.ContactHost)
@@ -617,35 +628,6 @@ public sealed class SipCallSource(AppConfig config, ILogger logger) : ICallSourc
                 message,
                 errorField);
         };
-    }
-
-    // A DNS hiccup resolving the provider host at startup (resolver
-    // timeout, a transient SERVFAIL, no A record yet) shouldn't crash the
-    // process the way an uncaught exception here otherwise would - SIP
-    // registrar reachability is already treated as soft rather than
-    // startup-fatal once registration itself is underway (see
-    // docs/propagating-to-nostr.md's blind spots; SIPRegistrationUserAgent
-    // below retries indefinitely on its own), so this earlier resolution
-    // step shouldn't be any less forgiving. Retries indefinitely - bounded
-    // only by ct - at the same cadence as that later retry.
-    private async Task<IPAddress> ResolveProviderHostWithRetryAsync(CancellationToken ct)
-    {
-        while (true)
-        {
-            try
-            {
-                return await _dns.ResolveAsync(config.Sip.ProviderHost, ct);
-            }
-            catch (Exception exception) when (exception is DnsResponseException or DnsResolutionException or SocketException)
-            {
-                logger.Error(
-                    exception,
-                    "Could not resolve SIP provider host {ProviderHost}; retrying in {RetryDelaySeconds}s.",
-                    config.Sip.ProviderHost,
-                    DnsResolutionRetryDelaySeconds);
-                await Task.Delay(TimeSpan.FromSeconds(DnsResolutionRetryDelaySeconds), ct);
-            }
-        }
     }
 
     private void InstallSipUriResolver(SIPEndPoint providerEndpoint)
