@@ -78,20 +78,33 @@ public sealed class SipConfig
 
 // Required feature (docs/receiving-calls.md): SIP hostname resolution must
 // go through this configurable resolver instead of the OS resolver. Falls
-// back to the system resolver only when [dns] is absent from config.toml.
+// back to the system resolver when [dns] is absent from config.toml, or
+// present with enabled = false.
 public sealed class DnsConfig
 {
+    // Lets an operator keep [dns] (and its resolvers below) written out
+    // but temporarily inactive, the same as omitting the section entirely
+    // - e.g. to fall back to the system resolver without losing the
+    // configured list. Defaults true so an existing config with [dns]
+    // present keeps behaving exactly as it did before this setting
+    // existed.
+    [property: TomlPropertyName("enabled")]
+    public bool Enabled { get; init; } = true;
+
     // Nameservers DnsClient.NET's LookupClient may query - it picks among
     // them per request rather than always preferring the first entry, so
     // this isn't a strict primary/fallback ordering despite the old
     // resolver/resolver_fallback naming having implied one. Each entry
     // must parse as ConfiguredDnsResolver.TryParseNameServer expects
-    // ("ip", "ip:port", or "[ipv6]:port") - ConfigLoader.Validate checks
-    // both that and that the list isn't empty, since [dns] being present
-    // at all means at least one nameserver was intended.
+    // ("ip", "ip:port", or "[ipv6]:port"). Deliberately NOT [TomlRequired]/
+    // required, matching [nostr].relays: only needed when enabled is true
+    // (ConfiguredDnsResolver falls back to the system resolver otherwise),
+    // so a [dns] block that's present but disabled doesn't have to provide
+    // any - not even a placeholder. ConfigLoader.Validate (gated on
+    // Enabled) is what actually enforces "at least one entry, each
+    // well-formed" when [dns] is both present and enabled.
     [property: TomlPropertyName("resolvers")]
-    [property: TomlRequired]
-    public required List<string> Resolvers { get; init; }
+    public List<string> Resolvers { get; init; } = [];
 
     [property: TomlPropertyName("timeout_ms")]
     public int TimeoutMs { get; init; } = 2000;

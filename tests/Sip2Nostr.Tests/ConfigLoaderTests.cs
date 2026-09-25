@@ -172,6 +172,79 @@ public class ConfigLoaderTests
         }
     }
 
+    [Fact]
+    public void Load_DnsEnabledDefaultsTrue_Succeeds()
+    {
+        var toml = $"{MinimalValidToml}\n\n[dns]\nresolvers = [\"1.1.1.1:53\"]\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.True(config.Dns!.Enabled);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_DnsDisabledWithNoResolvers_Succeeds()
+    {
+        // A [dns] block can be present but dormant - enabled = false is
+        // the same as omitting the section, so it shouldn't need even a
+        // placeholder resolvers entry, matching [nostr]/[voicemail]'s own
+        // enabled-gated fields.
+        var toml = $"{MinimalValidToml}\n\n[dns]\nenabled = false\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.False(config.Dns!.Enabled);
+            Assert.Empty(config.Dns.Resolvers);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_DnsDisabledWithMalformedResolvers_Succeeds()
+    {
+        // A disabled section's resolvers aren't read by anything
+        // (ConfiguredDnsResolver falls back to the system resolver), so a
+        // stale or malformed entry left behind shouldn't block startup -
+        // same reasoning as ConfigLoaderTests around [nostr]/[voicemail].
+        var toml = $"{MinimalValidToml}\n\n[dns]\nenabled = false\nresolvers = [\"not-an-ip\"]\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.Equal(["not-an-ip"], config.Dns!.Resolvers);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_DnsEnabledWithEmptyResolvers_Throws()
+    {
+        var toml = $"{MinimalValidToml}\n\n[dns]\nenabled = true\nresolvers = []\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains("[dns].resolvers", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-5)]
