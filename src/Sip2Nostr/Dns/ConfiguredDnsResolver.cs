@@ -6,12 +6,9 @@ using Sip2Nostr.Config;
 
 namespace Sip2Nostr.Dns;
 
-// Strongly recommended (docs/receiving-calls.md): SIP hostname resolution
-// ideally doesn't rely on System.Net.Dns / the OS resolver. This wraps a
-// DnsClient.NET LookupClient configured from [dns] in config.toml -
-// [dns].enabled is the sole gate (opt-in, defaults false - see
-// DnsConfig), so a system-resolver fallback is what a fresh config gets
-// until an operator turns this on.
+// Wraps a DnsClient.NET LookupClient from [dns] in config.toml, falling
+// back to the system resolver when [dns].enabled is false. See
+// docs/receiving-calls.md.
 public sealed class ConfiguredDnsResolver
 {
     private readonly LookupClient? _lookupClient;
@@ -48,11 +45,8 @@ public sealed class ConfiguredDnsResolver
 
         if (_lookupClient is null)
         {
-            // IPv4 only, matching the configured path below (QueryType.A) -
-            // SipCallSource's SIP transport binds IPv4-only
-            // (new SIPUDPChannel(IPAddress.Any, 5060)), so an AAAA-only
-            // result can't be used and would otherwise surface as a
-            // confusing failure well past this point instead of here.
+            // IPv4 only, matching QueryType.A below - see
+            // docs/receiving-calls.md.
             var systemResult = await System.Net.Dns.GetHostAddressesAsync(host, ct);
             var systemAddress = systemResult.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork);
             if (systemAddress is null)

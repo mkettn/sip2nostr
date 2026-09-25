@@ -76,32 +76,17 @@ public sealed class SipConfig
     public int RtpPort { get; init; } = 8000;
 }
 
-// Strongly recommended (docs/receiving-calls.md explains why - the OS
-// resolver breaks outbound response routing silently), but opt-in like
-// [voicemail]: Enabled is the sole gate, defaulting false, so a fresh
-// config.toml with no [dns] section at all - or one that has [dns] but
-// never sets enabled = true - falls back to the system resolver rather
-// than assuming a configured resolver was intended. There's no separate
-// "[dns] is present" signal to check: this class is always instantiated
-// (AppConfig.Dns has no null case), so Enabled is the only thing that
-// decides.
+// Falls back to the system resolver unless enabled = true - see
+// docs/receiving-calls.md.
 public sealed class DnsConfig
 {
     [property: TomlPropertyName("enabled")]
     public bool Enabled { get; init; } = false;
 
-    // Nameservers DnsClient.NET's LookupClient may query - it picks among
-    // them per request rather than always preferring the first entry, so
-    // this isn't a strict primary/fallback ordering despite the old
-    // resolver/resolver_fallback naming having implied one. Each entry
-    // must parse as ConfiguredDnsResolver.TryParseNameServer expects
-    // ("ip", "ip:port", or "[ipv6]:port"). Deliberately NOT [TomlRequired]/
-    // required, matching [nostr].relays: only needed when enabled is true
-    // (ConfiguredDnsResolver falls back to the system resolver otherwise),
-    // so a [dns] block that's present but disabled doesn't have to provide
-    // any - not even a placeholder. ConfigLoader.Validate (gated on
-    // Enabled) is what actually enforces "at least one entry, each
-    // well-formed" when enabled is true.
+    // Nameservers DnsClient.NET's LookupClient may query - picked among
+    // them per request, not a strict primary/fallback order. Format:
+    // "ip", "ip:port", or "[ipv6]:port". Only required when enabled is
+    // true; ConfigLoader.Validate enforces that.
     [property: TomlPropertyName("resolvers")]
     public List<string> Resolvers { get; init; } = [];
 

@@ -94,10 +94,7 @@ public class ConfigLoaderTests
     [Fact]
     public void Load_DnsEnabledDefaultsFalse_Succeeds()
     {
-        // Enabled is the sole gate (see DnsConfig) and defaults false, so
-        // a [dns] block with resolvers but no explicit enabled key is
-        // still off - unlike before this setting existed, where writing
-        // [dns] at all meant "on."
+        // resolvers present but no explicit enabled key - still off.
         var toml = $"{MinimalValidToml}\n\n[dns]\nresolvers = [\"1.1.1.1:53\"]\n";
         var path = WriteTempConfig(toml);
         try
@@ -197,10 +194,6 @@ public class ConfigLoaderTests
     [Fact]
     public void Load_DnsDisabledWithNoResolvers_Succeeds()
     {
-        // A [dns] block can be present but dormant - enabled = false
-        // (the default) is the same as omitting the section, so it
-        // shouldn't need even a placeholder resolvers entry, matching
-        // [nostr]/[voicemail]'s own enabled-gated fields.
         var toml = $"{MinimalValidToml}\n\n[dns]\nenabled = false\n";
         var path = WriteTempConfig(toml);
         try
@@ -218,10 +211,7 @@ public class ConfigLoaderTests
     [Fact]
     public void Load_DnsDisabledWithMalformedResolvers_Succeeds()
     {
-        // A disabled section's resolvers aren't read by anything
-        // (ConfiguredDnsResolver falls back to the system resolver), so a
-        // stale or malformed entry left behind shouldn't block startup -
-        // same reasoning as ConfigLoaderTests around [nostr]/[voicemail].
+        // A disabled section's resolvers aren't validated or read.
         var toml = $"{MinimalValidToml}\n\n[dns]\nenabled = false\nresolvers = [\"not-an-ip\"]\n";
         var path = WriteTempConfig(toml);
         try

@@ -211,8 +211,11 @@ registrar.
   send-from socket) that isn't part of sipsorcery's public API contract —
   it happens to work on the installed version but isn't something this
   codebase asserts or tests directly.
-- **IPv6 is untested.** The SIP transport binds to `IPAddress.Any` (IPv4
-  wildcard) and all verified testing has been over IPv4.
+- **The SIP leg is IPv4 only.** The transport binds to `IPAddress.Any`
+  (the IPv4 wildcard), and `ConfiguredDnsResolver` only ever returns
+  IPv4 addresses (`QueryType.A` for the configured resolver, filtered to
+  `AddressFamily.InterNetwork` for the system-resolver fallback) - an
+  IPv6-only `[sip].provider_host` can't work.
 - **TURN/NAT behavior for the WebRTC leg is untested beyond the local
   network the `docs/propagating-to-nostr.md` verification ran on** -
   recommended for NAT traversal, but not confirmed necessary or

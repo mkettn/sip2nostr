@@ -44,11 +44,8 @@ public static class ConfigLoader
     // See docs/voicemail.md for why these fail fast here.
     private static void Validate(AppConfig config)
     {
-        // Gated on Enabled alone - matching [nostr]/[voicemail], a [dns]
-        // block left in place with enabled = false (the default) is a
-        // deliberate "not right now," not a mistake, so its (possibly
-        // empty or stale) resolvers shouldn't block startup either.
-        // ConfiguredDnsResolver makes the same check for the same reason.
+        // A disabled [dns] block's resolvers aren't read by anything, so
+        // a stale/empty list there shouldn't block startup.
         if (config.Dns.Enabled)
         {
             if (config.Dns.Resolvers.Count == 0)
