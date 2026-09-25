@@ -1,3 +1,4 @@
+using System.Text;
 using Nostr.Sdk;
 using Serilog.Events;
 using Tomlyn;
@@ -179,11 +180,37 @@ public static class ConfigLoader
 
             foreach (var server in config.Voicemail.BlossomServers)
             {
+                if (server.StartsWith("unix:", StringComparison.Ordinal))
+                {
+                    var socketPath = server["unix:".Length..];
+                    if (!Path.IsPathRooted(socketPath))
+                    {
+                        throw new ConfigurationException(
+                            $"[voicemail].blossom_servers entry \"{server}\" does not name an absolute path after \"unix:\".");
+                    }
+
+                    // sockaddr_un.sun_path is 108 bytes on Linux, one of
+                    // which is the null terminator UnixDomainSocketEndPoint
+                    // itself adds - leaving 107 for the path. Checked here
+                    // rather than left to throw from AudioDeliveryBackend's
+                    // ConnectCallback at upload time, where it would just
+                    // look like every configured server rejecting the
+                    // upload (see AGENTS.md: config validates fail-fast at
+                    // load, not at first use). Byte count, not character
+                    // count - the kernel limit is on the encoded bytes.
+                    if (Encoding.UTF8.GetByteCount(socketPath) > 107)
+                    {
+                        throw new ConfigurationException(
+                            $"[voicemail].blossom_servers entry \"{server}\" exceeds the 107-byte limit for a Unix socket path.");
+                    }
+                    continue;
+                }
+
                 if (!Uri.TryCreate(server, UriKind.Absolute, out var serverUri) ||
                     (serverUri.Scheme != Uri.UriSchemeHttp && serverUri.Scheme != Uri.UriSchemeHttps))
                 {
                     throw new ConfigurationException(
-                        $"[voicemail].blossom_servers entry \"{server}\" is not a valid absolute http(s) URL.");
+                        $"[voicemail].blossom_servers entry \"{server}\" is not a valid absolute http(s) URL or \"unix:<absolute path>\".");
                 }
             }
         }
