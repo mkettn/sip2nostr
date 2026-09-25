@@ -5,18 +5,19 @@ using Sip2Nostr.Config;
 
 namespace Sip2Nostr.Dns;
 
-// Required feature (docs/receiving-calls.md): SIP hostname resolution must
-// not rely on System.Net.Dns / the OS resolver. This wraps a DnsClient.NET
-// LookupClient configured from [dns] in config.toml, with a fallback
-// nameserver and a system-resolver fallback when [dns] is absent entirely
-// or present with enabled = false.
+// Strongly recommended (docs/receiving-calls.md): SIP hostname resolution
+// ideally doesn't rely on System.Net.Dns / the OS resolver. This wraps a
+// DnsClient.NET LookupClient configured from [dns] in config.toml -
+// [dns].enabled is the sole gate (opt-in, defaults false - see
+// DnsConfig), so a system-resolver fallback is what a fresh config gets
+// until an operator turns this on.
 public sealed class ConfiguredDnsResolver
 {
     private readonly LookupClient? _lookupClient;
 
-    public ConfiguredDnsResolver(DnsConfig? config)
+    public ConfiguredDnsResolver(DnsConfig config)
     {
-        if (config is null || !config.Enabled)
+        if (!config.Enabled)
         {
             _lookupClient = null;
             return;

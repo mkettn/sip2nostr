@@ -44,12 +44,12 @@ public static class ConfigLoader
     // See docs/voicemail.md for why these fail fast here.
     private static void Validate(AppConfig config)
     {
-        // Gated on Enabled, not just presence - matching [nostr]/[voicemail],
-        // a [dns] block left in place with enabled = false is a deliberate
-        // "not right now," not a mistake, so its (possibly empty or stale)
-        // resolvers shouldn't block startup either. ConfiguredDnsResolver
-        // makes the same check for the same reason.
-        if (config.Dns is not null && config.Dns.Enabled)
+        // Gated on Enabled alone - matching [nostr]/[voicemail], a [dns]
+        // block left in place with enabled = false (the default) is a
+        // deliberate "not right now," not a mistake, so its (possibly
+        // empty or stale) resolvers shouldn't block startup either.
+        // ConfiguredDnsResolver makes the same check for the same reason.
+        if (config.Dns.Enabled)
         {
             if (config.Dns.Resolvers.Count == 0)
             {

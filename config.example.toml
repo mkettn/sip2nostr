@@ -9,14 +9,14 @@ password = "YOUR_SIP_PASS"
 rtp_port = 8000
 
 [dns]
-# Set false to fall back to the system resolver without removing the
-# settings below - same effect as omitting [dns] entirely.
-enabled = true
+# Opt-in, defaults false - the system resolver is used until this is set
+# true. Strongly recommended: see docs/receiving-calls.md for why the
+# system resolver alone can silently break response routing.
+enabled = false
 # Nameservers to use for SIP hostname lookups - each entry is an IP,
 # "ip:port", or "[ipv6]:port" (default port 53); DnsClient.NET picks
 # among them per request rather than always preferring the first one.
-# Falls back to the system resolver if [dns] is omitted entirely or
-# enabled = false above.
+# Only consulted when enabled = true above.
 resolvers = ["1.1.1.1:53", "9.9.9.9:53"]
 timeout_ms = 2000
 

@@ -32,7 +32,7 @@ public sealed class AppConfig
     public required SipConfig Sip { get; init; }
 
     [property: TomlPropertyName("dns")]
-    public DnsConfig? Dns { get; init; }
+    public DnsConfig Dns { get; init; } = new();
 
     [property: TomlPropertyName("lines")]
     [property: TomlRequired]
@@ -76,20 +76,19 @@ public sealed class SipConfig
     public int RtpPort { get; init; } = 8000;
 }
 
-// Required feature (docs/receiving-calls.md): SIP hostname resolution must
-// go through this configurable resolver instead of the OS resolver. Falls
-// back to the system resolver when [dns] is absent from config.toml, or
-// present with enabled = false.
+// Strongly recommended (docs/receiving-calls.md explains why - the OS
+// resolver breaks outbound response routing silently), but opt-in like
+// [voicemail]: Enabled is the sole gate, defaulting false, so a fresh
+// config.toml with no [dns] section at all - or one that has [dns] but
+// never sets enabled = true - falls back to the system resolver rather
+// than assuming a configured resolver was intended. There's no separate
+// "[dns] is present" signal to check: this class is always instantiated
+// (AppConfig.Dns has no null case), so Enabled is the only thing that
+// decides.
 public sealed class DnsConfig
 {
-    // Lets an operator keep [dns] (and its resolvers below) written out
-    // but temporarily inactive, the same as omitting the section entirely
-    // - e.g. to fall back to the system resolver without losing the
-    // configured list. Defaults true so an existing config with [dns]
-    // present keeps behaving exactly as it did before this setting
-    // existed.
     [property: TomlPropertyName("enabled")]
-    public bool Enabled { get; init; } = true;
+    public bool Enabled { get; init; } = false;
 
     // Nameservers DnsClient.NET's LookupClient may query - it picks among
     // them per request rather than always preferring the first entry, so
@@ -102,7 +101,7 @@ public sealed class DnsConfig
     // so a [dns] block that's present but disabled doesn't have to provide
     // any - not even a placeholder. ConfigLoader.Validate (gated on
     // Enabled) is what actually enforces "at least one entry, each
-    // well-formed" when [dns] is both present and enabled.
+    // well-formed" when enabled is true.
     [property: TomlPropertyName("resolvers")]
     public List<string> Resolvers { get; init; } = [];
 

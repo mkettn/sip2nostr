@@ -82,7 +82,8 @@ public class ConfigLoaderTests
         try
         {
             var config = ConfigLoader.Load(path);
-            Assert.Null(config.Dns);
+            Assert.NotNull(config.Dns);
+            Assert.False(config.Dns.Enabled);
         }
         finally
         {
@@ -91,9 +92,29 @@ public class ConfigLoaderTests
     }
 
     [Fact]
-    public void Load_DnsResolversEmpty_Throws()
+    public void Load_DnsEnabledDefaultsFalse_Succeeds()
     {
-        var toml = $"{MinimalValidToml}\n\n[dns]\nresolvers = []\n";
+        // Enabled is the sole gate (see DnsConfig) and defaults false, so
+        // a [dns] block with resolvers but no explicit enabled key is
+        // still off - unlike before this setting existed, where writing
+        // [dns] at all meant "on."
+        var toml = $"{MinimalValidToml}\n\n[dns]\nresolvers = [\"1.1.1.1:53\"]\n";
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var config = ConfigLoader.Load(path);
+            Assert.False(config.Dns.Enabled);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_DnsEnabledWithResolversEmpty_Throws()
+    {
+        var toml = $"{MinimalValidToml}\n\n[dns]\nenabled = true\nresolvers = []\n";
         var path = WriteTempConfig(toml);
         try
         {
@@ -107,14 +128,15 @@ public class ConfigLoaderTests
     }
 
     [Fact]
-    public void Load_DnsResolversWithFallback_Succeeds()
+    public void Load_DnsEnabledWithResolvers_Succeeds()
     {
-        var toml = $"{MinimalValidToml}\n\n[dns]\nresolvers = [\"1.1.1.1:53\", \"9.9.9.9:53\"]\n";
+        var toml = $"{MinimalValidToml}\n\n[dns]\nenabled = true\nresolvers = [\"1.1.1.1:53\", \"9.9.9.9:53\"]\n";
         var path = WriteTempConfig(toml);
         try
         {
             var config = ConfigLoader.Load(path);
-            Assert.Equal(["1.1.1.1:53", "9.9.9.9:53"], config.Dns!.Resolvers);
+            Assert.True(config.Dns.Enabled);
+            Assert.Equal(["1.1.1.1:53", "9.9.9.9:53"], config.Dns.Resolvers);
             Assert.Equal(2000, config.Dns.TimeoutMs);
         }
         finally
@@ -129,14 +151,14 @@ public class ConfigLoaderTests
     [InlineData("2606:4700:4700::1111")]
     [InlineData("[2606:4700:4700::1111]")]
     [InlineData("[2606:4700:4700::1111]:53")]
-    public void Load_DnsResolversValidFormats_Succeed(string resolver)
+    public void Load_DnsEnabledWithResolversValidFormats_Succeed(string resolver)
     {
-        var toml = $"{MinimalValidToml}\n\n[dns]\nresolvers = [\"{EscapeTomlString(resolver)}\"]\n";
+        var toml = $"{MinimalValidToml}\n\n[dns]\nenabled = true\nresolvers = [\"{EscapeTomlString(resolver)}\"]\n";
         var path = WriteTempConfig(toml);
         try
         {
             var config = ConfigLoader.Load(path);
-            Assert.Equal([resolver], config.Dns!.Resolvers);
+            Assert.Equal([resolver], config.Dns.Resolvers);
         }
         finally
         {
@@ -152,14 +174,14 @@ public class ConfigLoaderTests
     [InlineData("1.1.1.1:70000")]
     [InlineData("1.1.1.1:-1")]
     [InlineData("1.1.1.1:0")]
-    public void Load_DnsResolversInvalidFormat_Throws(string resolver)
+    public void Load_DnsEnabledWithResolversInvalidFormat_Throws(string resolver)
     {
         // A malformed entry (including an out-of-range port, which
         // int.TryParse alone accepts) must fail cleanly at startup
         // (ConfigurationException), not crash later inside
         // ConfiguredDnsResolver's field-initializer construction with an
         // unhandled FormatException/ArgumentOutOfRangeException.
-        var toml = $"{MinimalValidToml}\n\n[dns]\nresolvers = [\"{EscapeTomlString(resolver)}\"]\n";
+        var toml = $"{MinimalValidToml}\n\n[dns]\nenabled = true\nresolvers = [\"{EscapeTomlString(resolver)}\"]\n";
         var path = WriteTempConfig(toml);
         try
         {
@@ -173,34 +195,18 @@ public class ConfigLoaderTests
     }
 
     [Fact]
-    public void Load_DnsEnabledDefaultsTrue_Succeeds()
-    {
-        var toml = $"{MinimalValidToml}\n\n[dns]\nresolvers = [\"1.1.1.1:53\"]\n";
-        var path = WriteTempConfig(toml);
-        try
-        {
-            var config = ConfigLoader.Load(path);
-            Assert.True(config.Dns!.Enabled);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
-    }
-
-    [Fact]
     public void Load_DnsDisabledWithNoResolvers_Succeeds()
     {
-        // A [dns] block can be present but dormant - enabled = false is
-        // the same as omitting the section, so it shouldn't need even a
-        // placeholder resolvers entry, matching [nostr]/[voicemail]'s own
-        // enabled-gated fields.
+        // A [dns] block can be present but dormant - enabled = false
+        // (the default) is the same as omitting the section, so it
+        // shouldn't need even a placeholder resolvers entry, matching
+        // [nostr]/[voicemail]'s own enabled-gated fields.
         var toml = $"{MinimalValidToml}\n\n[dns]\nenabled = false\n";
         var path = WriteTempConfig(toml);
         try
         {
             var config = ConfigLoader.Load(path);
-            Assert.False(config.Dns!.Enabled);
+            Assert.False(config.Dns.Enabled);
             Assert.Empty(config.Dns.Resolvers);
         }
         finally
@@ -221,23 +227,7 @@ public class ConfigLoaderTests
         try
         {
             var config = ConfigLoader.Load(path);
-            Assert.Equal(["not-an-ip"], config.Dns!.Resolvers);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public void Load_DnsEnabledWithEmptyResolvers_Throws()
-    {
-        var toml = $"{MinimalValidToml}\n\n[dns]\nenabled = true\nresolvers = []\n";
-        var path = WriteTempConfig(toml);
-        try
-        {
-            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
-            Assert.Contains("[dns].resolvers", exception.Message);
+            Assert.Equal(["not-an-ip"], config.Dns.Resolvers);
         }
         finally
         {
