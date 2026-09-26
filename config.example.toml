@@ -1,5 +1,9 @@
 [sip]
 provider_host = "sip.your-provider.de"
+# username/password (and [nostr].bridge_nsec below) can instead be left
+# out here and supplied via a second TOML file passed as sip2nostr's
+# second command-line argument - see README's "Keeping credentials out
+# of config.toml" section.
 username = "YOUR_SIP_USER"
 password = "YOUR_SIP_PASS"
 # Optional: set this to the public host/IP your SIP provider should use
@@ -66,7 +70,7 @@ label = "fax"
 [nostr]
 enabled = true
 relays = ["wss://relay.example.com", "wss://relay2.example.com"]
-bridge_nsec = "nsec1..."      # this daemon's own identity, added as a contact in the receiving client
+bridge_nsec = "nsec1..."      # this daemon's own identity, added as a contact in the receiving client - can also come from a secrets file, see [sip] above
 target_npub = "npub1..."      # your identity - every call latches here; no per-line routing yet
 
 [webrtc]
