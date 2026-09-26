@@ -45,6 +45,50 @@ sudo systemctl enable --now sip2nostr
 See `docs/` for the caller allow/deny-list, voicemail fallback, and
 sound-file format.
 
+## Keeping credentials out of config.toml (optional)
+
+`[sip].username`, `[sip].password`, and `[nostr].bridge_nsec` can be
+left out of `config.toml` and supplied instead via a second TOML file,
+passed as sip2nostr's second command-line argument:
+
+```
+out/<linux-x64|linux-arm64>/Sip2Nostr config.toml secrets.toml
+```
+
+`secrets.toml` only needs the keys it's overriding:
+
+```toml
+[sip]
+username = "..."
+password = "..."
+
+[nostr]
+bridge_nsec = "nsec1..."
+```
+
+A key set in both files logs a warning at startup; the secrets file's
+value is the one that's used.
+
+This is what `systemd`'s `LoadCredentialEncrypted=` is for: it decrypts
+a credential - bound to the host's TPM if it has one, its machine ID
+otherwise - into a private, per-service runtime directory at start,
+instead of leaving it as a plain file on disk. Encrypt once:
+
+```
+sudo systemd-creds encrypt --name=secrets.toml secrets.toml secrets.toml.cred
+```
+
+then point the unit at the encrypted blob and pass the decrypted path
+through as the second argument (`%d` is the unit's credentials
+directory - see `systemd.exec(5)`), via `systemctl edit sip2nostr`:
+
+```ini
+[Service]
+LoadCredentialEncrypted=secrets.toml:/var/local/lib/sip2nostr/secrets.toml.cred
+ExecStart=
+ExecStart=/usr/local/lib/sip2nostr/Sip2Nostr /var/local/lib/sip2nostr/config.toml %d/secrets.toml
+```
+
 ## Voicemail recordings on a shared volume
 
 If `[voicemail].recordings_dir` points outside `/var/local/lib/sip2nostr`

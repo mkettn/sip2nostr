@@ -1191,17 +1191,138 @@ public class ConfigLoaderTests
     public void Load_MissingRequiredSipField_ThrowsConfigurationException()
     {
         // Same [TomlRequired] mechanism, on a nested required string field
-        // rather than a whole required section.
+        // rather than a whole required section. Unlike username/password
+        // below, provider_host can't come from a secrets file, so it's
+        // still [TomlRequired] rather than checked in Validate.
+        var toml = MinimalValidToml.Replace("provider_host = \"sip.example.com\"\n", "");
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains("provider_host", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_SipUsernameEmpty_ThrowsConfigurationException()
+    {
+        // Not [TomlRequired] like provider_host above - it can come from
+        // a secrets file instead (see MergeSecrets tests below) - so a
+        // config.toml that omits it is only rejected here, in Validate.
         var toml = MinimalValidToml.Replace("username = \"user\"\n", "");
         var path = WriteTempConfig(toml);
         try
         {
             var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
-            Assert.Contains("username", exception.Message);
+            Assert.Contains("[sip].username", exception.Message);
         }
         finally
         {
             File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_SipPasswordEmpty_ThrowsConfigurationException()
+    {
+        var toml = MinimalValidToml.Replace("password = \"pass\"\n", "");
+        var path = WriteTempConfig(toml);
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(path));
+            Assert.Contains("[sip].password", exception.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_SecretsFileFillsBlankCredentials_Succeeds()
+    {
+        var toml = MinimalValidToml.Replace("username = \"user\"\n", "").Replace("password = \"pass\"\n", "");
+        var configPath = WriteTempConfig(toml);
+        var secretsPath = WriteTempConfig("""
+            [sip]
+            username = "secretuser"
+            password = "secretpass"
+            """);
+        try
+        {
+            var config = ConfigLoader.Load(configPath, secretsPath);
+            Assert.Equal("secretuser", config.Sip.Username);
+            Assert.Equal("secretpass", config.Sip.Password);
+        }
+        finally
+        {
+            File.Delete(configPath);
+            File.Delete(secretsPath);
+        }
+    }
+
+    [Fact]
+    public void Load_SecretsFileOverridesExistingCredential_Succeeds()
+    {
+        var configPath = WriteTempConfig(MinimalValidToml);
+        var secretsPath = WriteTempConfig("""
+            [sip]
+            password = "overridden"
+            """);
+        try
+        {
+            var config = ConfigLoader.Load(configPath, secretsPath);
+            Assert.Equal("overridden", config.Sip.Password);
+            Assert.Equal("user", config.Sip.Username);
+        }
+        finally
+        {
+            File.Delete(configPath);
+            File.Delete(secretsPath);
+        }
+    }
+
+    [Fact]
+    public void Load_SecretsFileOverridesBridgeNsec_Succeeds()
+    {
+        // config.toml's own bridge_nsec is deliberately invalid - Load
+        // only succeeds if the secrets file's value replaced it before
+        // ValidateBridgeIdentity ever sees it.
+        var toml = NostrEnabledToml.Replace($"bridge_nsec = \"{BridgeNsec}\"", "bridge_nsec = \"nsec1invalid\"");
+        var configPath = WriteTempConfig(toml);
+        var secretsPath = WriteTempConfig($"""
+            [nostr]
+            bridge_nsec = "{BridgeNsec}"
+            """);
+        try
+        {
+            var config = ConfigLoader.Load(configPath, secretsPath);
+            Assert.Equal(BridgeNsec, config.Nostr.BridgeNsec);
+        }
+        finally
+        {
+            File.Delete(configPath);
+            File.Delete(secretsPath);
+        }
+    }
+
+    [Fact]
+    public void Load_SecretsFileMissing_ThrowsConfigurationException()
+    {
+        var configPath = WriteTempConfig(MinimalValidToml);
+        var missingSecretsPath = Path.Combine(Path.GetTempPath(), $"sip2nostr-test-{Guid.NewGuid():N}.toml");
+        try
+        {
+            var exception = Assert.Throws<ConfigurationException>(() => ConfigLoader.Load(configPath, missingSecretsPath));
+            Assert.Contains("Secrets file not found", exception.Message);
+        }
+        finally
+        {
+            File.Delete(configPath);
         }
     }
 

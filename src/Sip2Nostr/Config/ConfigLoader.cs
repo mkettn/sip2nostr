@@ -1,5 +1,6 @@
 using System.Text;
 using Nostr.Sdk;
+using Serilog;
 using Serilog.Events;
 using Tomlyn;
 using Sip2Nostr.Dns;
@@ -9,7 +10,7 @@ namespace Sip2Nostr.Config;
 
 public static class ConfigLoader
 {
-    public static AppConfig Load(string path)
+    public static AppConfig Load(string path, string? secretsPath = null)
     {
         if (!File.Exists(path))
         {
@@ -37,13 +38,89 @@ public static class ConfigLoader
         }
 
         config.ConfigDirectory = Path.GetDirectoryName(Path.GetFullPath(path)) ?? Directory.GetCurrentDirectory();
+
+        if (secretsPath is not null)
+        {
+            MergeSecrets(config, secretsPath);
+        }
+
         Validate(config);
         return config;
+    }
+
+    // Lets [sip].username/password and [nostr].bridge_nsec live outside
+    // config.toml - e.g. behind systemd's LoadCredentialEncrypted=
+    // instead of a plain file on disk. A value set here always wins over
+    // the same key in config.toml; unlike Load's own empty-document
+    // check above, an empty secrets file isn't an error - naming one
+    // shouldn't require it to actually override anything.
+    private static void MergeSecrets(AppConfig config, string secretsPath)
+    {
+        if (!File.Exists(secretsPath))
+        {
+            throw new ConfigurationException($"Secrets file not found: {secretsPath}");
+        }
+
+        SecretsFile? secrets;
+        try
+        {
+            var toml = File.ReadAllText(secretsPath);
+            secrets = TomlSerializer.Deserialize<SecretsFile>(toml, TomlSerializerOptions.Default);
+        }
+        catch (TomlException exception)
+        {
+            throw new ConfigurationException($"Secrets file '{secretsPath}' could not be parsed: {exception.Message}", exception);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new ConfigurationException($"Secrets file '{secretsPath}' could not be read: {exception.Message}", exception);
+        }
+
+        if (secrets is null)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(secrets.Sip?.Username))
+        {
+            WarnOnOverlap(config.Sip.Username, "[sip].username");
+            config.Sip.Username = secrets.Sip.Username;
+        }
+
+        if (!string.IsNullOrEmpty(secrets.Sip?.Password))
+        {
+            WarnOnOverlap(config.Sip.Password, "[sip].password");
+            config.Sip.Password = secrets.Sip.Password;
+        }
+
+        if (!string.IsNullOrEmpty(secrets.Nostr?.BridgeNsec))
+        {
+            WarnOnOverlap(config.Nostr.BridgeNsec, "[nostr].bridge_nsec");
+            config.Nostr.BridgeNsec = secrets.Nostr.BridgeNsec;
+        }
+    }
+
+    private static void WarnOnOverlap(string? existingValue, string keyName)
+    {
+        if (!string.IsNullOrEmpty(existingValue))
+        {
+            Log.Warning("{KeyName} is set in both the config file and the secrets file; the secrets file's value is used.", keyName);
+        }
     }
 
     // See docs/voicemail.md for why these fail fast here.
     private static void Validate(AppConfig config)
     {
+        if (string.IsNullOrWhiteSpace(config.Sip.Username))
+        {
+            throw new ConfigurationException("[sip].username must not be empty.");
+        }
+
+        if (string.IsNullOrWhiteSpace(config.Sip.Password))
+        {
+            throw new ConfigurationException("[sip].password must not be empty.");
+        }
+
         // A disabled [dns] block's resolvers aren't read by anything, so
         // a stale/empty list there shouldn't block startup.
         if (config.Dns.Enabled)

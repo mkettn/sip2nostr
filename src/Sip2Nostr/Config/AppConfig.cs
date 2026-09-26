@@ -61,13 +61,19 @@ public sealed class SipConfig
     [property: TomlRequired]
     public required string ProviderHost { get; init; }
 
+    // Not `required`/`[TomlRequired]`, unlike ProviderHost above: either
+    // can instead come from a separate secrets file merged in by
+    // ConfigLoader.MergeSecrets, so config.toml alone isn't guaranteed to
+    // set them - ConfigLoader.Validate enforces non-empty after the
+    // merge. Defaulted to "" rather than made nullable, like
+    // DnsConfig.Enabled - Tomlyn leaves a key it doesn't find at its C#
+    // default. `set`, not `init`, so MergeSecrets can overwrite them on
+    // an already-constructed SipConfig.
     [property: TomlPropertyName("username")]
-    [property: TomlRequired]
-    public required string Username { get; init; }
+    public string Username { get; set; } = "";
 
     [property: TomlPropertyName("password")]
-    [property: TomlRequired]
-    public required string Password { get; init; }
+    public string Password { get; set; } = "";
 
     [property: TomlPropertyName("contact_host")]
     public string? ContactHost { get; init; }
@@ -124,8 +130,10 @@ public sealed class NostrConfig
     [property: TomlPropertyName("relays")]
     public List<string> Relays { get; init; } = [];
 
+    // `set`, not `init` - see SipConfig.Username/Password above; the same
+    // secrets file can override this too.
     [property: TomlPropertyName("bridge_nsec")]
-    public string? BridgeNsec { get; init; }
+    public string? BridgeNsec { get; set; }
 
     [property: TomlPropertyName("target_npub")]
     public string? TargetNpub { get; init; }
