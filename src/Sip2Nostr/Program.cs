@@ -185,9 +185,12 @@ static string? ResolveRunLogPath(string? runFile, string configDirectory)
 try
 {
     var configPath = args.Length > 0 ? args[0] : "config.toml";
+    // Optional second argument: a separate file merged over config.toml
+    // for credentials only - see ConfigLoader.MergeSecrets and README.
+    var secretsPath = args.Length > 1 ? args[1] : null;
 
     Log.Information("Loading configuration from {ConfigPath}.", configPath);
-    var config = ConfigLoader.Load(configPath);
+    var config = ConfigLoader.Load(configPath, secretsPath);
     Log.Logger = CreateLogger(config.Logging, config.ConfigDirectory, out var runLogPath);
     if (runLogPath is not null)
     {
