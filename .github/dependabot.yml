@@ -7,9 +7,23 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
+    groups:
+      nuget-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
