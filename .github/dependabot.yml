@@ -1,29 +1,13 @@
 version: 2
 updates:
-  # open-pull-requests-limit: 0 disables version updates; security updates
-  # are not subject to this limit and still open PRs.
   - package-ecosystem: "nuget"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 0
-    cooldown:
-      default-days: 7
-    groups:
-      nuget-security:
-        applies-to: security-updates
-        patterns:
-          - "*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 0
-    cooldown:
-      default-days: 7
-    groups:
-      github-actions-security:
-        applies-to: security-updates
-        patterns:
-          - "*"
